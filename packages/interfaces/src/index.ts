@@ -18,6 +18,10 @@ export {
 } from "./agent-settings.js";
 export { capability, WayForward } from "./capability.js";
 export {
+  Answer,
+  ASK_MAX,
+  ASK_TEXT_MAX,
+  Ask,
   ChatMessage,
   ChatStatus,
   Conversation,
@@ -25,6 +29,7 @@ export {
   LATEST_TEXT_MAX,
   MESSAGE_TEXT_MAX,
   MessageProgress,
+  REACTION_MAX,
   STEP_MAX,
 } from "./chat.js";
 export {

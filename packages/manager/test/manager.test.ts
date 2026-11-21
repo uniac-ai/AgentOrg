@@ -503,7 +503,8 @@ async function setup(t: test.TestContext) {
               const failed = (party: string) => (script.failed ?? []).includes(party);
               own.exports.chat.implement({
                 // A message is in the caller's conversation, as the engine keeps it.
-                send({ text = "" }, { caller }) {
+                send(input, { caller }) {
+                  const text = "text" in input ? (input.text ?? "") : "";
                   if (script.busy) throw new Refused("busy", "It is stopped.");
                   const id = `m-${said.length + 1}`;
                   said.push({ id, role: "user", text, at: new Date().toISOString(), with: caller });

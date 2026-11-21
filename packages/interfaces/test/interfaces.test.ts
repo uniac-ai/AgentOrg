@@ -682,6 +682,125 @@ test("chat@1 says what became of each message the party said, with the step at w
     assert.throws(() => binding.emit("progress", bad as never), { code: "bad_output" });
 });
 
+test("chat@1 carries the reaction a message was closed with, a reply's decision card, and the party's answer to it", async () => {
+  const t = createTestContext(client);
+  await t.start();
+  const ask = {
+    questions: [
+      {
+        question: "Delete everything in the folder?",
+        choices: [
+          { label: "Yes, delete it" },
+          { label: "No, keep it", detail: "Nothing changes." },
+        ],
+      },
+    ],
+  };
+  const reply = {
+    id: "m2",
+    role: "assistant" as const,
+    text: "Here it is.",
+    at: "2026-11-21T00:00:01Z",
+  };
+  const answered = {
+    id: "m3",
+    role: "user" as const,
+    text: "No, keep it",
+    at: "2026-11-21T00:00:02Z",
+    answer: { to: "m2", picks: [[1]] },
+  };
+  const binding = t.bind("chat", {
+    history: () => ({
+      messages: [
+        {
+          id: "m1",
+          role: "user" as const,
+          text: "Thanks!",
+          at: "2026-11-21T00:00:00Z",
+          progress: { state: "closed" as const, reaction: "👍" },
+        },
+        { ...reply, ask },
+        answered,
+      ],
+      more: false,
+    }),
+  });
+  // A view opened late reads them with their messages: the card, and the message that answers it.
+  const [thanks, sent, answer] = (await t.ctx.slots.chat.call.history({})).messages;
+  assert.deepEqual(thanks?.progress, { state: "closed", reaction: "👍" });
+  assert.deepEqual(sent?.ask, ask);
+  assert.deepEqual(answer?.answer, { to: "m2", picks: [[1]] });
+  // Live, the reaction comes with the close, and the card with the reply.
+  const closes: unknown[] = [];
+  const replies: unknown[] = [];
+  t.ctx.slots.chat.on("progress", (one) => closes.push(one));
+  t.ctx.slots.chat.on("message", (one) => replies.push(one));
+  binding.emit("progress", { with: "person", id: "m1", state: "closed", reaction: "🇫🇷" });
+  binding.emit("message", { ...reply, with: "person", ask });
+  assert.deepEqual(closes, [{ with: "person", id: "m1", state: "closed", reaction: "🇫🇷" }]);
+  assert.deepEqual(replies, [{ ...reply, with: "person", ask }]);
+  // Several questions, each named for its tab, and one that takes many.
+  const tabs = {
+    questions: [
+      { header: "Size", choices: [{ label: "Small" }, { label: "Large" }] },
+      { header: "Extras", choices: [{ label: "Lid" }, { label: "Sleeve" }], many: true as const },
+    ],
+  };
+  binding.emit("message", { ...reply, with: "person", ask: tabs });
+  const refused = (ask: unknown) =>
+    assert.throws(() => binding.emit("message", { ...reply, with: "person", ask } as never), {
+      code: "bad_output",
+    });
+  const choices = [{ label: "Yes" }];
+  // Within its limits: four questions of four choices, short words, and a tab name for each of several.
+  refused({ questions: [] });
+  refused({ questions: Array(5).fill({ header: "Q", choices }) });
+  refused({ questions: [{ choices: Array(5).fill({ label: "Yes" }) }] });
+  refused({ questions: [{ choices: [{ label: "x".repeat(49) }] }] });
+  refused({ questions: [{ choices: [{ label: "Yes", detail: "x".repeat(121) }] }] });
+  refused({ questions: [{ header: "x".repeat(13), choices }] });
+  refused({ questions: [{ choices }, { choices }] });
+  refused({
+    questions: [
+      { header: "A", choices },
+      { header: "B", choices },
+    ],
+    confirm: true,
+  });
+  refused({ questions: [{ choices, many: false }] });
+  // A question taking many is always confirmed: a confirm beside it says nothing, so it's refused.
+  binding.emit("message", {
+    ...reply,
+    with: "person",
+    ask: { questions: [{ choices, many: true }] },
+  });
+  refused({ questions: [{ choices, many: true }], confirm: true });
+  binding.emit("message", {
+    ...reply,
+    with: "person",
+    ask: { questions: [{ choices }], confirm: true },
+  });
+  assert.throws(
+    () =>
+      binding.emit("progress", {
+        with: "person",
+        id: "m1",
+        state: "closed",
+        reaction: "x".repeat(17),
+      }),
+    { code: "bad_output" },
+  );
+
+  // The party answers with the answer alone: the provider writes its words.
+  const send = compiled(chat)["send.input"];
+  assert.ok(send);
+  assert.ok(send({ answer: { to: "m2", picks: [[1]] } }));
+  assert.ok(send({ answer: { to: "m2", picks: [[0], [0, 1]] } }));
+  assert.equal(send({ answer: { to: "m2", picks: [] } }), false);
+  assert.equal(send({ answer: { to: "m2", picks: [[4]] } }), false);
+  assert.ok(send({ text: "Something else." }), "typing instead is a message as any");
+});
+
 test("a piece of work's Activity may carry the steps it keeps, each in one of three states", () => {
   const work = {
     id: "w1",

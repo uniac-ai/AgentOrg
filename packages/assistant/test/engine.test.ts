@@ -408,7 +408,8 @@ test("an agent talks to the agents whose conversations are exposed to it, from i
     "anyName",
     chat,
     {
-      send: ({ text }, { caller }) => {
+      send: (input, { caller }) => {
+        const text = "text" in input ? input.text : undefined;
         sent.push({ caller, ...(text === undefined ? {} : { text }) });
         return { messageId: "m1" };
       },
@@ -1326,6 +1327,17 @@ test("a plugin that gives nothing changes no byte of what a request carries: the
     delete given.plugins;
   });
   assert.equal(await run(), none);
+});
+
+test("an answer to a card is refused while no message carries one: no card is open", async () => {
+  const s = await setup();
+  await s.turn("Hi.");
+  const [reply] = (await shownIn(s, PERSON)).filter((one) => one.role === "assistant");
+  await assert.rejects(s.chat("send", { answer: { to: reply?.id ?? "m1", picks: [[0]] } }), {
+    code: "state",
+  });
+  // Nothing was said: the conversation is as it was.
+  assert.deepEqual(s.messages(), ["user: Hi.", "assistant: ok"]);
 });
 
 test("a refusal from the model is its chat's problem, with its code, until the chat's next reply", async () => {
