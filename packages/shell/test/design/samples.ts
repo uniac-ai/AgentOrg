@@ -2,7 +2,7 @@
 // agents and computer and terminals, replies not yet read, sample chats to open, and what a page asks; and
 // the design page's own controls, which put it in the cases it draws.
 import { crc32, deflateSync } from "node:zlib";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import type { Agent, Creatable, Held, standIn, Template, Units } from "../stand-in.ts";
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
@@ -493,7 +493,7 @@ const FIX = [
   { label: "Fix it and add a test" },
   { label: "Leave it for now" },
 ];
-/** Research's cards: plain, without its question line, and with a line under two choices. */
+/** Research's cards: plain, without its question line, with a line under two choices, with a confirm, and of several picks. */
 export const CARDS = {
   plain: { questions: [{ question: QUESTION, choices: FIX }] },
   bare: { questions: [{ choices: FIX }] },
@@ -509,7 +509,24 @@ export const CARDS = {
       },
     ],
   },
+  confirm: { questions: [{ question: QUESTION, choices: FIX }], confirm: true as const },
+  many: {
+    questions: [
+      {
+        question: "Which other coupons should I check for the same fault?",
+        many: true as const,
+        choices: [
+          { label: "WELCOME5" },
+          { label: "FREESHIP" },
+          { label: "VIP20" },
+          { label: "BLACKFRIDAY" },
+        ],
+      },
+    ],
+  },
 };
+/** The coupons the design's sample picks of several, by their names. */
+export const SEVERAL = ["WELCOME5", "VIP20"];
 /** The choice the design's sample picks, by its place, and what it is called. */
 export const PICK = 1;
 export const PICKED = "Fix it and add a test";
@@ -525,6 +542,11 @@ export const CARD_STATES = {
   detail: "Choices with a line under them",
   typed: "Typed instead",
   late: "Opened late answered",
+  confirm: "A card with confirm",
+  confirmHeld: "Confirm a pick held",
+  confirmSent: "Confirm sent",
+  many: "Picking several",
+  manySent: "Picking several sent",
 } as const;
 export type CardCase = keyof typeof CARD_STATES;
 /**
@@ -547,7 +569,14 @@ export function researchAsks(gateway: Gateway, state: CardCase, coming = false) 
     text,
     at: at(ago),
   });
-  const card = state === "bare" || state === "detail" ? CARDS[state] : CARDS.plain;
+  const card =
+    state === "bare" || state === "detail"
+      ? CARDS[state]
+      : state.startsWith("confirm")
+        ? CARDS.confirm
+        : state.startsWith("many")
+          ? CARDS.many
+          : CARDS.plain;
   const start = [ask("v-u2", SAID.longAsk, 9), said("v-a2", SAID.long, 9)];
   if (state === "late") {
     gateway.converse("a-research", [
@@ -572,6 +601,19 @@ export function researchAsks(gateway: Gateway, state: CardCase, coming = false) 
   if (working) gateway.progress("a-research", coming ? "v-u6" : "v-u7", { state: "taken" });
   gateway.setChatStatus("a-research", { state: working ? "working" : "idle" });
 }
+/** Picks on the built card as the design's sample does at that state, in the conversation given. */
+export async function pickAs(conversation: Locator, state: CardCase) {
+  if (state === "picked" || (state.startsWith("confirm") && state !== "confirm"))
+    await conversation.getByRole("radio", { name: PICKED }).click();
+  if (state === "many" || state === "manySent")
+    for (const name of SEVERAL) await conversation.getByRole("checkbox", { name }).click();
+  if (state === "confirmSent" || state === "manySent")
+    await conversation.getByRole("button", { name: "Confirm" }).click();
+}
+/** Whether the design's sample has sent its picks at that state, and Research is at work on them. */
+export const sentAt = (state: CardCase) =>
+  state === "picked" || state === "confirmSent" || state === "manySent";
+
 /** Research's answer about the coupons comes, with its card; Research is still at work. */
 export const cardComes = (
   gateway: Gateway,
