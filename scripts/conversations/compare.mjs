@@ -31,6 +31,8 @@ const MEASURES = [
   ["Reads as a message", (c) => (c.form.message ? 1 : 0), "higher"],
   ["Model requests", (c) => c.requests.total, "lower"],
   ["Input tokens", (c) => c.requests.input, "lower"],
+  // Of them, read from the provider's cache; a run from before it was recorded has none.
+  ["Cached input tokens", (c) => c.requests.cached, "higher"],
   ["Right", (c) => (c.right === null ? undefined : c.right ? 1 : 0), "higher"],
 ];
 
@@ -91,7 +93,7 @@ ${rows}</table>${replies}</section>`;
 });
 
 const totals = (run) =>
-  `${run.requests.total} requests (front desk ${run.requests.frontDesk}), ${run.requests.input} input tokens, at ${html(run.head.slice(0, 7))}${run.dry ? ", dry" : ""}`;
+  `${run.requests.total} requests (front desk ${run.requests.frontDesk}), ${run.requests.input} input tokens${run.requests.cached === undefined ? "" : ` (${run.requests.cached} cached)`}, at ${html(run.head.slice(0, 7))}${run.dry ? ", dry" : ""}`;
 const page = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Conversation runs</title>
 <style>

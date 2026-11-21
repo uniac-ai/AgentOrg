@@ -13,7 +13,9 @@
 // set on agents made for it, each with a computer in a container, and removes them after.
 //
 // A run stops when it would pass `--max-requests` model requests, 150 at most, and prints at its end
-// how many it made and how many tokens they took. `--dry` plays the set against a stand-in model
+// how many it made and how many tokens they took, and how many of the input tokens the provider
+// read from its cache. Each conversation keeps the files its check read, as they were, so a check
+// can be gone over after the computer is removed. `--dry` plays the set against a stand-in model
 // that answers every message in one line, to check the runner itself: it makes no request to
 // OpenAI, and needs no sign-in. It works in a folder of its own, never one a real sign-in is in.
 //
@@ -301,7 +303,15 @@ async function startService() {
 
 // --- The model's requests: counted, capped, and in `--dry` answered by a stand-in --------------
 
-const spent = { total: 0, frontDesk: 0, input: 0, output: 0, reasoning: 0, models: new Set() };
+const spent = {
+  total: 0,
+  frontDesk: 0,
+  input: 0,
+  cached: 0,
+  output: 0,
+  reasoning: 0,
+  models: new Set(),
+};
 const requests = [];
 let stoppedWhy;
 /**
@@ -341,6 +351,7 @@ async function counting(request, init) {
     model: body.model,
     tools: [],
     input: 0,
+    cached: 0,
     output: 0,
     reasoning: 0,
   };
@@ -374,6 +385,8 @@ async function readUsage(stream, record) {
     if (event?.type !== "response.completed") continue;
     const usage = event.response?.usage ?? {};
     record.input = usage.input_tokens ?? 0;
+    // Of the input, what the provider read from its cache: a prefix it had seen.
+    record.cached = usage.input_tokens_details?.cached_tokens ?? 0;
     record.output = usage.output_tokens ?? 0;
     record.reasoning = usage.output_tokens_details?.reasoning_tokens ?? 0;
     record.tools = (event.response?.output ?? [])
@@ -381,6 +394,7 @@ async function readUsage(stream, record) {
       .map((item) => item.name);
     if (event.response?.model) spent.models.add(event.response.model);
     spent.input += record.input;
+    spent.cached += record.cached;
     spent.output += record.output;
     spent.reasoning += record.reasoning;
   }
@@ -662,7 +676,7 @@ for (const c of run.conversations)
 if (run.error) console.error(run.error);
 if (stoppedWhy) console.error(stoppedWhy);
 console.log(
-  `Model requests: ${spent.total} (front desk ${spent.frontDesk}); input tokens ${spent.input}; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
+  `Model requests: ${spent.total} (front desk ${spent.frontDesk}); input tokens ${spent.input}, ${spent.cached} of them cached; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
 );
 if (opened) {
   console.log(
@@ -876,7 +890,17 @@ async function playSteps(group, at, slot, files) {
         step.n === 12 ? Boolean(idleAfterStop && idleAfterStop.at - stop.at <= 30) : undefined,
       changedAfterStop: step.n === 12 ? stop?.changed : undefined,
     };
-    const checked = await CHECKS[step.n](c, files).catch((error) => ({
+    // What the check reads is kept with the conversation, as it was read.
+    const read = {};
+    const judged = {
+      ...files,
+      read: async (path) => {
+        const text = await files.read(path);
+        read[path] = text ?? null;
+        return text;
+      },
+    };
+    const checked = await CHECKS[step.n](c, judged).catch((error) => ({
       right: false,
       notes: { error: String(error) },
     }));
@@ -903,12 +927,14 @@ async function playSteps(group, at, slot, files) {
         frontDesk: theirs.filter((r) => r.frontDesk).length,
         worker: theirs.filter((r) => !r.frontDesk).length,
         input: theirs.reduce((a, r) => a + r.input, 0),
+        cached: theirs.reduce((a, r) => a + r.cached, 0),
         output: theirs.reduce((a, r) => a + r.output, 0),
         reasoning: theirs.reduce((a, r) => a + r.reasoning, 0),
       },
       tools: c.tools,
       right: checked.right,
       notes: checked.notes,
+      ...(Object.keys(read).length ? { files: read } : {}),
       ...(timedOut ? { timedOut: true } : {}),
     };
   }
