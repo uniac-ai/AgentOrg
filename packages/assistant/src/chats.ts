@@ -237,12 +237,22 @@ export function createChats(options: {
           const held = byThread.get(thread);
           if (held) tell(held, (to) => emit.delta({ with: held.with, id, text }, to));
         },
-        // What became of a message the party said, with the step at work on it while it is taken.
-        progress(thread, id, state, step) {
+        // What became of a message the party said, with the step at work on it while it is taken,
+        // and the reaction it was closed with.
+        progress(thread, id, state, step, reaction) {
           const held = byThread.get(thread);
           if (held)
             tell(held, (to) =>
-              emit.progress({ with: held.with, id, state, ...(step ? { step } : {}) }, to),
+              emit.progress(
+                {
+                  with: held.with,
+                  id,
+                  state,
+                  ...(step ? { step } : {}),
+                  ...(reaction ? { reaction } : {}),
+                },
+                to,
+              ),
             );
         },
         working(on) {
@@ -472,14 +482,18 @@ export function createChats(options: {
      * else to the work the main loop gives it to, told which was last active; that one starts a turn.
      */
     async send(input: Input<"send">, caller: string): Promise<{ messageId: string }> {
-      // No message of this agent's carries a card yet, so no card is open to answer.
-      if ("answer" in input) throw new Refused("state", "That card isn't open.");
-      const { text = "", images } = input;
       const all = await load();
       for (let first = beginning.get(caller); first; first = beginning.get(caller))
         await first.catch(() => {});
       // Nothing waits from here to its first message being set: one first message at a time.
       const found = all.get(caller);
+      // A card's answer, said as the party's message by the looper, which holds the card: refused
+      // where the card isn't open, or no conversation holds one.
+      if ("answer" in input) {
+        if (!found) throw new Refused("state", "That card isn't open.");
+        return looper.answer(found.stored.thread, input.answer);
+      }
+      const { text = "", images } = input;
       if (found) return looper.send(found.stored.thread, text, images);
       const first = (async () => {
         const stored: Stored = {

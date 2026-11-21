@@ -1329,15 +1329,93 @@ test("a plugin that gives nothing changes no byte of what a request carries: the
   assert.equal(await run(), none);
 });
 
-test("an answer to a card is refused while no message carries one: no card is open", async () => {
+test("a reply's card, the party's answer to it and a close's reaction reach chat@1: said as they happen, and read in history", async () => {
   const s = await setup();
-  await s.turn("Hi.");
-  const [reply] = (await shownIn(s, PERSON)).filter((one) => one.role === "assistant");
-  await assert.rejects(s.chat("send", { answer: { to: reply?.id ?? "m1", picks: [[0]] } }), {
+  const call = (name: string, args: object) => ({
+    type: "function_call",
+    callId: crypto.randomUUID(),
+    name,
+    arguments: JSON.stringify({ message: "newest", ...args }),
+  });
+  const ask = {
+    questions: [{ choices: [{ label: "Yes, delete it" }, { label: "No, keep it" }] }],
+  };
+  s.script.push({
+    output: [call("send", { text: "Delete all?", choices: ["Yes, delete it", "No, keep it"] })],
+  } as never);
+  await s.turn("Clean the folder.");
+  const said = (event: string) =>
+    s.actor.emitted
+      .filter((e) => e.event === event)
+      .map((e) => e.payload as Record<string, unknown>);
+  const reply = said("message").find((m) => m.text === "Delete all?");
+  assert.deepEqual(reply?.ask, ask);
+
+  // The party answers by picking: said as their message, whose words the agent reads.
+  const answer = { to: reply?.id as string, picks: [[1]] };
+  s.script.push({ output: [call("no_reply_needed", { reaction: "👍" })] } as never);
+  const done = s.actor.emitted.length;
+  const { messageId } = (await s.chat("send", { answer })) as { messageId: string };
+  await until(
+    () => s.statuses(done).at(-1)?.state === "idle" && s.requests.length === 2,
+    "the turn that reads the answer",
+  );
+  await s.host.settled();
+  const picked = said("message").find((m) => m.id === messageId);
+  assert.equal(picked?.text, "No, keep it");
+  assert.deepEqual(picked?.answer, answer);
+  assert.match(JSON.stringify(s.requests[1]?.input), /No, keep it/);
+  // The close's reaction comes with its progress.
+  assert.deepEqual(
+    said("progress").filter((p) => p.id === messageId && p.state === "closed"),
+    [{ with: PERSON, id: messageId, state: "closed", reaction: "👍" }],
+  );
+  // A view opened late reads all three with their messages.
+  const { messages } = (await s.chat("history", {})) as {
+    messages: { id: string; text: string; progress?: object; ask?: object; answer?: object }[];
+  };
+  assert.deepEqual(messages.find((m) => m.text === "Delete all?")?.ask, ask);
+  const kept = messages.find((m) => m.id === messageId);
+  assert.deepEqual(kept?.answer, answer);
+  assert.deepEqual(kept?.progress, { state: "closed", reaction: "👍" });
+
+  // Answered, the card isn't open; nor is one in a conversation that hasn't begun, or no card.
+  await assert.rejects(s.chat("send", { answer: { ...answer, picks: [[0]] } }), { code: "state" });
+  await assert.rejects(s.chat("send", { answer: { to: messageId, picks: [[0]] } }), {
     code: "state",
   });
-  // Nothing was said: the conversation is as it was.
-  assert.deepEqual(s.messages(), ["user: Hi.", "assistant: ok"]);
+  await assert.rejects(s.actor.call("chat", "send", { answer }, "act_other"), { code: "state" });
+});
+
+test("picks a card doesn't have are refused, and the card stays open", async () => {
+  const s = await setup();
+  s.script.push({
+    output: [
+      {
+        type: "function_call",
+        callId: crypto.randomUUID(),
+        name: "send",
+        arguments: JSON.stringify({ message: "newest", text: "Which?", choices: ["A", "B"] }),
+      },
+    ],
+  } as never);
+  await s.turn("Pick one.");
+  const [reply] = (await shownIn(s, PERSON)).filter((one) => one.role === "assistant");
+  const to = reply?.id as string;
+  for (const picks of [[[2]], [[0, 1]], [[0], [0]]])
+    await assert.rejects(s.chat("send", { answer: { to, picks } }), { code: "invalid" });
+  assert.deepEqual(s.messages(), ["user: Pick one.", "assistant: Which?"]);
+  // A card is its conversation's: another party, in a conversation of its own, can't answer it.
+  await exchange(s, "Hello.", "act_other");
+  await assert.rejects(
+    s.actor.call("chat", "send", { answer: { to, picks: [[0]] } }, "act_other"),
+    { code: "state" },
+  );
+  // Still open: a pick it has is taken.
+  const from = s.actor.emitted.length;
+  await s.chat("send", { answer: { to, picks: [[0]] } });
+  await until(() => s.statuses(from).some((one) => one.state === "idle"), "the agent to go idle");
+  assert.ok(s.messages().includes("user: A"));
 });
 
 test("a refusal from the model is its chat's problem, with its code, until the chat's next reply", async () => {
