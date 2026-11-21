@@ -40,10 +40,14 @@ import {
   openTemplates,
   openWindow,
   placeByTab,
+  REACTION,
+  REACTIONS,
+  type Reacted,
   readChat,
   refuseSend,
   releaseNotes,
   researchChanges,
+  researchReacts,
   researchSays,
   researchTypes,
   SECTIONS,
@@ -64,6 +68,7 @@ import {
   startTerminals,
   TYPING,
   type Typing,
+  thanksComes,
   type UnitWindow,
   unreadReply,
   WINDOWS,
@@ -122,6 +127,8 @@ interface Screen {
   research?: Moment;
   /** Research's conversation, built, with the agent typing or done at one of the design's states. */
   types?: Typing;
+  /** Research's conversation, built, at one of the design's states for the agent's emoji. */
+  reacts?: Reacted;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -738,6 +745,37 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
+  // The agent's emoji on the person's message: Research's conversation at each of the design's states
+  // for it, on Chat. The first is the emoji arriving as the typing sign goes, on both sides.
+  ...(Object.keys(REACTIONS) as Reacted[]).map(
+    (state): Screen => ({
+      name: `reaction-${state}`,
+      sizes: ["wide", "phone"],
+      themes: ["dark", "light"],
+      agents: true,
+      chats: true,
+      reacts: state,
+      hash: "#/chat/a-research",
+      design: async (page) => {
+        await inDesign(page, REACTIONS[state]);
+        await page
+          .getByRole("region", { name: "Conversation with Research" })
+          .locator('[data-slot="bubble-reactions"]')
+          .waitFor();
+      },
+      built: async (page, gateway) => {
+        const region = page.getByRole("region", { name: "Conversation with Research" });
+        if (state === "arrives") {
+          await region.locator('[data-slot="bubble"]').first().waitFor();
+          thanksComes(gateway);
+          await region.getByRole("status", { name: "Research is typing" }).waitFor();
+          gateway.progress("a-research", "v-u7", { state: "closed", reaction: REACTION });
+          gateway.setChatStatus("a-research", { state: "idle" });
+        }
+        await region.locator('[data-slot="bubble-reactions"]').waitFor();
+      },
+    }),
+  ),
   // Create for an agent, small: as it opens, from a template, signed out, and refused.
   ...SMALLS.map(
     ([state, sizes]): Screen => ({
@@ -1009,6 +1047,12 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           // Before the page is read, as a conversation opened later reads it.
           if (screen.research) researchSays(gateway, screen.research);
           if (screen.types) researchTypes(gateway, screen.types);
+          if (screen.reacts)
+            researchReacts(
+              gateway,
+              screen.reacts,
+              screen.reacts === "arrives" ? "coming" : "closed",
+            );
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.create) computerSays(gateway, screen.create);

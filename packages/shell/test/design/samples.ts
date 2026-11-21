@@ -412,6 +412,80 @@ export function researchTypes(gateway: Gateway, state: Typing) {
     for (const one of asks) gateway.progress("a-research", one.id, { state: "taken" });
 }
 
+/** The emoji Research closes the person's thanks with. */
+export const REACTION = "👍";
+/** Research's answer to the person's second message, which the person thanks it for. */
+export const COUPONS =
+  "The coupons are in cart/coupons, one file each.\n\nOne of them, SPRING10, expired last week but still applies.";
+/** A thanks long enough to wrap. */
+export const LONG_THANKS =
+  "Thanks, that's what I needed. I'll fix SPRING10 myself this afternoon and tell you whether the cart tests still pass.";
+/** What the person says after the thanks. */
+export const AFTER_THANKS = "Are there tests for coupons?";
+/** The agent's emoji on the person's message, at each of the design's states for it, by its control. */
+export const REACTIONS = {
+  arrives: "A reaction arrives",
+  followed: "A reaction, then another message",
+  long: "A reaction on a long message",
+} as const;
+export type Reacted = keyof typeof REACTIONS;
+/**
+ * Research's conversation, built, at one of those states, as a page opened then reads it: the
+ * person's thanks closed with the emoji, a long one wrapping, or followed by another message that
+ * Research is at work on. `taken`: the thanks is taken and Research works on it, for the caller to
+ * close. `coming`: the thanks isn't said yet; `thanksComes` says it, as a page sees a message sent.
+ */
+export function researchReacts(
+  gateway: Gateway,
+  state: Reacted,
+  now: "closed" | "taken" | "coming" = "closed",
+) {
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const ask = (id: string, text: string, ago: number) => ({
+    id,
+    role: "user" as const,
+    text,
+    at: at(ago),
+  });
+  const said = (id: string, text: string, ago: number) => ({
+    id,
+    role: "assistant" as const,
+    text,
+    at: at(ago),
+  });
+  gateway.converse("a-research", [
+    ask("v-u2", SAID.longAsk, 9),
+    said("v-a2", SAID.long, 9),
+    ask("v-u6", SECOND_ASK, 2),
+    said("v-a6", COUPONS, 2),
+    ...(now === "coming"
+      ? []
+      : [ask("v-u7", state === "long" ? LONG_THANKS : THANKS, state === "followed" ? 1 : 0)]),
+    ...(state === "followed" ? [ask("v-u8", AFTER_THANKS, 0)] : []),
+  ]);
+  if (now !== "coming")
+    gateway.progress(
+      "a-research",
+      "v-u7",
+      now === "taken" ? { state: "taken" } : { state: "closed", reaction: REACTION },
+    );
+  if (state === "followed") gateway.progress("a-research", "v-u8", { state: "taken" });
+  gateway.setChatStatus("a-research", {
+    state: now === "taken" || state === "followed" ? "working" : "idle",
+  });
+}
+/** The person's thanks, said as a page sees a message sent: Research takes it and works on it. */
+export function thanksComes(gateway: Gateway) {
+  gateway.addMessage("a-research", {
+    id: "v-u7",
+    role: "user",
+    text: THANKS,
+    at: new Date().toISOString(),
+  });
+  gateway.progress("a-research", "v-u7", { state: "taken" });
+  gateway.setChatStatus("a-research", { state: "working" });
+}
+
 /** What a page asks, as the design's sample has each. */
 export const ASKS = {
   confirm: {
