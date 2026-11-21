@@ -1,7 +1,7 @@
 // What the Create window's tests share: its parts by their names, and when it has finished opening.
 import assert from "node:assert/strict";
 import type { Locator, Page } from "@playwright/test";
-import { panel } from "./build-kit.ts";
+import { newTemplate, panel } from "./build-kit.ts";
 
 export const named = (page: Page, name: string | RegExp) =>
   panel(page).getByRole("button", { name });
@@ -23,3 +23,14 @@ export const opened = (page: Page) =>
         .map((a) => a.finished),
     ).then(() => undefined),
   );
+
+/** New template's identity card, at the window's left. */
+export const identity = (page: Page) =>
+  panel(page).getByRole("complementary", { name: /as it will be$/ });
+
+/** Opens New template from Settings, at rest once its stack is drawn and it has opened. */
+export async function openTemplate(page: Page) {
+  await newTemplate(page);
+  await opened(page);
+  return panel(page);
+}

@@ -1,0 +1,241 @@
+// The chat's replies in a real browser, over the stand-in gateway: how one reveals and settles, earlier
+// messages read on asking, the thread's room, and a long reply followed to its end.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { withBrowser } from "./build-kit.ts";
+import {
+  input,
+  mine,
+  nothingUnder,
+  open,
+  panel,
+  reply,
+  until,
+  visit,
+  withGateway,
+} from "./chat-kit.ts";
+
+withBrowser();
+
+test(
+  "a reply reveals word by word, then settles as one message with no spans",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    // The agent works, and the newest thing said here is the person's: the chat awaits a reply.
+    gateway.setChatStatus("a-reviewer", { state: "working" });
+    gateway.addMessage("a-reviewer", {
+      id: "u-ask",
+      role: "user",
+      text: "Why did it fail?",
+      at: new Date().toISOString(),
+    });
+    await mine(page, "Why did it fail?").waitFor();
+    // While it works on it, the chat shows the message and nothing under it.
+    await nothingUnder(page, "Why did it fail?");
+    gateway.delta("a-reviewer", "r1", "Three causes ");
+    await panel(page).locator("[data-sd-animate]").first().waitFor();
+    gateway.delta("a-reviewer", "r1", "explain it.");
+    await panel(page).getByText("explain it.").waitFor();
+    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    await panel(page).getByText("Three causes explain it.").waitFor();
+    assert.equal(await panel(page).getByText("Three causes explain it.").count(), 1);
+    assert.equal(await panel(page).locator("[data-sd-animate]").count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "earlier messages load on asking, and the model isn't in the chat",
+  withGateway(async (gateway) => {
+    const chat = gateway.agents.get("a-reviewer");
+    assert.ok(chat);
+    const at = new Date(Date.now() - 86_400_000).toISOString();
+    chat.chat.messages.unshift(
+      ...Array.from({ length: 120 }, (_, i) => ({
+        id: `old${i}`,
+        role: "assistant" as const,
+        text: `Old note ${i}`,
+        at,
+      })),
+    );
+    const page = await open(gateway);
+    assert.equal(await panel(page).getByText("Old note 3", { exact: true }).count(), 0);
+    // The reply shown is the same one after earlier messages come in above it, not drawn anew.
+    await panel(page)
+      .locator(".prose-chat")
+      .last()
+      .evaluate((e) => e.setAttribute("data-kept", ""));
+    await panel(page).getByRole("button", { name: "Earlier messages" }).click();
+    await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
+    assert.equal(await panel(page).getByRole("button", { name: "Earlier messages" }).count(), 0);
+    assert.equal(await panel(page).locator("[data-kept]").count(), 1);
+    // Read again, as when the agent comes back, what was read before stays where it was.
+    chat.status = { state: "down", detail: "Its program exited." };
+    gateway.changed();
+    await page
+      .getByRole("main")
+      .getByRole("status", { name: "State" })
+      .getByText(/exited/)
+      .waitFor();
+    const reads = () => gateway.calls.filter((c) => c.method === "history").length;
+    const read = reads();
+    chat.status = { state: "running" };
+    gateway.changed();
+    await until(() => reads() > read);
+    await page.waitForTimeout(300);
+    assert.equal(await panel(page).getByText("Old note 3", { exact: true }).count(), 1);
+    assert.equal(await panel(page).getByRole("button", { name: "Earlier messages" }).count(), 0);
+    assert.equal(await panel(page).getByRole("combobox", { name: "Model" }).count(), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "the chat shows no scrollbar and doesn't overflow, wide or phone",
+  withGateway(async (gateway) => {
+    for (const width of [1440, 390]) {
+      const page = await open(gateway, width);
+      const bad = await page.evaluate(() => {
+        const out: string[] = [];
+        if (document.documentElement.scrollWidth > innerWidth) out.push("page overflows");
+        for (const el of document.querySelectorAll<HTMLElement>("main, main *, aside, aside *"))
+          if (
+            /auto|scroll/.test(getComputedStyle(el).overflowY) &&
+            el.offsetWidth - el.clientWidth > 0
+          )
+            out.push(el.className);
+        return out;
+      });
+      assert.deepEqual(bad, [], String(width));
+      await page.close();
+    }
+  }),
+);
+
+test(
+  "a reply longer than the chat's room is followed to its end, unless the person has scrolled away",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const room = panel(page).locator('[data-slot="message-scroller-viewport"]');
+    /** How far what is shown is from the end of what was said. */
+    const short = () =>
+      room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));
+    /** What is shown comes to the end of what was said: it follows a frame or more behind. */
+    const atEnd = async (what: string) => {
+      try {
+        await page.waitForFunction(
+          (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+          await room.elementHandle(),
+          { timeout: 3000 },
+        );
+      } catch {
+        assert.fail(`${what} (${await short()} short)`);
+      }
+    };
+    const lines = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, n) => `Finding ${from + n} is on a line of its own.`);
+    const write = async (id: string, said: string[]) => {
+      for (const line of said) {
+        gateway.delta("a-reviewer", id, `${line}\n\n`);
+        await page.waitForTimeout(15);
+      }
+    };
+    await input(page).fill("List every finding.");
+    await input(page).press("Enter");
+    await mine(page, "List every finding.").waitFor();
+
+    // Its words pass the foot of the room as they come: what is shown stays at the last of them.
+    await write("long", lines(0, 60));
+    await panel(page).getByText("Finding 59 is").waitFor();
+    await atEnd("the end is in view while it is written");
+    gateway.addMessage("a-reviewer", reply("long", lines(0, 60).join("\n\n")));
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    await panel(page).locator("[data-sd-animate]").first().waitFor({ state: "detached" });
+    await atEnd("and when it is done");
+    assert.ok(await panel(page).getByText("Finding 59 is").isVisible());
+
+    // A person who has scrolled away is left where they are.
+    await room.hover();
+    await page.mouse.wheel(0, -600);
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight > 300,
+      await room.elementHandle(),
+    );
+    const left = await short();
+    await write("more", lines(60, 80));
+    await panel(page).getByText("Finding 79 is").waitFor({ state: "attached" });
+    await page.waitForTimeout(400);
+    assert.ok((await short()) >= left, "nothing pulled it back to the end");
+    // The way back is theirs to press, and from the end it is followed again.
+    await panel(page).getByRole("button", { name: "Scroll to end" }).click();
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+      await room.elementHandle(),
+    );
+    await write("more", lines(80, 100));
+    await panel(page).getByText("Finding 99 is").waitFor();
+    await atEnd("followed again from the end");
+    await page.close();
+  }),
+);
+
+test(
+  "a conversation's first reply is followed to its end too, though it came whole under a message that was at the top already",
+  withGateway(async (gateway) => {
+    const agent = "a-triage";
+    const page = await visit(gateway, agent);
+    await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
+    await input(page).fill("List every finding.");
+    await input(page).press("Enter");
+    await mine(page, "List every finding.").waitFor();
+    const room = panel(page).locator('[data-slot="message-scroller-viewport"]');
+    const short = () =>
+      room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));
+    assert.equal(await short(), 0, "nothing is past the foot yet");
+    const said = Array.from({ length: 70 }, (_, n) => `Finding ${n} is on a line of its own.`);
+    gateway.addMessage(agent, reply("whole", said.join("\n\n")));
+    gateway.setChatStatus(agent, { state: "idle" });
+    await panel(page).getByText("Finding 69 is").waitFor();
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+      await room.elementHandle(),
+    );
+    await page.waitForTimeout(300);
+    assert.ok((await short()) <= 8, `it stays there (${await short()} short)`);
+    await page.close();
+  }),
+);
+
+test(
+  "a reply in which nothing was said has nothing to copy",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await input(page).fill("Read the issue.");
+    await input(page).press("Enter");
+    await mine(page, "Read the issue.").waitFor();
+    // A reply with no words, as an earlier reply read as sent can be. What was said is counted, not
+    // the agent's sign while it types, which goes as the reply comes.
+    const said = '[data-slot="message-scroller-item"]:not(:has(.typing-dot))';
+    const items = panel(page).locator(said);
+    const before = await items.count();
+    gateway.addMessage("a-reviewer", reply("r-none", ""));
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    await page.waitForFunction(
+      ([one, n]) => document.querySelectorAll(one as string).length === n,
+      [said, before + 1] as const,
+    );
+    // It has no bubble, and so no menu to copy from.
+    const turn = items.last();
+    assert.equal(await turn.locator('[data-slot="bubble"]').count(), 0);
+    assert.equal(await turn.getByRole("button", { name: "More" }).count(), 0);
+    // A reply with words has one, as before.
+    gateway.addMessage("a-reviewer", reply("r-said", "It is a duplicate of #3."));
+    await panel(page)
+      .locator('[data-slot="message-scroller-item"]')
+      .filter({ hasText: "It is a duplicate of #3." })
+      .getByRole("button", { name: "More" })
+      .waitFor();
+    await page.close();
+  }),
+);
