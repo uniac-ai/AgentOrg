@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SUMMARY_BEGINS } from "../src/compaction.ts";
 import { Entry, type OutputItem, type Tool, textOf, type WorkEntry } from "../src/index.ts";
+import { STATUS } from "../src/loop.ts";
 import { INPUT_BUDGET, REQUEST_BUDGET } from "../src/record.ts";
 import { handsBack, looperWith, newWork, routeTo, says, sends, until } from "./support.ts";
 
@@ -498,5 +499,12 @@ test("a status call is no Activity entry, and the main loop isn't offered status
   assert.deepEqual(
     entries.map((one: WorkEntry) => ("call" in one ? one.call.name : JSON.stringify(one))),
     ["note"],
+  );
+});
+
+test("status says what becomes of its steps: kept when the conversation is shortened, and not seen by the person, so progress still goes in a message", () => {
+  assert.match(
+    STATUS.description ?? "",
+    /The steps are kept when the conversation is shortened; the person doesn't see them, so progress they should know of still goes in a message\.$/,
   );
 });
