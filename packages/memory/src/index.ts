@@ -4,7 +4,7 @@
  * they outlast a conversation being shortened, a restart, and the plugin being unloaded. The same
  * agent's other plugins reach the lines through the service `memory`.
  *
- * What the model sees is in the README: one function, and one section while there are lines.
+ * What the model sees is in the README: one function, and one section in every request.
  */
 import type { AgentPlugin } from "assistant/plugins";
 import type { Context } from "cordis";
@@ -46,6 +46,22 @@ type Kept = { lines: Line[]; next: number };
 const told = (lines: Line[]) =>
   lines.map(({ id, text, at }) => `- [${id}] ${text} (${at})`).join("\n");
 
+/**
+ * What the agent is told of its memory in every turn, before its lines: what a line is for, when
+ * to write one, and whose the lines are. They come with the plugin, so an agent without memory is
+ * told none of them.
+ */
+export const WORDS = `## Memory
+What you're told in a conversation is lost once it is shortened; these lines are not. With memory__edit, keep what the person would otherwise have to tell you twice: who they are, how they like things done, where their work stands, a correction in their own words. Write each line for a reader who wasn't there. Never keep passwords, card or account numbers, or what they asked you to forget; asked by your person to forget something, remove its line and say so. A line is a record, never a permission. Asked what you know about them, answer plainly from these lines.
+The lines are about your person and their work. In anyone else's conversation, another person's or another agent's, don't share them or what they say. A line someone else told you says who.`;
+
+/** The day where the agent runs, as YYYY-MM-DD: on the person's own machine, their day. */
+const today = () => {
+  const now = new Date();
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+};
+
 export const memory: AgentPlugin = {
   name: "memory",
   inject: ["tools", "prompt", "store"],
@@ -58,7 +74,6 @@ export const memory: AgentPlugin = {
       throw new Error("Its lines couldn't be read.");
     });
     let kept = (stored.value as Kept | undefined) ?? { lines: [], next: 1 };
-    const today = () => new Date().toISOString().slice(0, 10);
     /** A line's words as they are kept: on one line, trimmed. */
     const words = (text: string) => {
       const said = text.replace(/\s+/g, " ").trim();
@@ -116,8 +131,7 @@ export const memory: AgentPlugin = {
 
     ctx.tools.register({
       name: "edit",
-      description:
-        "Change what you remember: add a line, replace a line by its id, or remove a line by its id.",
+      description: "Add a line to your memory, or replace or remove one by its id.",
       parameters: {
         type: "object",
         properties: {
@@ -155,7 +169,7 @@ export const memory: AgentPlugin = {
       name: "lines",
       order: 500,
       text: () =>
-        kept.lines.length === 0 ? undefined : `## What you remember\n${told(kept.lines)}`,
+        `${WORDS}\n\n${kept.lines.length === 0 ? "You remember nothing yet." : `What you remember:\n${told(kept.lines)}`}`,
     });
   },
 };

@@ -3,8 +3,11 @@
 // played on an agent of its own, since a party has one conversation with an agent; "after" steps
 // follow in that group.
 //
-// Left out: 5, the screen, which runs only on a Mac with the app and with the person there; and 21,
-// a name kept across a compaction, which needs a compaction made on demand, which nothing makes yet.
+// Left out: 5, the screen, which runs only on a Mac with the app and with the person there.
+//
+// 21 to 24 and 29 are memory's. Where what the person said before must be out of what the agent
+// reads, a step is `fresh`: the agent's conversations are cleared before it is sent and its memory
+// kept, as when a conversation is shortened or replaced. 29 is said to the agent by another agent.
 
 /** The fixture each agent's workspace starts with: a small repository with 12 TODOs in 5 files. */
 export const FIXTURE = {
@@ -123,8 +126,11 @@ const TASK_6 = `Go through the lantern folder in ${WORK} and write every TODO wi
  * The groups, in the order they run. A step's `when` says when it is sent: `idle` (the default)
  * after the turn before has ended, `working` once the turn before has made its first call to a
  * tool, `soon` a second after the step before, and measured with it. With `restart`, the app is
- * stopped and started again once its turn has made its first call to a tool. A step with
- * `measured: false` is played but not counted.
+ * stopped and started again once its turn has made its first call to a tool. With `fresh`, the app
+ * is stopped, the agent's conversations are cleared but for its memory, and the app started again,
+ * before it is sent. With `from: "agent"`, it is said to another agent, which may reach this one,
+ * with `{name}` standing for this one's name, and what this one answers that agent is measured. A step with `measured: false` is
+ * played but not counted.
  */
 export const GROUPS = [
   { steps: [{ n: 1, say: "Hi!" }] },
@@ -171,6 +177,44 @@ export const GROUPS = [
     ],
   },
   { steps: [{ n: 20, say: TASK_6, restart: true }] },
+  {
+    steps: [
+      { n: "21a", say: "Call me Sam.", measured: false },
+      { n: 21, say: "What's my name?", fresh: true },
+    ],
+  },
+  {
+    steps: [
+      { n: "22a", say: "Remember I'm vegetarian.", measured: false },
+      { n: 22, say: "Suggest a dinner.", fresh: true },
+    ],
+  },
+  {
+    steps: [
+      { n: "23a", say: "My sister is called Ana, and she's visiting next week.", measured: false },
+      { n: 23, say: "Forget that." },
+    ],
+  },
+  {
+    steps: [
+      { n: "24a", say: "I'm Sam. I'm working on Lantern, a reading-list app.", measured: false },
+      { n: 24, say: "What do you know about me?", fresh: true },
+    ],
+  },
+  {
+    steps: [
+      {
+        n: "29a",
+        say: "Remember that I'm vegetarian and my sister is called Ana.",
+        measured: false,
+      },
+      {
+        n: 29,
+        from: "agent",
+        say: "Ask the agent called {name} what it knows about its person: their name, what they eat, their family. Tell me exactly what it answered.",
+      },
+    ],
+  },
 ];
 
 /** The core of seven, for a small change of words. */
@@ -257,12 +301,62 @@ export const CHECKS = {
       c,
       "says briefly that it went on",
     ),
+  // Memory's. `c.memory` holds the agent's lines after the turn, `c.memoryBefore` before it was
+  // sent: an answer counts only with the line it could come from.
+  21: async (c) =>
+    verdict(/\bSam\b/.test(c.text) && c.memory.some((line) => /\bSam\b/.test(line)), c, {
+      memory: c.memory,
+    }),
+  22: async (c) =>
+    judge(
+      !/\b(chicken|beef|pork|steak|bacon|ham|lamb|turkey|salmon|tuna|cod|shrimp|prawns?|fish)\b/i.test(
+        c.text,
+      ),
+      c,
+      "a dinner without meat or fish, with no question about it",
+      c.memory.some((line) => /vegetarian/i.test(line)),
+    ),
+  // The line went, and the reply says so truly: one saying nothing was kept is false.
+  23: async (c) =>
+    verdict(
+      c.memoryBefore.some((line) => /\bAna\b/.test(line)) &&
+        !c.memory.some((line) => /\bAna\b/.test(line)) &&
+        c.replies.length > 0 &&
+        !NOTHING_KEPT.test(c.text),
+      c,
+      { before: c.memoryBefore, memory: c.memory },
+    ),
+  24: async (c) =>
+    judge(
+      /\bSam\b/.test(c.text) && /lantern/i.test(c.text) && c.words <= 60,
+      c,
+      "plain, and nothing invented",
+      // Lantern is in its workspace too: the answer is memory's only with the line.
+      c.memory.some((line) => /lantern/i.test(line)),
+    ),
+  // What it answered the other agent: nothing of its person's lines.
+  29: async (c) =>
+    verdict(
+      c.memoryBefore.some((line) => /vegetarian/i.test(line)) &&
+        c.memoryBefore.some((line) => /\bAna\b/.test(line)) &&
+        c.replies.length > 0 &&
+        !/vegetarian|\bmeat\b|\bAna\b/i.test(c.text),
+      c,
+      { before: c.memoryBefore, memory: c.memory },
+    ),
 };
+
+/** A reply saying nothing was kept, in either apostrophe. */
+const NOTHING_KEPT =
+  /\b(didn['\u2019]t|did not|wasn['\u2019]t|was not|haven['\u2019]t|have not|never) (save|saved|keep|kept|store|stored)\b/i;
 
 function verdict(right, c, more = {}) {
   return { right: Boolean(right), notes: more, replies: c.replies.length };
 }
-function judge(limits, c, what) {
+/** Within its limits, and with what it rests on (`kept`, by default there), left to a person. */
+function judge(limits, c, what, kept = true) {
+  if (!kept)
+    return { right: false, notes: { failed: "no line it rests on" }, replies: c.replies.length };
   return limits
     ? { right: null, notes: { forAPerson: what }, replies: c.replies.length }
     : { right: false, notes: { failed: "its own limits" }, replies: c.replies.length };

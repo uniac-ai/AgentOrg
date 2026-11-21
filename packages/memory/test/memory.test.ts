@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type AgentPlugin, createPluginHost } from "assistant/plugins";
 import type { Context } from "cordis";
-import { type Line, MEMORY_MAX, memory } from "../src/index.ts";
+import { type Line, MEMORY_MAX, memory, WORDS } from "../src/index.ts";
 
 /** Where the plugin's lines are in the agent's store. */
 const KEPT = "plugin/memory/lines";
@@ -86,7 +86,7 @@ test("the agent adds, replaces and removes a line by its id, and is told its lin
   assert.match(first?.at ?? "", /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(
     told(),
-    `## What you remember\n- [1] The person is called Sam. (${first?.at})\n- [2] Sam eats fish, no meat. (${second?.at})`,
+    `${WORDS}\n\nWhat you remember:\n- [1] The person is called Sam. (${first?.at})\n- [2] Sam eats fish, no meat. (${second?.at})`,
   );
   assert.deepEqual(await edit({ action: "remove", id: "1" }), {
     output: "Line 1 removed.",
@@ -104,6 +104,30 @@ test("the agent adds, replaces and removes a line by its id, and is told its lin
     ["2", "3"],
   );
   assert.equal(s.kept()?.next, 4);
+  await plugins.close();
+});
+
+test("the agent is told what its memory is for and whose its lines are, before it holds a line, and each line's day is the day where it runs", async (t) => {
+  // A zone far from UTC, where the day there and in UTC differ for half of each day.
+  const zone = process.env.TZ;
+  process.env.TZ = "Pacific/Kiritimati";
+  t.after(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+  const s = storeOf();
+  const { plugins, edit, told } = await holding(s.store);
+  assert.equal(told(), `${WORDS}\n\nYou remember nothing yet.`);
+  const day = () => {
+    const now = new Date();
+    return [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+      .map((part) => String(part).padStart(2, "0"))
+      .join("-");
+  };
+  // The day here before and after it is written: the same, unless midnight came between.
+  const before = day();
+  await edit({ action: "add", text: "The person is called Sam." });
+  assert.ok([before, day()].includes(s.kept()?.lines[0]?.at ?? ""));
   await plugins.close();
 });
 
@@ -155,7 +179,7 @@ test("a change that can't be made is refused with why, and nothing changes", asy
 
   // The lines hold so much as they are told, ids and days with them: a line that fills what is
   // left to the last character is kept, and one more character is refused, added or replaced.
-  const room = MEMORY_MAX - told().split("\n").slice(1).join("\n").length;
+  const room = MEMORY_MAX - (told().split("What you remember:\n")[1] ?? "").length;
   const fills = room - "\n- [2]  (2026-01-01)".length;
   assert.equal((await edit({ action: "add", text: "y".repeat(fills) })).ok, true);
   const full = MEMORY_MAX + 1;
