@@ -343,6 +343,122 @@ test("an agent is made through agents, and the person reaches its chat, across a
   );
 });
 
+test("an agent given Memory keeps a line it writes, and is told it at its next turn and after the app starts again", async (t) => {
+  // The model, scripted: whose each message is, and each worker request's answer in turn, nothing
+  // once those run out. What each worker request is told and offered is kept.
+  const fake = await fakeOpenAI();
+  const worker: { instructions: string; tools: string[] }[] = [];
+  const answers: object[][] = [];
+  let routed = 0;
+  const s = await open(t, undefined, async (request) => {
+    if (!request.url.endsWith("/responses")) return fake.handle(request);
+    const body = (await request.clone().json()) as {
+      instructions: string;
+      tools?: { name: string }[];
+    };
+    const tools = (body.tools ?? []).map((tool) => tool.name);
+    if (tools.includes("route")) {
+      const call = { type: "function_call", call_id: `r${++routed}`, name: "route" };
+      fake.script({ events: [completed([{ ...call, arguments: '{"title":"Talk"}' }])] });
+      return fake.handle(request);
+    }
+    worker.push({ instructions: body.instructions, tools });
+    fake.script({ events: [completed((answers.shift() ?? []) as never)] });
+    return fake.handle(request);
+  });
+  let { person } = await s.start();
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  // Made from a stack that names management's Memory unit, which isn't on offer: management is
+  // found as the provider of its own Skill unit, which is.
+  const { units } = await person.call<{ units: { id: string; provider: string }[] }>(
+    "agents",
+    "units",
+  );
+  const management = units.find((one) => one.id === "skill")?.provider;
+  assert.ok(management);
+  const { creatables } = await person.call<{ creatables: { provider: string; id: string }[] }>(
+    "agents",
+    "creatable",
+  );
+  const [assistant] = creatables;
+  assert.ok(assistant);
+  const { agent } = await person.call<{ agent: string }>("agents", "create", {
+    stack: {
+      base: { provider: assistant.provider, creatable: assistant.id },
+      units: [{ provider: management, unit: "memory" }],
+    },
+    name: "Keeper",
+  });
+  const slot = await chatSlot(person, agent);
+  const reached = (one: Person) =>
+    one.call(slot, "list").then(
+      () => true,
+      () => false,
+    );
+  /** Send a message and wait for the agent's turn to end; what its first worker request was told. */
+  const turn = async (text: string) => {
+    const from = worker.length;
+    await person.call(slot, "send", { text });
+    await until(() => worker.length > from, "the worker to be asked");
+    await until(
+      async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+      "the turn to end",
+    );
+    return worker[from] as (typeof worker)[number];
+  };
+  const line = /\n## What you remember\n- \[1\] The person is called Sam\. \(\d{4}-\d{2}-\d{2}\)\n/;
+  await until(() => reached(person), "the chat to be exposed");
+
+  // Told "Call me Sam.", the worker writes it down.
+  answers.push([
+    {
+      type: "function_call",
+      call_id: "m1",
+      name: "memory__edit",
+      arguments: JSON.stringify({ action: "add", text: "The person is called Sam." }),
+    },
+  ]);
+  const first = await turn("Call me Sam.");
+  assert.ok(first.tools.includes("memory__edit"), "offered memory's function");
+  assert.doesNotMatch(first.instructions, /What you remember/, "nothing remembered yet");
+  // At its next turn it is told the line.
+  assert.match((await turn("What's my name?")).instructions, line);
+  // And after the app starts again, from the agent's own store.
+  await s.stop();
+  ({ person } = await s.start());
+  await until(() => reached(person), "the chat to be back");
+  assert.match((await turn("Still there?")).instructions, line);
+});
+
+test("an agent whose settings name a plugin the app doesn't carry is down, and says why", async (t) => {
+  const s = await open(t);
+  let { person } = await s.start();
+  const agent = await createAssistant(person, "Scout");
+  await s.stop();
+  // A capability made of a plugin this version doesn't carry, as a later version may have kept.
+  const path = join(s.home, "programs", "management", "manager.json");
+  const kept = JSON.parse(readFileSync(path, "utf8"));
+  kept.agents[agent].capabilities.push({
+    id: "search",
+    title: "Search",
+    slots: [],
+    surfaces: [],
+    views: [],
+    plugins: [{ name: "search" }],
+  });
+  writeFileSync(path, JSON.stringify(kept));
+  ({ person } = await s.start());
+  const status = async () =>
+    (await person.call<{ status: { state: string; detail?: string } }>("agents", "get", { agent }))
+      .status;
+  await until(async () => (await status()).state === "down", "the agent to be down");
+  const down = { state: "down", detail: "This provider carries no plugin named search." };
+  assert.deepEqual(await status(), down);
+});
+
 test("a turn cut off as the app stops goes on when it is started again, with the agent's settings", async (t) => {
   // The model, scripted: its next answer stays out while `held`, as when the app stops mid-turn.
   const fake = await fakeOpenAI();

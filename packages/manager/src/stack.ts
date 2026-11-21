@@ -517,6 +517,7 @@ export function createStacks(parts: StackParts) {
       title: "Memory",
       description: "It remembers what you tell it to, across its conversations.",
       capability: { id: MEMORY_UNIT, title: "Memory" },
+      once: true,
       form: [],
       needs: [],
       gives: { slots: [], skills: [], results: [] },
@@ -1703,9 +1704,9 @@ export function createStacks(parts: StackParts) {
       ]);
       return {
         bases: bases.flat(),
-        // What the MCP unit stands for isn't listed apart from it. Nor is the Memory unit, which
-        // a stack or a template names: listed, a person could give an agent a capability no
-        // executor carries the plugin of.
+        // What the MCP unit stands for isn't listed apart from it. Nor is the Memory unit, which a
+        // stack or a template names: what it tells the agent, and whose its lines are, come before
+        // a person is offered it.
         units: offers
           .filter(
             ({ unit, provider }) =>

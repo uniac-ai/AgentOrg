@@ -9,6 +9,10 @@
     "./provider": {
       "types": "./dist/src/provider.d.ts",
       "default": "./dist/src/provider.js"
+    },
+    "./plugins": {
+      "types": "./dist/src/plugins.d.ts",
+      "default": "./dist/src/plugins.js"
     }
   },
   "files": [

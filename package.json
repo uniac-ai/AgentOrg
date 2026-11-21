@@ -17,6 +17,7 @@
     "packages/chatgpt",
     "packages/looper",
     "packages/assistant",
+    "packages/memory",
     "packages/shell",
     "packages/app"
   ],

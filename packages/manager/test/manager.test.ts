@@ -4123,8 +4123,8 @@ test("the Memory unit builds a capability made of the memory plugin, with no Act
   const kept = () =>
     JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8")).agents[agent].capabilities;
   assert.deepEqual(kept(), [built]);
-  // The unit isn't among those on offer, though a stack names it: listed, a person could give
-  // an agent a capability no executor carries the plugin of.
+  // The unit isn't among those on offer, though a stack names it: what it tells the agent, and
+  // whose its lines are, come before a person is offered it.
   assert.ok(!(await s.calls.agents.units({})).units.some((one) => one.id === "memory"));
 
   // Taken off, the agent is told and holds no plugin; added to it living, it is told again.
@@ -4183,10 +4183,14 @@ test("a capability naming a plugin the agent already holds, or taking it past 64
   ]);
 
   type Held = { id: string; title: string; plugins: { name: string }[] };
+  type Kept = { units: object[]; capabilities: Held[] };
+  /** The agent holding what `change` makes of what it holds, from units other than Memory. */
   const holding = (change: (held: Held[]) => Held[]) =>
     s.restart((kept) => {
-      const record = (kept.agents as unknown as Record<string, { capabilities: Held[] }>)[agent];
-      if (record) record.capabilities = change(record.capabilities);
+      const record = (kept.agents as unknown as Record<string, Kept>)[agent];
+      if (!record) return;
+      record.units = [];
+      record.capabilities = change(record.capabilities);
     });
   // The plugin held by another capability: refused by its name.
   await holding((held) => held.map((one) => ({ ...one, id: "notes", title: "Notes" })));
