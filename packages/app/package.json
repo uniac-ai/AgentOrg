@@ -1,6 +1,6 @@
 {
   "name": "@agentorg/cli",
-  "version": "0.0.34",
+  "version": "0.0.35",
   "description": "AgentOrg as one app: the Hub, the person's gateway and the shell, on loopback.",
   "license": "MIT",
   "repository": {
@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@agentorg/computer-connector": "0.0.0",
-    "@agentorg/computer-sdk": "0.0.40",
+    "@agentorg/computer-sdk": "0.0.41",
     "@agentorg/hub": "0.0.0",
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/manager": "0.0.0",
@@ -48,7 +48,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@agentorg/computer": "0.0.40",
+    "@agentorg/computer": "0.0.41",
     "@playwright/test": "1.64.1",
     "@types/ws": "^8.18.2"
   },
