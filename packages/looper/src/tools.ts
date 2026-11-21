@@ -25,7 +25,7 @@ export const refused = (code: string, message: string): Outcome => ({
 
 /** Run a function call: the result, or the refusal, as the function's output. */
 export async function runTool(
-  tools: Tool[],
+  tools: readonly Tool[],
   name: string,
   args: string,
   group: string,

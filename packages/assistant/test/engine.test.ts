@@ -146,9 +146,12 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
   const requests: Request[] = [];
   /** The workers' requests as the model got them, with the looper's part. */
   const whole: Request[] = [];
-  /** What the main loop was asked, and the arguments it answers `route` with when a test says. */
+  /**
+   * What the main loop was asked; the arguments it answers `route` with, what it writes, and other
+   * functions it calls, when a test says.
+   */
   const routed: Request[] = [];
-  const routing: { to?: string; says?: string } = {};
+  const routing: { to?: string; says?: string; calls?: Record<string, unknown>[] } = {};
   const cancels: string[] = [];
   const script: Step[] = [];
   /**
@@ -176,14 +179,16 @@ async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) 
         )?.[1];
         const to = routing.to ?? (last ? JSON.stringify({ work: last }) : undefined);
         const call = to ? { ...NEW_WORK, arguments: to } : undefined;
+        const also = routing.calls ?? [];
         if (routing.says !== undefined)
           return {
             output: [
               { type: "message", role: "assistant", content: routing.says },
               ...(call ? [call] : []),
+              ...also,
             ],
           } as never;
-        return { output: [call ?? NEW_WORK] } as never;
+        return { output: [call ?? NEW_WORK, ...also] } as never;
       }
       // A request that only follows what was sent is answered with nothing, as by a model that
       // has said all it had: it is not among `requests`, and takes nothing from `script`.
@@ -1227,7 +1232,7 @@ test("what a worker sends streams into the chat as the reply it becomes; what it
   assert.notEqual(next.messageId, reply?.id);
 });
 
-test("a plugin's function is offered under its name and its block follows the agent's words, the front desk's included; it hears its turns start and end, and the agent go idle", async (t) => {
+test("a plugin's function is offered under its name, to the front desk too, and its block follows the agent's words, the front desk's included; it hears its turns start and end, and the agent go idle", async (t) => {
   const heard: string[] = [];
   const notes: AgentPlugin = {
     name: "notes",
@@ -1255,9 +1260,10 @@ test("a plugin's function is offered under its name and its block follows the ag
     delete given.plugins;
   });
   const s = await setup();
+  s.actor.expose("files", tools, listing({ read: () => ({}) }));
   await s.turn("Hi.");
   const asked = s.whole[0] as Request & { instructions: string };
-  assert.ok(offeredNames(asked)?.includes("notes__keep"));
+  assert.deepEqual(offeredNames(s.requests[0]), ["notes__keep", "files__read"]);
   const told = String(asked.instructions);
   assert.ok(told.includes("Notes: none yet."));
   assert.ok(told.indexOf(INSTRUCTIONS) < told.indexOf("Notes: none yet."));
@@ -1265,10 +1271,45 @@ test("a plugin's function is offered under its name and its block follows the ag
   const front = String(s.routed[0]?.instructions);
   assert.ok(front.startsWith("You are the front desk."));
   assert.ok(front.endsWith(`\n\n${INSTRUCTIONS}\n\nNotes: none yet.`));
-  assert.ok(!offeredNames(s.routed[0])?.includes("notes__keep"));
+  // Offered its function beside its own, and told it is its to call; nothing else of the agent's.
+  assert.deepEqual(offeredNames(s.routed[0]), ["route", "no_reply_needed", "notes__keep"]);
+  assert.match(front, /beside `route` and `no_reply_needed` is yours to call/);
   const work = heard.find((one) => one.startsWith("turnStarted "))?.split(" ")[1];
   assert.ok(work);
   assert.deepEqual(heard, [`turnStarted ${work}`, `turnEnded ${work}`, "idle"]);
+});
+
+test("a plugin's function the front desk calls beside its answer runs, and no work starts", async (t) => {
+  const kept: unknown[] = [];
+  const notes: AgentPlugin = {
+    name: "notes",
+    inject: ["tools"],
+    apply(ctx: Context) {
+      ctx.tools.register({
+        name: "keep",
+        parameters: { type: "object", properties: { text: { type: "string" } } },
+        run: async (input: unknown) => {
+          kept.push(input);
+          return { output: "Kept.", ok: true } as never;
+        },
+      });
+    },
+  };
+  const quiet = { info() {}, warn() {}, error() {} };
+  given.plugins = await createPluginHost(quiet, [notes]).open("assistant", {
+    store: memory().handlers as never,
+  });
+  await given.plugins.hold([{ name: "notes" }]);
+  t.after(() => {
+    delete given.plugins;
+  });
+  const s = await setup();
+  s.routing.says = "Noted, Sam.";
+  s.routing.calls = [callTool("notes__keep", { text: "Their name is Sam." })];
+  await s.turn("Call me Sam.");
+  assert.deepEqual(kept, [{ text: "Their name is Sam." }]);
+  assert.deepEqual(s.requests, []);
+  assert.deepEqual(s.messages(), ["user: Call me Sam.", "assistant: Noted, Sam."]);
 });
 
 test("a plugin hears the agent stopped last, once the turn it was in was cut", async (t) => {
@@ -1307,6 +1348,8 @@ test("a plugin hears the agent stopped last, once the turn it was in was cut", a
 test("a plugin that gives nothing changes no byte of what a request carries: the same instructions and tools as with none", async (t) => {
   const run = async () => {
     const s = await setup();
+    // An agent with tools of its own, which its workers are offered.
+    s.actor.expose("files", tools, listing({ read: () => ({}) }));
     await s.turn("Hi.");
     const { instructions, tools: offered } = s.whole[0] as Request & { instructions: unknown };
     const front = s.routed[0] as Request & { instructions: unknown };
@@ -1317,6 +1360,10 @@ test("a plugin that gives nothing changes no byte of what a request carries: the
     });
   };
   const none = await run();
+  // As the front desk is with no plugin: offered its own two functions, and told nothing of others.
+  const { front } = JSON.parse(none) as { front: Request };
+  assert.deepEqual(offeredNames(front), ["route", "no_reply_needed"]);
+  assert.doesNotMatch(String(front.instructions), /is yours to call/);
   const quiet = { info() {}, warn() {}, error() {} };
   const silent: AgentPlugin = { name: "silent", inject: ["agent"], apply() {} };
   given.plugins = await createPluginHost(quiet, [silent]).open("assistant", {

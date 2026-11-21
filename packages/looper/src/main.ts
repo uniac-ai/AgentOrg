@@ -6,12 +6,16 @@
  * or stops a piece of work the message asks to stop. It is also told of a message that joined
  * turns of work, which that work has: then it is given those pieces of work and that message, and
  * may only stop one of them. It does none of the work, and it has two functions to call: `route`,
- * and `no_reply_needed`, which it is not offered for a message that joined turns. Each time is
- * one model request, which holds nothing of those before it but what it is given.
+ * and `no_reply_needed`, which it is not offered for a message that joined turns. When it decides
+ * on a message it is also offered the host's `frontDesk` functions, if any, to call beside its
+ * answer: each runs once the reply is in, before the decision is acted on, and what it gives goes
+ * back to no model. Each time is one model request, which holds nothing of those before it but
+ * what it is given.
  */
 import { NO_REPLY, REACTION, reactionOf } from "./loop.js";
 import { PICTURES_BUDGET, withPictures } from "./record.js";
 import { build, type Part } from "./told.js";
+import { runTool } from "./tools.js";
 import {
   head,
   type Item,
@@ -19,6 +23,7 @@ import {
   type Model,
   type Picture,
   type Retry,
+  type Tool,
   type ToolSpec,
 } from "./types.js";
 import { GLANCE, JOB, JUDGMENT, PLAIN, RECEIPT, TRUST } from "./words.js";
@@ -45,6 +50,12 @@ Act only if the message asks to stop work. If exactly one of those pieces of wor
 /** What the main loop is told of a message no work in a turn took, before the id of the work last active. */
 export const LAST_ACTIVE =
   "None of the work that follows this conversation is in a turn. The one last active here: ";
+/**
+ * What the main loop is told after its words when it is offered the host's functions beside its
+ * own, and only then: that calling one is its to do, not a worker's.
+ */
+export const OFFERED =
+  "A function you are offered beside `route` and `no_reply_needed` is yours to call, in the same response as your answer, when what came in needs it.";
 /** What is said where the main loop called to stop work and wrote nothing: whether a turn was cut. */
 export const stopWord = (cut: boolean) => (cut ? "Stopped." : "Nothing was stopped.");
 /** The function the main loop calls to place or stop. */
@@ -195,12 +206,16 @@ export function createMain(options: {
   model: Model;
   /**
    * Read for each request: which model to ask, none meaning the model's own default, who the main
-   * loop speaks as when it answers itself, and the host's blocks it is told after that.
+   * loop speaks as when it answers itself, and the host's blocks it is told after that. `frontDesk`
+   * are the host's functions it is offered beside its own when it decides on a message, not when
+   * it hears of one that joined a turn: each it calls runs once the reply is in, before the
+   * decision is acted on, with the request's id as its group, and what it gives goes to no model.
    */
   request(): Promise<{
     model?: string | undefined;
     voice?: string | undefined;
     blocks?: readonly Part[] | undefined;
+    frontDesk?: readonly Tool[] | undefined;
   }>;
   /** Whether its request out now is being tried again changed. */
   retried(): void;
@@ -255,9 +270,10 @@ export function createMain(options: {
 
   /**
    * Make one request of the model, offering it `tools`: what it wrote, what it called `route`
-   * with, and whether it called `no_reply_needed`. `voiced` is whether it is told who it speaks
-   * as. None for a request that is dropped, which the model is then not asked, or told to cancel;
-   * one the model refuses rejects, as it refused.
+   * with, and whether it called `no_reply_needed`. `voiced` is whether it answers as the host: told
+   * who it speaks as, and offered the host's `frontDesk` functions, each of which it called runs
+   * before this returns. None for a request that is dropped, which the model is then not asked, or
+   * told to cancel; one the model refuses rejects, as it refused.
    */
   const ask = async (
     instructions: string,
@@ -279,18 +295,41 @@ export function createMain(options: {
       const given = await Promise.race([options.request().then((to) => ({ to })), gone]);
       if (!given || mine.dropped) return undefined;
       const { model, voice, blocks } = given.to;
-      mine.requestId = crypto.randomUUID();
+      const theirs = voiced ? (given.to.frontDesk ?? []) : [];
+      const requestId = crypto.randomUUID();
+      mine.requestId = requestId;
       const asked = options.model.respond({
-        requestId: mine.requestId,
+        requestId,
         ...(model ? { model } : {}),
-        instructions: voiced ? spokenAs(instructions, voice, blocks) : instructions,
+        instructions: voiced
+          ? spokenAs(
+              theirs.length > 0 ? `${instructions}\n\n${OFFERED}` : instructions,
+              voice,
+              blocks,
+            )
+          : instructions,
         input,
-        tools,
+        tools: [...tools, ...theirs.map(({ run: _, ...spec }) => spec)],
       });
       // A model that never answers a request it was told to cancel holds nothing up.
       asked.catch(() => {});
       const reply = await Promise.race([asked, gone]);
       if (!reply || mine.dropped) return undefined;
+      // Each of the host's functions it called runs, under this request's id as its group, until
+      // the request is dropped; one that fails is said in the log, and what it wrote and decided
+      // stands.
+      for (const item of reply.output) {
+        if (mine.dropped) return undefined;
+        if (item.type !== "function_call" || !theirs.some(({ name }) => name === item.name))
+          continue;
+        const outcome = await runTool(theirs, item.name, item.arguments, requestId);
+        if (!outcome.ok)
+          options.log.warn("A function the main loop called didn't do it.", {
+            name: item.name,
+            output: head(outcome.output, 500),
+          });
+      }
+      if (mine.dropped) return undefined;
       const text = reply.output
         .flatMap((item) => (item.type === "message" ? [item.content] : []))
         .join("");

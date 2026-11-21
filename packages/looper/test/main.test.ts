@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Json } from "../src/index.ts";
-import { MAIN_INSTRUCTIONS } from "../src/main.ts";
+import type { Json, OutputItem, Tool } from "../src/index.ts";
+import { CLOSE, HEARD_INSTRUCTIONS, MAIN_INSTRUCTIONS, OFFERED, ROUTE } from "../src/main.ts";
 import { gate, idle, looperWith, newWork, routeTo, says, sends, until } from "./support.ts";
 
 const texts = async (looper: ReturnType<typeof looperWith>["looper"], thread: string) =>
@@ -415,4 +415,142 @@ test("work that can't take a thread's messages is told so once, though one was k
   assert.equal(mains.length, 21);
   assert.equal(values.get("unrouted/t"), false);
   await looper.stop();
+});
+
+/** Who the main loop speaks as in these tests, as it is told after its words. */
+const SCOUT =
+  "When you answer yourself, you speak as the one described below. What that one is told to do is a worker's to do, not yours:\n\nYou are Scout.";
+/**
+ * A host's function the front desk may call, which keeps what it is given in `kept` and answers
+ * as `run` does, by default that it kept it.
+ */
+const keeping = (run?: () => Promise<never>) => {
+  const kept: { input: unknown; group: string }[] = [];
+  const tool: Tool = {
+    name: "notes__keep",
+    description: "Keep a note.",
+    parameters: { type: "object", properties: { text: { type: "string" } } },
+    run: async (input, group) => {
+      kept.push({ input, group });
+      return run ? run() : { output: "Kept.", ok: true };
+    },
+  };
+  return { tool, kept };
+};
+/** The front desk calling `notes__keep` with `text`. */
+const keeps = (text: string): OutputItem[] => [
+  {
+    type: "function_call",
+    callId: `keep-${crypto.randomUUID()}`,
+    name: "notes__keep",
+    arguments: JSON.stringify({ text }),
+  },
+];
+
+test("the front desk is offered the host's functions beside its own, told they are its to call, and one it calls beside its answer runs", async () => {
+  const { tool, kept } = keeping();
+  const { looper, values, said, asked, mains, mainIds } = looperWith({
+    voice: "You are Scout.",
+    tools: [keeping().tool, { ...keeping().tool, name: "files__read" }],
+    frontDesk: [tool],
+    routing: () => [...says("Noted, Sam."), ...keeps("Their name is Sam.")],
+  });
+  await looper.send("a", "Call me Sam.");
+  await until(() => said.length === 2, "the answer");
+  await looper.settled();
+  const { run: _, ...spec } = tool;
+  assert.deepEqual(mains[0]?.tools, [ROUTE, CLOSE, spec]);
+  assert.equal(mains[0]?.instructions, `${MAIN_INSTRUCTIONS}\n\n${OFFERED}\n\n${SCOUT}`);
+  // It ran once, under the request's id; and the answer is the reply, with no work started.
+  assert.deepEqual(kept, [{ input: { text: "Their name is Sam." }, group: mainIds[0] }]);
+  assert.deepEqual(said, ["a: user: Call me Sam.", "a: assistant: Noted, Sam."]);
+  assert.deepEqual(asked, []);
+  assert.equal(values.has("work/a"), false);
+});
+
+test("a host's function the front desk calls beside `route` has run before the work it places is asked", async () => {
+  const running = gate();
+  let done = false;
+  const { tool } = keeping(async () => {
+    await running.shut;
+    done = true;
+    return { output: "Kept.", ok: true } as never;
+  });
+  const { looper, asked, told, answer } = looperWith({
+    frontDesk: [tool],
+    // What the worker is told is read when it is asked: whether the note was kept by then.
+    instructions: () => (done ? "A note is kept." : "No note yet."),
+    routing: () => [...keeps("Their name is Sam."), ...newWork("The report")],
+  });
+  await looper.send("a", "Call me Sam, and write the report.");
+  await idle();
+  assert.deepEqual(asked, [], "no work is asked while the call runs");
+  running.open();
+  await until(() => asked.length === 1, "the work's turn");
+  assert.match(String(told[0]?.instructions), /A note is kept\./);
+  answer("Call me Sam, and write the report.", sends("Done."));
+  await looper.settled();
+});
+
+test("a host's function called alone, with nothing written and no `route`, runs, and the message is new work as it is with neither", async () => {
+  const { tool, kept } = keeping();
+  const { looper, asked, answer } = looperWith({
+    frontDesk: [tool],
+    routing: () => keeps("Their name is Sam."),
+  });
+  await looper.send("a", "Call me Sam.");
+  await until(() => asked.length === 1, "the work's turn");
+  assert.equal(kept.length, 1);
+  answer("Call me Sam.", sends("Noted."));
+  await looper.settled();
+});
+
+test("a host's function that fails when the front desk calls it is said in the log, and its answer is said all the same", async () => {
+  const { tool, kept } = keeping(() => Promise.reject(new Error("The store is gone.")));
+  const { looper, said, warnings } = looperWith({
+    frontDesk: [tool],
+    routing: () => [...says("Noted."), ...keeps("Their name is Sam.")],
+  });
+  await looper.send("a", "Call me Sam.");
+  await until(() => said.length === 2, "the answer");
+  await looper.settled();
+  assert.equal(kept.length, 1);
+  assert.deepEqual(warnings, ["A function the main loop called didn't do it."]);
+  assert.deepEqual(said, ["a: user: Call me Sam.", "a: assistant: Noted."]);
+});
+
+test("hearing of a message that joined a turn, the front desk is offered none of the host's functions, and runs none it names", async () => {
+  const { tool, kept } = keeping();
+  const { looper, asked, mains, answer } = looperWith({
+    voice: "You are Scout.",
+    frontDesk: [tool],
+    routing: (text) => (text === "And call me Sam." ? keeps("Their name is Sam.") : newWork()),
+  });
+  await looper.send("a", "Write the report.");
+  await until(() => asked.length === 1, "the work's request");
+  await looper.send("a", "And call me Sam.");
+  await until(() => mains.length === 2, "the main loop to hear of it");
+  assert.equal(mains[1]?.instructions, HEARD_INSTRUCTIONS);
+  assert.deepEqual(mains[1]?.tools, [ROUTE]);
+  answer("Write the report.", sends("Report done."));
+  await until(() => asked.length === 2, "the request that reads it");
+  answer("And call me Sam.", sends("Noted."));
+  await looper.settled();
+  assert.deepEqual(kept, []);
+});
+
+test("with none of the host's functions, the front desk is told and offered what it was, though its workers have functions", async () => {
+  for (const frontDesk of [undefined, []]) {
+    const { looper, said, mains } = looperWith({
+      voice: "You are Scout.",
+      tools: [keeping().tool],
+      ...(frontDesk ? { frontDesk } : {}),
+      routing: () => says("Hello."),
+    });
+    await looper.send("a", "Hi.");
+    await until(() => said.length === 2, "the answer");
+    await looper.settled();
+    assert.equal(mains[0]?.instructions, `${MAIN_INSTRUCTIONS}\n\n${SCOUT}`);
+    assert.deepEqual(mains[0]?.tools, [ROUTE, CLOSE]);
+  }
 });

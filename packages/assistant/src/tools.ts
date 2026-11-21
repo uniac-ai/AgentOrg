@@ -132,6 +132,10 @@ export async function listedBy(
   return { candidates, leftOut: [] };
 }
 
+/** The name a function is offered under: `<slot>__<name>`, in the characters a name may have. */
+export const offeredName = (slot: string, name: string) =>
+  `${slot}__${name}`.replace(/[^A-Za-z0-9_-]/g, "_");
+
 /**
  * The tools one request offers, by function name, and what it can't. A character a function name
  * can't have becomes `_`. Candidates are taken in order, so the first ones given are the ones kept
@@ -142,7 +146,7 @@ export function offered(candidates: Candidate[]): { tools: Tool[]; leftOut: Left
   const leftOut: LeftOut[] = [];
   let bytes = 0;
   for (const { slot, name, description, parameters, run } of candidates) {
-    const toolName = `${slot}__${name}`.replace(/[^A-Za-z0-9_-]/g, "_");
+    const toolName = offeredName(slot, name);
     const tool = {
       name: toolName,
       ...(description ? { description: head(description, MAX_DESCRIPTION) } : {}),

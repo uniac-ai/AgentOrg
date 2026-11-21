@@ -6,10 +6,10 @@ nothing of it.
 
 ## What the model sees
 
-- **One function, `memory__edit`,** offered to each piece of the agent's work. `action` is `add`,
+- **One function, `memory__edit`,** offered to each piece of the agent's work, and to the agent's
+  main loop when it decides on a message, which may call it beside its answer. `action` is `add`,
   `replace` or `remove`; `replace` and `remove` take a line's `id`, `add` and `replace` its `text`.
-  Its description is one sentence. The agent's main loop, which only says whose a message is, is
-  offered no plugin's function.
+  Its description is one sentence.
 - **One section of its instructions, `## What you remember`,** while there is at least one line:
   each line as `- [id] text (day)`. With no lines there is no section. The main loop is told it
   too.

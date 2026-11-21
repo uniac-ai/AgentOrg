@@ -10,7 +10,15 @@ import { agentTools } from "./agents.js";
 import { createChats } from "./chats.js";
 import { type AgentPlugins, NO_PLUGINS } from "./plugins.js";
 import { alwaysOf, instructionsWith, skillTool } from "./settings.js";
-import { type Candidate, type LeftOut, listedBy, listsTools, offered, relayed } from "./tools.js";
+import {
+  type Candidate,
+  type LeftOut,
+  listedBy,
+  listsTools,
+  offered,
+  offeredName,
+  relayed,
+} from "./tools.js";
 import { ACTIVITY, serveWork } from "./work.js";
 
 /** Where the agent keeps the model chosen for it, beside its conversations in the store. */
@@ -112,12 +120,15 @@ export function startEngine(
     const leftOut = [...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...fitted.leftOut];
     report(leftOut);
     // Its plugins' blocks, read once for the request: a worker is told them after its own words and
-    // its skills, the front desk after who it speaks as.
+    // its skills, the front desk after who it speaks as. Its plugins' functions, of those offered,
+    // are the front desk's too, and none other of its own.
     const { blocks } = given;
+    const theirs = new Set(given.tools.map(({ slot, name }) => offeredName(slot, name)));
     return {
       instructions: [...told.parts, ...blocks],
       blocks,
       tools: fitted.tools,
+      frontDesk: fitted.tools.filter(({ name }) => theirs.has(name)),
       model: await chosen(),
       voice,
       leftOut,
