@@ -179,6 +179,37 @@ test("a capability may be made of plugins, with or without an Actor, and the age
   assert.equal(settings({ instructions: "Hi.", skills: [], plugins: [memory] }), false);
 });
 
+test("what an agent holds may be made of plugins, and then needn't be reached by the person: agents@1 says both", () => {
+  const got = compiled(agents)["get.output"];
+  assert.ok(got);
+  const agent = {
+    agent: "act_1",
+    name: "A",
+    status: { state: "running" },
+    provider: "act_2",
+    creatable: "assistant",
+    instructions: "",
+    skills: [],
+    mcp: [],
+    units: [],
+  };
+  const holds = (...capabilities: object[]) => got({ ...agent, capabilities });
+  const held = { id: "desk", title: "Desk", slots: [], surfaces: [], views: [] };
+  const person = { capability: "desk", operations: {} };
+  // As before: reached by the person's slots, with no plugins.
+  assert.ok(holds({ ...held, person }));
+  // Only parts inside the agent, each by name with its own settings, and no slots of the
+  // person's; or both.
+  const memory = { name: "memory", settings: { keep: true, tidy: { after: "6h" } } };
+  assert.ok(holds({ ...held, plugins: [memory] }));
+  assert.ok(holds({ ...held, person, plugins: [{ name: "search" }] }));
+  // A plugin is said as a unit's capability says it, and a capability has 16 at most.
+  assert.equal(holds({ ...held, plugins: [{ ...memory, capability: "desk" }] }), false);
+  const many = (count: number) => Array.from({ length: count }, (_, i) => ({ name: `part-${i}` }));
+  assert.ok(holds({ ...held, plugins: many(16) }));
+  assert.equal(holds({ ...held, plugins: many(17) }), false);
+});
+
 test("a fact may carry a note under its value, short and never empty", () => {
   const row = {
     label: "Its work happens in",

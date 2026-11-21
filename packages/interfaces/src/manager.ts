@@ -1,7 +1,13 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { AgentModels, AgentStatus, Answers, Creatable, CreatableId } from "./agent-provider.js";
-import { SKILL_FILE_MAX, SkillEntry, SkillName, SkillPath } from "./agent-settings.js";
+import {
+  CapabilityPlugin,
+  SKILL_FILE_MAX,
+  SkillEntry,
+  SkillName,
+  SkillPath,
+} from "./agent-settings.js";
 import {
   ConnectionKind,
   ConnectionParams,
@@ -112,7 +118,12 @@ const AddUnit = {
  *
  * `person` holds the person's own slots that reach it: `capability`, bound to its
  * `capability@1`, and, by the slot a view names, one for each of its operations' `tools@1`. How
- * it stands now, and what an operation answers, is asked of those.
+ * it stands now, and what an operation answers, is asked of those. A capability made only of
+ * plugins has no `person`: there is no state of its own to ask, and no operation to call.
+ *
+ * `plugins` are its parts inside the agent, for the agent's executor to load: each named once,
+ * with the settings it is loaded with. None from a management that doesn't say them, and none
+ * for a capability with no such part.
  */
 export const AgentCapability = z.strictObject({
   id: CapabilityId,
@@ -121,7 +132,10 @@ export const AgentCapability = z.strictObject({
   slots: z.array(SlotName).max(32),
   surfaces: z.array(Surface).max(16),
   views: z.array(View.extend({ fixed: z.array(FactRow).max(32).optional() })).max(32),
-  person: z.strictObject({ capability: SlotName, operations: z.record(SlotName, SlotName) }),
+  person: z
+    .strictObject({ capability: SlotName, operations: z.record(SlotName, SlotName) })
+    .optional(),
+  plugins: z.array(CapabilityPlugin).max(16).optional(),
 });
 /** A problem with a stack: on one unit (its position), or, with neither, on the whole. */
 const StackProblem = Problem.extend({ unit: z.number().int().min(0).optional() });

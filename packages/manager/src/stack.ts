@@ -70,7 +70,8 @@ const UnitRecord = z.object({
 });
 /**
  * Something an agent holds, as it was built: what `agents.get` gives of it, and the Actor that
- * is it, which the person is connected to.
+ * is it, which the person is connected to. One made only of plugins has no Actor, and so no slots
+ * of the person's.
  */
 /**
  * An agent's own capability, the one its creatable gives it, is kept with the agent itself as its
@@ -82,7 +83,7 @@ const UnitRecord = z.object({
  * them. Only what this version knows is answered (`known`).
  */
 const CapabilityRecord = z.looseObject(AgentCapability.shape).extend({
-  actor: z.string(),
+  actor: z.string().optional(),
   surfaces: z.array(z.looseObject(Surface.shape)).max(16),
   views: z
     .array(
@@ -976,7 +977,7 @@ export function createStacks(parts: StackParts) {
   /** Whether an agent holds Work of its own with an operation to call. */
   const givesWork = (agent: string) =>
     records.agents[agent]?.capabilities.some(
-      (one) => one.from === agent && Object.keys(one.person.operations).length > 0,
+      (one) => one.from === agent && Object.keys(one.person?.operations ?? {}).length > 0,
     ) === true;
   /**
    * Have each agent hold what its creatable gives it of itself where it doesn't yet, as an agent
@@ -1340,14 +1341,17 @@ export function createStacks(parts: StackParts) {
     }
     // A provider that has lost it leaves the Actors: its connections, and what it built.
     if (!removed)
-      await closeAll([...unit.connections, ...built.map(({ actor }) => ({ connection: actor }))]);
+      await closeAll([
+        ...unit.connections,
+        ...built.flatMap(({ actor }) => (actor ? [{ connection: actor }] : [])),
+      ]);
     // The person's slots to what it built went with the Actors. One that is left is taken off,
     // and only while it is still bound to what the unit made: a name the Hub has freed can be
     // another export's by now.
     for (const { actor, person } of built) {
-      await parts.unreachPerson(person.capability, actor);
+      if (actor && person) await parts.unreachPerson(person.capability, actor);
       for (const { slot, connection } of unit.connections) {
-        const reached = person.operations[slot];
+        const reached = person?.operations[slot];
         if (reached) await parts.unreachPerson(reached, connection);
       }
     }
@@ -1368,27 +1372,30 @@ export function createStacks(parts: StackParts) {
     let changed = false;
     for (const [agent, record] of Object.entries(records.agents))
       for (const held of record.capabilities) {
+        // One with no Actor has nothing to reach.
+        const { actor: its, person } = held;
+        if (!its || !person) continue;
         const unit = record.units.find((one) => one.instance === held.from);
         // One the agent holds of itself has its operations in the agent's own `tools`.
         const operations =
           held.from === agent
-            ? Object.keys(held.person.operations).map((slot) => ({ slot, connection: held.actor }))
+            ? Object.keys(person.operations).map((slot) => ({ slot, connection: its }))
             : (unit?.connections ?? []);
         const ends = [
           {
-            provider: held.actor,
+            provider: its,
             exported: CAPABILITY_EXPORT,
-            was: held.person.capability,
+            was: person.capability,
             set(slot: string) {
-              held.person.capability = slot;
+              person.capability = slot;
             },
           },
           ...operations.map(({ slot, connection }) => ({
             provider: connection,
             exported: TOOLS_EXPORT,
-            was: held.person.operations[slot],
+            was: person.operations[slot],
             set(to: string) {
-              held.person.operations[slot] = to;
+              person.operations[slot] = to;
             },
           })),
         ];

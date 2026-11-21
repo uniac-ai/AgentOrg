@@ -3712,6 +3712,7 @@ test("an agent holds the capability its unit builds, and the person reaches it b
   const capabilities = got.capabilities ?? [];
   assert.equal(capabilities.length, 1);
   const [{ person, ...held }] = capabilities as [(typeof capabilities)[number]];
+  assert.ok(person);
   // What it is, from what the unit says it gives and what was filled in: the views in the
   // order given, the one with neither an operation nor a surface with the rows fixed then.
   assert.deepEqual(held, {
@@ -3907,7 +3908,7 @@ test("a unit that can't go keeps the person's slots to what it built; one whose 
     name: "Holder",
   });
   const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
-  assert.ok(held);
+  assert.ok(held?.person);
   const slots = async () => (await s.bindingsOf(PERSON)).map((b) => b.slot);
   s.script.fail = "unit.remove";
   await assert.rejects(s.calls.agents.removeUnit({ agent, instance: held.from as string }));
@@ -3962,7 +3963,7 @@ test("removing a unit takes off only the person's slots that are still its own",
     name: "Other",
   });
   const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
-  assert.ok(held);
+  assert.ok(held?.person);
   // The Hub dropped the person's slot, and its name has since been given to another export.
   const [files] = (await s.bindingsOf(other)).filter((b) => b.slot === "files");
   assert.ok(files);
@@ -3974,7 +3975,8 @@ test("removing a unit takes off only the person's slots that are still its own",
     as: held.person.capability,
   });
   await s.calls.agents.removeUnit({ agent, instance: held.from as string });
-  const left = (await s.bindingsOf(PERSON)).filter((b) => b.slot === held.person.capability);
+  const { capability } = held.person;
+  const left = (await s.bindingsOf(PERSON)).filter((b) => b.slot === capability);
   assert.deepEqual(
     left.map((b) => b.provider),
     [files.provider],
@@ -3982,25 +3984,39 @@ test("removing a unit takes off only the person's slots that are still its own",
   );
 });
 
-test("the person's slots to what an agent holds are made again when the Hub has dropped one", async (t) => {
+test("the person's slots to what an agent holds are made again when the Hub has dropped one, and one with no Actor is passed over", async (t) => {
   const s = await setup(t);
   const { agent } = await s.calls.agents.create({
     stack: { base: s.base, units: [s.unit("desk")] },
     name: "Holder",
   });
   const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
-  assert.ok(held);
+  assert.ok(held?.person);
   await s.person.slots.grants.call.unexpose({ to: PERSON, slot: held.person.capability });
   await s.person.slots.grants.call.unexpose({
     to: PERSON,
     slot: held.person.operations.desk as string,
   });
-  // Management looks at what agents hold when it comes back, as it does for their chats.
-  await s.restart(() => {});
+  // Management looks at what agents hold when it comes back, as it does for their chats. Ahead
+  // of the desk it finds one made only of plugins, as the desk's unit would keep one it built
+  // beside it: with no Actor, there is nothing of it to reach.
+  const inside = {
+    id: "memory",
+    title: "Memory",
+    from: held.from,
+    slots: [],
+    surfaces: [],
+    views: [],
+    plugins: [{ name: "memory", settings: { keep: true } }, { name: "tidy" }],
+  };
+  await s.restart((kept) => {
+    const agents = kept.agents as unknown as Record<string, { capabilities: object[] }>;
+    agents[agent]?.capabilities.unshift(inside);
+  });
   const again = async () => {
-    const [now] = (await s.calls.agents.get({ agent })).capabilities ?? [];
+    const [, now] = (await s.calls.agents.get({ agent })).capabilities ?? [];
     const there = (await s.bindingsOf(PERSON)).map((b) => b.slot);
-    return now &&
+    return now?.person &&
       there.includes(now.person.capability) &&
       there.includes(now.person.operations.desk as string)
       ? now
@@ -4013,9 +4029,14 @@ test("the person's slots to what an agent holds are made again when the Hub has 
   }
   assert.ok(now, "both slots are the person's again");
   const itself = await s.personSlot<{ state(input: object): Promise<{ state: string }> }>(
-    now?.person.capability as string,
+    now?.person?.capability as string,
   );
   assert.equal((await itself.state({})).state, "connected");
+  // It is listed with its plugins and no slots of the person's, and goes with its unit, with no
+  // Actor to close and nothing of the person's to take off.
+  assert.deepEqual((await s.calls.agents.get({ agent })).capabilities, [inside, now]);
+  await s.calls.agents.removeUnit({ agent, instance: held.from as string });
+  assert.deepEqual((await s.calls.agents.get({ agent })).capabilities, []);
 });
 
 test("an agent whose creatable gives it a capability holds it with no unit, the person reaching the agent's own exports", async (t) => {
@@ -4025,7 +4046,7 @@ test("an agent whose creatable gives it a capability holds it with no unit, the 
     name: "Worker",
   });
   const [held] = (await s.calls.agents.get({ agent })).capabilities ?? [];
-  assert.ok(held);
+  assert.ok(held?.person);
   assert.deepEqual(
     { id: held.id, title: held.title, from: held.from, slots: held.slots, views: held.views },
     { id: "work", title: "Activity", from: undefined, slots: [], views: WORK.views },
@@ -4052,8 +4073,8 @@ test("an agent whose creatable gives it a capability holds it with no unit, the 
     [["work", undefined]],
   );
   const [now] = again;
-  assert.ok((await bound()).includes(`${now?.person.capability} ${agent} capability`));
-  assert.ok((await bound()).includes(`${now?.person.operations.work} ${agent} tools`));
+  assert.ok((await bound()).includes(`${now?.person?.capability} ${agent} capability`));
+  assert.ok((await bound()).includes(`${now?.person?.operations.work} ${agent} tools`));
 });
 
 /** A unit's skill "notes" as management keeps it, and a wait until it says `text`. */
