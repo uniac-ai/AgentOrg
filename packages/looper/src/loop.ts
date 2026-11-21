@@ -121,7 +121,7 @@ export const HAND_BACK: ToolSpec = {
 export const STATUS: ToolSpec = {
   name: STATUS_NAME,
   description:
-    "Keeps this work's steps, a short checklist. Set the list with `steps`, then move through it with `advance`, or with `done` and `start` by number. It answers with the list as it now stands.",
+    "Keeps this work's steps, a short checklist. Set the list with `steps`, then move through it with `advance`, or with `done` and `start` by number. It answers with the list as it now stands. The steps are kept when the conversation is shortened; the person doesn't see them, so progress they should know of still goes in a message.",
   parameters: {
     type: "object",
     properties: {
