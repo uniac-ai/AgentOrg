@@ -92,9 +92,12 @@ export const ungrantedMac = (grants: string[]) =>
   `${MacApp} doesn't have ${grants.map((one) => GRANT_NAMES[one] ?? one).join(" or ")}, which your screen needs. Set ${grants.length > 1 ? "them" : "it"} up there, under Screen.`;
 /** Why no container is made here, where AgentOrg Mac makes none. */
 export const NO_CONTAINER_MAC = `${MacApp} makes no container. To use a computer you run yourself, give its address.`;
-/** What to do when AgentComputer isn't installed here: the app doesn't include it. */
+/**
+ * What to do when AgentComputer isn't installed here: the app doesn't include it. It is published
+ * under npm's `next` tag; `latest` is a much older version.
+ */
 export const INSTALL_STEPS =
-  "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer and try again. AgentOrg starts it for you.";
+  "AgentComputer isn't installed on this computer. Install it with npm install -g @agentorg/computer@next and try again. AgentOrg starts it for you.";
 
 /**
  * What the service here can make now, each kind ready or with why not, as it says. With `starts`,

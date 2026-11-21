@@ -328,6 +328,8 @@ test("a part that can't be had isn't asked: the line says why, and a value for i
 
 test("where this computer can't be had, the line is why, alone", () => {
   assert.equal(stated(undefined).description, INSTALL_STEPS);
+  // Under npm's next tag, where AgentComputer is published: latest is much older.
+  assert.match(INSTALL_STEPS, /npm install -g @agentorg\/computer@next and/);
   assert.equal(stated({ made: [], why: "Update it." }).description, "Update it.");
   assert.equal(
     stated({ thisComputer: { ready: false, reason: "Its user can't be found." }, made: [] })

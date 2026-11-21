@@ -675,7 +675,11 @@ test("the service is started with no isolation asked of it, and one older than t
     }),
   );
   writeFileSync(join(data, "control-token"), "token");
-  assert.match((await why()) ?? "", /older than this AgentOrg needs.*npm install -g/);
+  // Under npm's next tag, where AgentComputer is published: latest is much older.
+  assert.match(
+    (await why()) ?? "",
+    /older than this AgentOrg needs.*npm install -g @agentorg\/computer@next,/,
+  );
   await assert.rejects(apply(local("read")), /older than this AgentOrg needs/);
   // Gone, adding a computer starts one, asking for no isolation: the service's own is used.
   await new Promise((resolve) => old.close(resolve));

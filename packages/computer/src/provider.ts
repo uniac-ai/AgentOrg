@@ -144,9 +144,9 @@ const SKILLS_SHIPPED = JSON.parse(readFileSync(join(SKILLS_DIR, "shipped.json"),
 >;
 const EXA_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa";
 const SERVICE_ANSWERS_MS = 2000;
-/** What to do when the AgentComputer here is older than this build can use. */
+/** What to do when the AgentComputer here is older than this build can use: `next`, as installing. */
 const UPDATE_STEPS =
-  "AgentComputer on this computer is older than this AgentOrg needs. Update it with npm install -g @agentorg/computer, then stop the one running with agentcomputer down: AgentOrg starts it again for you.";
+  "AgentComputer on this computer is older than this AgentOrg needs. Update it with npm install -g @agentorg/computer@next, then stop the one running with agentcomputer down: AgentOrg starts it again for you.";
 /** How long `agentcomputer up` may take to have a service answer. */
 const UP_MS = 30_000;
 type FactRow = z.input<typeof FactRowShape>;
