@@ -527,6 +527,32 @@ export const CARDS = {
 };
 /** The coupons the design's sample picks of several, by their names. */
 export const SEVERAL = ["WELCOME5", "VIP20"];
+/** Research's card of three questions, each on a tab named by its header, as the design's sample has it. */
+export const QUESTIONS = {
+  questions: [
+    {
+      header: "Fix",
+      question: "How should SPRING10 be fixed?",
+      choices: [
+        { label: "Refuse it after its date", detail: "As the other coupons do" },
+        { label: "Remove it", detail: "Nobody can use it again" },
+      ],
+    },
+    {
+      header: "Test",
+      question: "Add a test for it?",
+      choices: [{ label: "Add a test" }, { label: "No test" }],
+    },
+    {
+      header: "Others",
+      question: "Check the other coupons too?",
+      many: true as const,
+      choices: [{ label: "WELCOME5" }, { label: "FREESHIP" }, { label: "VIP20" }],
+    },
+  ],
+};
+/** The design's sample's picks on it, question by question, by their names. */
+export const ANSWERS = [["Refuse it after its date"], ["Add a test"], ["WELCOME5", "FREESHIP"]];
 /** The choice the design's sample picks, by its place, and what it is called. */
 export const PICK = 1;
 export const PICKED = "Fix it and add a test";
@@ -547,6 +573,8 @@ export const CARD_STATES = {
   confirmSent: "Confirm sent",
   many: "Picking several",
   manySent: "Picking several sent",
+  several: "Several questions",
+  severalSent: "Several questions sent",
 } as const;
 export type CardCase = keyof typeof CARD_STATES;
 /**
@@ -576,7 +604,9 @@ export function researchAsks(gateway: Gateway, state: CardCase, coming = false) 
         ? CARDS.confirm
         : state.startsWith("many")
           ? CARDS.many
-          : CARDS.plain;
+          : state.startsWith("several")
+            ? QUESTIONS
+            : CARDS.plain;
   const start = [ask("v-u2", SAID.longAsk, 9), said("v-a2", SAID.long, 9)];
   if (state === "late") {
     gateway.converse("a-research", [
@@ -607,12 +637,21 @@ export async function pickAs(conversation: Locator, state: CardCase) {
     await conversation.getByRole("radio", { name: PICKED }).click();
   if (state === "many" || state === "manySent")
     for (const name of SEVERAL) await conversation.getByRole("checkbox", { name }).click();
-  if (state === "confirmSent" || state === "manySent")
+  // Several questions: each pick of one moves on to the next tab; the last takes several.
+  if (state === "several" || state === "severalSent")
+    await conversation.getByRole("radio", { name: ANSWERS[0]?.[0] }).click();
+  if (state === "severalSent") {
+    await conversation.getByRole("radio", { name: ANSWERS[1]?.[0] }).click();
+    for (const name of ANSWERS[2] ?? []) await conversation.getByRole("checkbox", { name }).click();
+  }
+  if (state === "confirmSent" || state === "manySent" || state === "severalSent")
     await conversation.getByRole("button", { name: "Confirm" }).click();
+  // The design's sample sends without going through the tabs, so its card is on the first: so is this.
+  if (state === "severalSent") await conversation.getByRole("tab", { name: "Fix" }).click();
 }
 /** Whether the design's sample has sent its picks at that state, and Research is at work on them. */
 export const sentAt = (state: CardCase) =>
-  state === "picked" || state === "confirmSent" || state === "manySent";
+  state === "picked" || state === "confirmSent" || state === "manySent" || state === "severalSent";
 
 /** Research's answer about the coupons comes, with its card; Research is still at work. */
 export const cardComes = (

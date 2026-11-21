@@ -1,9 +1,9 @@
 // The decision the agent puts to its party under a reply, served as one card: one rounded card, the
 // agent's question at its top, and a full-width outlined row for each choice. Plain, one question's
-// choices alone, a tap picks at once and is final. With a confirm, or where several may be picked,
-// the picks are held, changeable, until Confirm sends them. Once answered, or passed over because
-// the party wrote instead or a newer card came, the card stays where it is, showing what became of
-// it.
+// choices alone, a tap picks at once and is final. With a confirm, where several may be picked, or
+// with several questions, each on a tab of its own, the picks are held, changeable, until Confirm
+// sends them. Once answered, or passed over because the party wrote instead or a newer card came,
+// the card stays where it is, showing what became of it.
 import { CheckIcon } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useId, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
@@ -11,21 +11,19 @@ import { Card } from "../ui/card.tsx";
 import { Checkbox } from "../ui/checkbox.tsx";
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "../ui/field.tsx";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.tsx";
 import type { Ask } from "./data.ts";
 
 type Question = Ask["questions"][number];
 type Choice = Question["choices"][number];
 
-/** A card's question when the card has one: plain, with a confirm, or of several picks. */
-export const oneOf = (ask: Ask): Question | undefined =>
-  ask.questions.length === 1 ? ask.questions[0] : undefined;
 /** Whether a question takes several picks. */
 const isMany = (question: Question) => "many" in question && question.many === true;
 
-/** Open, answered with the picks the answer carries, or passed over. */
+/** Open, answered with the picks the answer carries for each question, or passed over. */
 export type CardState =
   | { kind: "open" }
-  | { kind: "answered"; picks: readonly number[] }
+  | { kind: "answered"; picks: readonly (readonly number[])[] }
   | { kind: "passed" };
 
 /** One row's outline and words. */
@@ -41,15 +39,64 @@ export function AskCard({
   ask: Ask;
   agent: string;
   state: CardState;
-  /** Answers it with the choices picked, by their places; none where the conversation is only read. */
-  onAnswer?: ((picks: number[]) => void) | undefined;
+  /**
+   * Answers it with the choices picked for each question, by their places; none where the
+   * conversation is only read.
+   */
+  onAnswer?: ((picks: number[][]) => void) | undefined;
 }) {
-  const question = oneOf(ask) as Question;
-  const many = isMany(question);
-  // Several picks always confirm, as a card asked to does.
-  const confirm = many || ("confirm" in ask && ask.confirm === true);
-  /** The picks held until Confirm, by their places. */
-  const [held, setHeld] = useState<number[]>([]);
+  const all = ask.questions;
+  // Several picks, and several questions, always confirm, as a card asked to does.
+  const confirm = all.length > 1 || all.some(isMany) || ("confirm" in ask && ask.confirm === true);
+  /** The picks held until Confirm, for each question, by their places. */
+  const [held, setHeld] = useState<number[][]>(() => all.map(() => []));
+  /** The question shown, where there are several: the first not answered yet. */
+  const [at, setAt] = useState("0");
+  const hold = (n: number, picks: number[]) => {
+    setHeld((was) => was.map((one, i) => (i === n ? picks : one)));
+    // One pick of several questions moves on to the next not answered yet.
+    const question = all[n];
+    if (all.length > 1 && question && !isMany(question)) {
+      const next = all.findIndex((_, i) => i > n && (held[i]?.length ?? 0) === 0);
+      if (next !== -1) setAt(String(next));
+    }
+  };
+  const answered = (n: number) =>
+    ((state.kind === "answered" ? state.picks[n] : held[n])?.length ?? 0) > 0;
+  const body = (question: Question, n: number) => (
+    <div className="flex flex-col gap-2.5">
+      {question.question && <p className="px-1 text-[15px] leading-5">{question.question}</p>}
+      {state.kind !== "open" ? (
+        <Settled
+          question={question}
+          agent={agent}
+          picks={state.kind === "answered" ? (state.picks[n] ?? []) : []}
+        />
+      ) : !confirm ? (
+        <Plain
+          question={question}
+          agent={agent}
+          onPick={onAnswer && ((pick) => onAnswer([[pick]]))}
+        />
+      ) : isMany(question) ? (
+        <Several
+          question={question}
+          agent={agent}
+          picks={held[n] ?? []}
+          disabled={!onAnswer}
+          onChange={(picks) => hold(n, picks)}
+        />
+      ) : (
+        <One
+          question={question}
+          agent={agent}
+          pick={held[n]?.[0]}
+          disabled={!onAnswer}
+          onChange={(pick) => hold(n, [pick])}
+        />
+      )}
+    </div>
+  );
   return (
     <Card
       role="group"
@@ -58,41 +105,35 @@ export function AskCard({
       data-ask={state.kind}
       className="gap-3 p-3"
     >
-      <div className="flex flex-col gap-2.5">
-        {question.question && <p className="px-1 text-[15px] leading-5">{question.question}</p>}
-        {state.kind !== "open" ? (
-          <Settled
-            question={question}
-            agent={agent}
-            picks={state.kind === "answered" ? state.picks : []}
-          />
-        ) : !confirm ? (
-          <Plain question={question} agent={agent} onPick={onAnswer && ((n) => onAnswer([n]))} />
-        ) : many ? (
-          <Several
-            question={question}
-            agent={agent}
-            picks={held}
-            disabled={!onAnswer}
-            onChange={setHeld}
-          />
-        ) : (
-          <One
-            question={question}
-            agent={agent}
-            pick={held[0]}
-            disabled={!onAnswer}
-            onChange={(n) => setHeld([n])}
-          />
-        )}
-      </div>
+      {all.length > 1 ? (
+        <Tabs value={at} onValueChange={setAt} className="gap-3">
+          {/* Each question's name, a check once it has its pick. */}
+          <TabsList variant="line" className="w-full justify-start overflow-x-auto">
+            {all.map((question, n) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a card's questions never move.
+              <TabsTrigger key={n} value={String(n)} className="flex-none px-2">
+                {question.header ?? `Question ${n + 1}`}
+                {answered(n) && <CheckIcon aria-label="answered" className="size-3.5" />}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {all.map((question, n) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a card's questions never move.
+            <TabsContent key={n} value={String(n)}>
+              {body(question, n)}
+            </TabsContent>
+          ))}
+        </Tabs>
+      ) : (
+        all[0] && body(all[0], 0)
+      )}
       {confirm && state.kind === "open" && (
         <div className="flex justify-end">
           <Button
             size="sm"
             className="rounded-full px-4"
-            disabled={held.length === 0}
-            onClick={() => onAnswer?.([...held].sort((a, b) => a - b))}
+            disabled={!all.every((_, n) => (held[n]?.length ?? 0) > 0)}
+            onClick={() => onAnswer?.(held.map((picks) => [...picks].sort((a, b) => a - b)))}
           >
             Confirm
           </Button>
