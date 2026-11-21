@@ -471,10 +471,10 @@ export function createChats(options: {
      * next model request, or, with none in a turn, to the one that follows it if only one does, or
      * else to the work the main loop gives it to, told which was last active; that one starts a turn.
      */
-    async send(
-      { text = "", images }: Input<"send">,
-      caller: string,
-    ): Promise<{ messageId: string }> {
+    async send(input: Input<"send">, caller: string): Promise<{ messageId: string }> {
+      // No message of this agent's carries a card yet, so no card is open to answer.
+      if ("answer" in input) throw new Refused("state", "That card isn't open.");
+      const { text = "", images } = input;
       const all = await load();
       for (let first = beginning.get(caller); first; first = beginning.get(caller))
         await first.catch(() => {});

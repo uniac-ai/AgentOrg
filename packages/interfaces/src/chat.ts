@@ -8,7 +8,10 @@ const MessageId = z.string().min(1).max(128);
  * so before it sends one longer, keeping the text; past it, `send` is refused `invalid`.
  */
 export const MESSAGE_TEXT_MAX = 100_000;
-/** What a message may hold: `send` takes it with words, or with a picture at least. */
+/**
+ * What a message may hold: `send` takes it with words, or with a picture at least, or as a card's
+ * answer alone.
+ */
 const Sent = z.object({
   text: z.string().max(MESSAGE_TEXT_MAX).optional(),
   images: Pictures.optional(),
@@ -23,6 +26,76 @@ const With = z.string().min(1).max(128);
 export const LATEST_TEXT_MAX = 200;
 /** The most characters a step's words have. */
 export const STEP_MAX = 200;
+/** The most characters a reaction has: one emoji, a sequence joined into one included. */
+export const REACTION_MAX = 16;
+/** The most questions a card asks, and the most choices each question offers. */
+export const ASK_MAX = 4;
+/** The most characters of a choice's label, of the line under it, of a question, and of its tab. */
+export const ASK_TEXT_MAX = { label: 48, detail: 120, question: 200, header: 12 } as const;
+
+/** A choice on a card: its label, sent as said when picked, and a line under it, never sent. */
+const Choice = z.strictObject({
+  label: z.string().min(1).max(ASK_TEXT_MAX.label),
+  detail: z.string().min(1).max(ASK_TEXT_MAX.detail).optional(),
+});
+/**
+ * A question on a card: its words, if the message above it isn't the question; its tab's name; and
+ * one to four choices, one of which is picked.
+ */
+const Question = z.strictObject({
+  question: z.string().min(1).max(ASK_TEXT_MAX.question).optional(),
+  header: z.string().min(1).max(ASK_TEXT_MAX.header).optional(),
+  choices: z.array(Choice).min(1).max(ASK_MAX),
+});
+/** A question of which several choices may be picked. */
+const Many = Question.extend({ many: z.literal(true) });
+/**
+ * A decision card under the agent's message, for its party to answer by picking, in one of three
+ * forms:
+ * - one question, a tap on which is the answer, final, unless `confirm`: then a tap selects, and a
+ *   confirm sends it;
+ * - one question of which several may be picked, always confirmed;
+ * - two to four questions, each on a tab named by its `header`, any of them taking `many`, always
+ *   confirmed.
+ * It is open until it is answered, until the party sends anything after it, or until a newer card
+ * comes; then it stays, passed over.
+ */
+export const Ask = z.union([
+  z.strictObject({ questions: z.array(Question).length(1), confirm: z.literal(true).optional() }),
+  z.strictObject({ questions: z.array(Many).length(1) }),
+  z.strictObject({
+    questions: z
+      .array(
+        z
+          .union([Question, Many])
+          .and(z.object({ header: z.string().min(1).max(ASK_TEXT_MAX.header) })),
+      )
+      .min(2)
+      .max(ASK_MAX),
+  }),
+]);
+/**
+ * A card's answer: the card, by its message's id, and for each of its questions in order, the
+ * choices picked, by their place, one unless the question takes `many`.
+ */
+export const Answer = z.strictObject({
+  to: MessageId,
+  picks: z
+    .array(
+      z
+        .array(
+          z
+            .number()
+            .int()
+            .min(0)
+            .max(ASK_MAX - 1),
+        )
+        .min(1)
+        .max(ASK_MAX),
+    )
+    .min(1)
+    .max(ASK_MAX),
+});
 
 /**
  * What became of a message the party said, the latest said of it:
@@ -39,6 +112,13 @@ export const STEP_MAX = 200;
 export const MessageProgress = z.object({
   state: z.enum(["taken", "answered", "closed"]),
   step: z.string().max(STEP_MAX).optional(),
+  /**
+   * The emoji the agent closed the message with, when it closed it with no reply and gave one: a
+   * reaction on it, which stays whatever is said of it after. It notifies no one. It comes with
+   * the close; a later `progress` of the same message doesn't say it again, so a view keeps the one
+   * it got, as `history` does.
+   */
+  reaction: z.string().min(1).max(REACTION_MAX).optional(),
 });
 
 /** One message of a conversation: what the party said (`user`), or the agent's reply (`assistant`). */
@@ -52,6 +132,15 @@ export const ChatMessage = z.object({
   images: Pictures.optional(),
   /** What became of it, the latest said: the party's messages only. */
   progress: MessageProgress.optional(),
+  /** A decision card under it: the agent's messages only. */
+  ask: Ask.optional(),
+  /**
+   * The card it answers, and what was picked: the party's message that answers one. Its text is
+   * what was picked, as the provider writes it: for one question, the labels joined by ", "; for
+   * several, a line for each, "header: labels". A view shows the pick on the card, and no bubble
+   * of the party's for this message.
+   */
+  answer: Answer.optional(),
 });
 /** What the agent is doing: `working` while it answers anything, in any conversation. */
 export const ChatStatus = z.object({ state: z.enum(["idle", "working"]) });
@@ -97,14 +186,20 @@ export const chat = defineInterface({
   methods: {
     /**
      * Send this message in the caller's conversation with the agent, which it makes if there is
-     * none. A message is words, pictures or both. The agent answers it there. Refused `busy` when
-     * the provider can't take it now.
+     * none. A message is words, pictures or both; or a card's answer, sent alone, whose text the
+     * provider writes from the labels picked. An answer beside words or pictures isn't one: the
+     * message is an ordinary one. The agent answers it there. Refused `busy` when the provider
+     * can't take it now. An answer is refused `state` when its card isn't open, or `to` is no
+     * card; and `invalid` unless it picks, for each of the card's questions in order, choices the
+     * question has, once each, and exactly one where it doesn't take `many`.
      */
     send: method({
       input: z.union([
         Sent.extend({ text: z.string().min(1).max(MESSAGE_TEXT_MAX).regex(/\S/) }),
         // Or one picture at least, with any words or none.
         Sent.extend({ images: Pictures.min(1) }),
+        // Or a card's answer.
+        z.strictObject({ answer: Answer }),
       ]),
       output: z.object({ messageId: MessageId }),
     }),
