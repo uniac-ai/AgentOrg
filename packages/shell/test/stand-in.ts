@@ -1259,16 +1259,21 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (method === "send") {
       // In the person's conversation, which its first message begins.
       const record = agent.chat.messages;
-      // A card's answer, sent alone: its words are the label picked, as the service writes them.
+      // A card's answer, sent alone: its words are the labels picked, as the service writes them,
+      // with a line for each question, named by its header, where there are several.
       const answer = input.answer as Message["answer"];
-      const card = answer && record.find((m) => m.id === answer.to)?.ask?.questions[0];
+      const card = answer && record.find((m) => m.id === answer.to)?.ask?.questions;
+      const labels = (n: number) =>
+        (answer?.picks[n] ?? []).map((i) => card?.[n]?.choices[i]?.label).join(", ");
       const message = {
         // Words, a picture, or both: a picture alone has none.
         ...text(
           `u${record.length}-${++sent}`,
           "user",
           card && answer
-            ? (answer.picks[0] ?? []).map((n) => card.choices[n]?.label).join(", ")
+            ? card.length === 1
+              ? labels(0)
+              : card.map((question, n) => `${question.header}: ${labels(n)}`).join("\n")
             : String(input.text ?? ""),
           0,
         ),

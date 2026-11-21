@@ -44,7 +44,7 @@ import {
 } from "../ui/message-scroller.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { type ListedChat, PERSON, useAllChats } from "./all-chats.tsx";
-import { AskCard, type CardState, oneOf } from "./ask.tsx";
+import { AskCard, type CardState } from "./ask.tsx";
 import { bubblesOf, isCode } from "./bubbles.ts";
 import { age, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
@@ -708,10 +708,10 @@ export function Thread({
   // the agent's turn has ended; until then it isn't drawn.
   const newestCard = turns.findLast((turn) => turn.kind === "agent" && turn.ask)?.id;
   const cardOf = (turn: Turn, n: number): CardState | undefined => {
-    if (turn.kind !== "agent" || !turn.ask || !oneOf(turn.ask)) return;
+    if (turn.kind !== "agent" || !turn.ask) return;
     for (const one of turns)
       if (one.kind === "user" && one.answer?.to === turn.id)
-        return { kind: "answered", picks: one.answer.picks[0] ?? [] };
+        return { kind: "answered", picks: one.answer.picks };
     if (turn.id !== newestCard || turns.slice(n + 1).some((one) => one.kind === "user"))
       return { kind: "passed" };
     return working || typing ? undefined : { kind: "open" };
@@ -875,7 +875,7 @@ export function Thread({
                             onAnswer={
                               off || other
                                 ? undefined
-                                : (picks) => void send("", [], { to: turn.id, picks: [picks] })
+                                : (picks) => void send("", [], { to: turn.id, picks })
                             }
                           />
                         </div>

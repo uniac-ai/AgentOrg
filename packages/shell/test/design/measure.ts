@@ -1521,6 +1521,14 @@ const probe = (what: Part): Parts => {
       parts[`row.${i}.words`] = row.textContent;
       parts[`row.${i}.check`] = of(row.querySelector("svg")?.parentElement);
     }
+    // Several questions: a tab for each, the one shown, and a check on each answered.
+    const tabs = [...card.querySelectorAll('[role="tab"]')];
+    parts.tabs = tabs.length;
+    for (const [i, tab] of tabs.entries()) {
+      parts[`tab.${i}`] = of(tab);
+      parts[`tab.${i}.state`] =
+        `${tab.getAttribute("aria-selected")} ${tab.querySelector('[aria-label="answered"]') ? "answered" : "open"}`;
+    }
     // Where picks are held, the Confirm under them.
     const confirm = [...card.querySelectorAll("button")].find(
       (one) => one.textContent === "Confirm",
@@ -2193,6 +2201,8 @@ const CARD_SEEN: Record<CardCase, string> = {
   confirmSent: "answered",
   many: "open",
   manySent: "answered",
+  several: "open",
+  severalSent: "answered",
 };
 if (wants("card"))
   for (const size of ["wide", "phone"] as const)
