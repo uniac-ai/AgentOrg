@@ -41,6 +41,8 @@ const pressable = (locator: Locator) =>
   });
 const bar = (page: Page) =>
   page.getByRole("status").filter({ hasText: /ChatGPT plan|Reconnecting/ });
+/** The page's card is 6 in from the bar and the window's edges, inside its 1 px line. */
+const CARD = 7;
 
 test(
   "the plan's notice is the bar at the foot of the page beside the bar of places; beside an open chat it ends short of it, its link and close whole",
@@ -52,8 +54,12 @@ test(
       await notice.getByText("You're using your ChatGPT plan").waitFor();
       const left = await boxOf(page.getByRole("navigation", { name: "Main" }));
       const box = await boxOf(notice);
-      assert.equal(box.x, left.x + left.width + 20, `${width}: an inset from the bar`);
-      assert.equal(box.y + box.height, 900 - 20, `${width}: an inset from the foot`);
+      assert.equal(
+        box.x,
+        left.x + left.width + CARD + 20,
+        `${width}: an inset from the card's side`,
+      );
+      assert.equal(box.y + box.height, 900 - CARD - 20, `${width}: an inset from the card's foot`);
       assert.equal(
         await notice.getByRole("link", { name: "Manage usage" }).getAttribute("href"),
         "https://chatgpt.com/settings/usage",

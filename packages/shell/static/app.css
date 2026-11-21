@@ -21,6 +21,9 @@
   --create-card: rgb(46 46 46);
   --radius: 16px;
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Wider than a phone, the ground under the bar and around the content's card, and the card's shadow, barely there. */
+  --ground: rgb(17 17 17);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
   color-scheme: dark;
 }
 :root[data-theme="light"] {
@@ -42,6 +45,8 @@
   --ring: rgb(160 160 160);
   --create: rgb(255 255 255);
   --create-card: rgb(246 246 246);
+  --ground: rgb(232 232 232);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
   color-scheme: light;
 }
 * {

@@ -177,9 +177,9 @@ test(
         .getByText("Reviewed #482")
         .evaluate((e) => getComputedStyle(e).color),
     );
-    // Rows are 68 tall, one under the other, 8 in from the panel's edges, under a head of 56.
-    assert.deepEqual(await boxOf(rows(page).nth(0)), [1008, 76, 404, 68]);
-    assert.deepEqual(await boxOf(rows(page).nth(1)), [1008, 144, 404, 68]);
+    // Rows are 64 tall and 4 apart, 8 in from the panel's edges, under a head of 56.
+    assert.deepEqual(await boxOf(rows(page).nth(0)), [1008, 76, 404, 64]);
+    assert.deepEqual(await boxOf(rows(page).nth(1)), [1008, 144, 404, 64]);
     // Nothing is kept apart, and nothing is started from here.
     assert.equal(
       await panel(page)

@@ -151,7 +151,7 @@ function IconBar() {
   return (
     <nav
       aria-label="Main"
-      className="relative flex w-[60px] shrink-0 flex-col items-center justify-center gap-3 border-r py-3 phone:order-last phone:h-[var(--foot)] phone:w-full phone:flex-row phone:gap-0 phone:border-t phone:border-r-0 phone:py-0"
+      className="relative flex w-[62px] shrink-0 flex-col items-center justify-center gap-2.5 py-3 phone:order-last phone:h-[var(--foot)] phone:w-full phone:flex-row phone:gap-0 phone:border-t phone:py-0"
     >
       <Place
         label="Search"
@@ -255,12 +255,16 @@ function Frame({ notice, dismiss }: Required<Notice>) {
         <SignInBanner />
         <div
           data-shell
-          className="@container/app relative flex min-h-0 w-full flex-1 overflow-hidden bg-[var(--canvas)]"
+          className="@container/app relative flex min-h-0 w-full flex-1 overflow-hidden bg-[var(--canvas)] wide:bg-[var(--ground)]"
         >
           {/* The page: the bar and the place beside it. On a phone the bar is along the foot. */}
           <div className="flex min-h-0 min-w-0 flex-1 phone:flex-col">
             <IconBar />
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            {/* Wider than a phone, everything beside the bar is in one card, 6 px from the bar and the
+                window's edges, with a thin line, small corners and a shadow that barely shows, on a
+                ground a step darker than the page. On a phone the content runs to the window's edges,
+                above the bar along the foot and its line. */}
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--canvas)] wide:m-1.5 wide:rounded-[10px] wide:border wide:shadow-[var(--card-shadow)]">
               <ShellBar notice={notice} dismiss={dismiss} />
               <main className="@container/main relative min-h-0 flex-1">
                 {route.screen === "chat" && <ChatPage agent={route.agent} />}

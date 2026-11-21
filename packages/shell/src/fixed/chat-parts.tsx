@@ -18,6 +18,9 @@ export function age(at: string, now = Date.now()): string {
   return days < 7 ? `${days} d` : `${Math.floor(days / 7)} wk`;
 }
 
+/** Every list of conversations' rows: 4 px apart, so two highlights never touch. */
+export const CHAT_ROWS = "flex flex-col gap-1";
+
 /**
  * One conversation in a list: the agent, and its latest message or its problem. One between two
  * agents is shown by the agent it is with, where the other's page lists it. The one open beside the
@@ -40,7 +43,7 @@ export function ChatRow({
       type="button"
       aria-current={current ? "true" : undefined}
       onClick={onOpen}
-      className={`flex h-[68px] w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
+      className={`flex h-16 w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
     >
       <Face agent={agent} size={40} plain />
       <span className="min-w-0 flex-1">
@@ -56,7 +59,7 @@ export function ChatRow({
           )}
         </span>
       </span>
-      <span className="flex w-10 shrink-0 flex-col items-end gap-1.5 self-start pt-3.5">
+      <span className="flex w-10 shrink-0 flex-col items-end gap-1.5 self-start pt-3">
         <span className="text-xs tabular-nums text-muted-foreground">{age(chat.at)}</span>
         <span
           {...(fresh ? { role: "img", "aria-label": "New" } : {})}
@@ -82,7 +85,7 @@ export function ChatList({
   // The ages are read again as time passes.
   useEvery(30_000);
   return (
-    <ul aria-label="Chats" className={className}>
+    <ul aria-label="Chats" className={`${CHAT_ROWS} ${className}`}>
       {chats.map((chat) => (
         <li key={chat.agent.id}>
           <ChatRow

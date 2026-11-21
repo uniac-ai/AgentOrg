@@ -61,31 +61,30 @@ const reply = (id: string, text: string) => ({
 });
 
 test(
-  "the bar runs the page's height with a hairline at its edge: Search, Chat and Team in its middle, Settings at its foot, and no words, agents, search box or Create",
+  "the bar runs the page's height, 62 wide with no line at its edge: Search, Chat and Team in its middle, Settings at its foot, and no words, agents, search box or Create",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
-    assert.deepEqual(await boxOf(bar(page)), [0, 0, 60, 900]);
+    assert.deepEqual(await boxOf(bar(page)), [0, 0, 62, 900]);
     assert.deepEqual(
       await bar(page).evaluate((nav) => {
         const style = getComputedStyle(nav);
-        const line = getComputedStyle(document.documentElement).getPropertyValue("--line");
-        return [style.borderRightWidth, style.borderRightColor, style.borderTopWidth, line];
+        return [style.borderRightWidth, style.borderTopWidth];
       }),
-      ["1px", "rgba(255, 255, 255, 0.08)", "0px", "rgb(255 255 255 / 0.08)"],
+      ["0px", "0px"],
     );
-    // Four places, each an icon of 22 in a place of 44: the first three 12 apart, centred on the
-    // bar's height and across what the hairline leaves of it.
+    // Four places, each an icon of 22 in a place of 44, with 9 at each side: the first three 10
+    // apart, centred on the bar's height.
     assert.deepEqual(
       await bar(page)
         .getByRole("button")
         .evaluateAll((places) => places.map((one) => one.getAttribute("aria-label"))),
       ["Search", "Chat", "Team", "Settings"],
     );
-    assert.deepEqual(await boxOf(place(page, "Search")), [7.5, 372, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Chat")), [7.5, 428, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Team")), [7.5, 484, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Settings")), [7.5, 844, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Search")), [9, 374, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Chat")), [9, 428, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [9, 482, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [9, 844, 44, 44]);
     for (const name of ["Search", "Chat", "Team", "Settings"]) {
       const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
       const [px, py] = await boxOf(place(page, name));
@@ -97,9 +96,10 @@ test(
     assert.equal(await bar(page).getByRole("searchbox").count(), 0, "no search box");
     assert.equal(await bar(page).getByRole("button", { name: "Create" }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Home" }).count(), 0, "no Home");
-    // The page is everything beside the bar, with no frame of its own.
+    // The page is everything beside the bar, inside the card: 6 in from the bar and the window's
+    // edges, less the card's line.
     const main = page.locator("main");
-    assert.deepEqual(await boxOf(main), [60, 0, 1380, 900]);
+    assert.deepEqual(await boxOf(main), [69, 7, 1364, 886]);
     assert.deepEqual(
       await main.evaluate((e) => {
         const style = getComputedStyle(e);
@@ -175,8 +175,8 @@ test(
       Promise.all(one.getAnimations().map((moving) => moving.finished)),
     );
     const [x, y, , height] = await boxOf(label(page));
-    assert.equal(Math.round(x * 10) / 10, 68);
-    assert.ok(Math.abs(y + height / 2 - 506) < 1, "on the place's middle");
+    assert.equal(Math.round(x * 10) / 10, 69);
+    assert.ok(Math.abs(y + height / 2 - 504) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
     await page.mouse.move(700, 450, { steps: 4 });
     await page.locator('[data-slot="tooltip-content"][data-state="closed"]').waitFor();
@@ -268,7 +268,7 @@ test(
 );
 
 test(
-  "on a phone the places sit in a row along the foot with their labels, the current one in full colour, and the floating chat's button above them",
+  "on a phone the places sit in a row along the foot under a 1 px line, with their labels, the current one in full colour, and the floating chat's button above them",
   withGateway(async (gateway) => {
     const page = await open(gateway, PHONE, "#/team");
     const main = page.getByRole("main");
@@ -281,6 +281,7 @@ test(
       }),
       ["1px", "rgba(255, 255, 255, 0.08)", "0px"],
     );
+    // Under the bar's 1 px line along its top.
     assert.deepEqual(await boxOf(place(page, "Search")), [0, 789, 97.5, 55]);
     assert.deepEqual(await boxOf(place(page, "Chat")), [97.5, 789, 97.5, 55]);
     assert.deepEqual(await boxOf(place(page, "Team")), [195, 789, 97.5, 55]);
@@ -313,7 +314,7 @@ test(
       ["Team", "rgb(250, 250, 250)", "rgba(0, 0, 0, 0)"],
       ["Settings", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],
     ]);
-    // No menu button and no head: the page has the room above the row.
+    // No menu button and no head: the page has the room above the row, to the window's edges.
     assert.equal(await page.getByRole("button", { name: "Menu" }).count(), 0);
     assert.equal(await page.getByRole("banner").filter({ visible: true }).count(), 0);
     assert.deepEqual(await boxOf(page.locator("main")), [0, 0, 390, 788]);
@@ -330,21 +331,23 @@ test(
 );
 
 test(
-  "the dark background is rgb(25, 25, 25), and the light one is as it was",
+  "the page's card is rgb(25, 25, 25) in dark and rgb(243, 243, 243) in light, on a ground a step darker",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await bar(page).waitFor();
+    /** The ground under the bar and around the card, and the card. */
     const backgrounds = () =>
       page.evaluate(() =>
-        [document.body, document.querySelector("[data-shell]") as Element].map(
-          (one) => getComputedStyle(one).backgroundColor,
-        ),
+        [
+          document.querySelector("[data-shell]") as Element,
+          document.querySelector("main")?.parentElement as Element,
+        ].map((one) => getComputedStyle(one).backgroundColor),
       );
-    assert.deepEqual(await backgrounds(), ["rgb(25, 25, 25)", "rgb(25, 25, 25)"]);
+    assert.deepEqual(await backgrounds(), ["rgb(17, 17, 17)", "rgb(25, 25, 25)"]);
     await page.evaluate(() => {
       document.documentElement.dataset.theme = "light";
     });
-    assert.deepEqual(await backgrounds(), ["rgb(243, 243, 243)", "rgb(243, 243, 243)"]);
+    assert.deepEqual(await backgrounds(), ["rgb(232, 232, 232)", "rgb(243, 243, 243)"]);
     await page.close();
   }),
 );
