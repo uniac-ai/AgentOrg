@@ -197,12 +197,16 @@ test("sections come in their order, then by plugin and name, the same at every s
     ["plugin:zeta/first", "plugin:alpha/a", "plugin:alpha/b", "plugin:zeta/last"],
   );
   await plugins.close();
-  await assert.rejects(
-    holding("a", memory().store, [
-      { plugin: section("twice", [{ name: "same" }, { name: "same" }]) },
-    ]),
-    /The plugin twice has a section named same already\./,
-  );
+  const twice = section("twice", [{ name: "same" }, { name: "same" }]);
+  const again = await carrying([{ plugin: twice }]).open("a", { store: memory().store });
+  assert.deepEqual((await again.hold(named([{ plugin: twice }]))).without, [
+    {
+      name: "twice",
+      why: "didn't load",
+      said: "The plugin twice has a section named same already.",
+    },
+  ]);
+  await again.close();
 });
 
 test("each agent's plugins are its own: one agent's give another nothing and hear nothing of it, and closing one leaves the other", async () => {
@@ -325,15 +329,18 @@ test("a service one plugin provides is its agent's alone: two agents holding the
   await c.close();
 });
 
-test("a plugin that needs a service none of the agent's plugins provides can't be held, and leaves nothing loaded", async () => {
+test("a plugin that needs a service none of the agent's plugins provides is run without, with why, and the others are held", async () => {
   const all = [{ plugin: tally }, { plugin: naming }, { plugin: counting }];
-  const again = await carrying(all).open("a", { store: memory().store });
-  await assert.rejects(
-    again.hold(named([{ plugin: tally }, { plugin: counting }])),
-    /counting needs a service none of the agent's plugins provides/,
-  );
+  const other = { plugin: saying("other", []) };
+  const again = await carrying([...all, other]).open("a", { store: memory().store });
+  const given = await again.hold(named([{ plugin: tally }, { plugin: counting }, other]));
+  assert.deepEqual(given.without, [{ name: "counting", why: "needs a service" }]);
   assert.deepEqual(again.blocks(), []);
-  // What it loaded is gone: the same plugins load once the one that provides the service is named.
+  assert.deepEqual(
+    given.tools.map(({ slot }) => slot),
+    ["other"],
+  );
+  // It is held once the one that provides the service is named.
   await again.hold(named(all));
   assert.deepEqual(
     again.blocks().map(({ text }) => text),
@@ -378,7 +385,7 @@ test("a plugin's failures are logged, never the agent's: a section that throws i
   assert.equal(warnings.filter((one) => one === "A plugin failed on the agent's life.").length, 2);
 });
 
-test("a plugin that fails to load leaves nothing loaded, and holding it fails with it", async () => {
+test("a plugin that fails to load is run without, with what it said, and the others named beside it are held", async () => {
   const loaded: string[] = [];
   const first: AgentPlugin = {
     name: "first",
@@ -396,8 +403,63 @@ test("a plugin that fails to load leaves nothing loaded, and holding it fails wi
       throw new Error("won't load");
     },
   };
-  await assert.rejects(holding("a", memory().store, [{ plugin: first }, { plugin: broken }]));
+  const given = [{ plugin: first }, { plugin: broken }];
+  const plugins = await carrying(given).open("a", { store: memory().store });
+  assert.deepEqual((await plugins.hold(named(given))).without, [
+    { name: "broken", why: "didn't load", said: "won't load" },
+  ]);
+  assert.deepEqual(loaded.sort(), ["broken gone", "first"]);
+  await plugins.close();
   assert.deepEqual(loaded.sort(), ["broken gone", "first", "first gone"]);
+});
+
+test("a plugin whose service another needs fails: both are run without, and both are held at the next hold once it loads", async () => {
+  let room = false;
+  const flaky: AgentPlugin = {
+    ...tally,
+    apply(ctx: Context, config: unknown) {
+      if (!room) throw new Error("No room");
+      return tally.apply(ctx, config);
+    },
+  };
+  const all = [{ plugin: flaky }, { plugin: naming }, { plugin: counting }];
+  const plugins = await carrying(all).open("a", { store: memory().store });
+  assert.deepEqual((await plugins.hold(named(all))).without, [
+    { name: "tally", why: "didn't load", said: "No room" },
+    { name: "counting", why: "needs a service" },
+  ]);
+  room = true;
+  const given = await plugins.hold(named(all));
+  assert.deepEqual(given.without, []);
+  assert.deepEqual(
+    given.blocks.map(({ text }) => text),
+    ["a counted 0."],
+  );
+  await plugins.close();
+});
+
+test("a plugin run without is tried again at the next hold, and held once it loads", async () => {
+  let room = false;
+  const roomy: AgentPlugin = {
+    name: "roomy",
+    inject: ["prompt"],
+    apply(ctx: Context) {
+      if (!room) throw new Error("No room");
+      ctx.prompt.section({ name: "room", text: () => "Room." });
+    },
+  };
+  const plugins = await carrying([{ plugin: roomy }]).open("a", { store: memory().store });
+  assert.deepEqual((await plugins.hold([{ name: "roomy" }])).without, [
+    { name: "roomy", why: "didn't load", said: "No room" },
+  ]);
+  room = true;
+  const given = await plugins.hold([{ name: "roomy" }]);
+  assert.deepEqual(given.without, []);
+  assert.deepEqual(
+    given.blocks.map(({ text }) => text),
+    ["Room."],
+  );
+  await plugins.close();
 });
 
 test("an agent holds the plugins named: one newly named is loaded, one no longer named unloaded, one named with other settings loaded again, and the rest stay as they are", async () => {
@@ -439,19 +501,24 @@ test("an agent holds the plugins named: one newly named is loaded, one no longer
   assert.deepEqual(offered(), []);
 });
 
-test("a name the host doesn't carry is refused with the reason, and nothing it holds changes", async () => {
+test("a name the host doesn't carry is run without, each with why, and what is named beside it is held as named", async () => {
   const said: string[] = [];
-  const plugins = await createPluginHost(quiet, [saying("one", said)]).open("a", {
-    store: memory().store,
-  });
-  await plugins.hold([{ name: "one" }]);
-  await assert.rejects(
-    plugins.hold([{ name: "memory" }, { name: "search" }]),
-    /^Error: This provider carries no plugin named memory, search\.$/,
+  const plugins = await createPluginHost(quiet, [saying("one", said), saying("two", said)]).open(
+    "a",
+    { store: memory().store },
   );
-  // What it held stays, though it was no longer named.
-  assert.deepEqual(said, ["one loaded"]);
-  assert.equal(plugins.tools().length, 1);
+  await plugins.hold([{ name: "one" }]);
+  const given = await plugins.hold([{ name: "memory" }, { name: "two" }, { name: "search" }]);
+  assert.deepEqual(given.without, [
+    { name: "memory", why: "not carried" },
+    { name: "search", why: "not carried" },
+  ]);
+  // The one no longer named is unloaded, and the one newly named loaded.
+  assert.deepEqual(said, ["one loaded", "one unloaded", "two loaded"]);
+  assert.deepEqual(
+    given.tools.map(({ slot }) => slot),
+    ["two"],
+  );
   await plugins.close();
 });
 

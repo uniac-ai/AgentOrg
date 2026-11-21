@@ -21,7 +21,8 @@ import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
-import { type AgentPlugin, type AgentPlugins, createPluginHost } from "./plugins.js";
+import { type AgentPlugin, type AgentPlugins, createPluginHost, type Without } from "./plugins.js";
+import { head } from "./tools.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
 /** Who an agent made from the template is. How it works and speaks is the looper's frame. */
@@ -80,7 +81,10 @@ export interface AgentProvider {
 /** An agent as it stands in this process. */
 interface Held {
   state: "starting" | "running" | "stopped" | "down";
+  /** Why it is down. */
   detail?: string;
+  /** While it runs: the plugins its settings name that it runs without, and why, as its status says. */
+  without?: string;
   channel?: { close(): void; readonly closed: Promise<void> };
   engine?: ReturnType<typeof startEngine>;
   /** The plugins it holds, loaded in its own context while it is open. */
@@ -90,6 +94,35 @@ interface Held {
 }
 
 const quiet: Log = { info() {}, warn() {}, error() {} };
+
+/** What a status's detail may hold, as agent.provider@1 says. */
+const DETAIL_MAX = 2000;
+/**
+ * What a running agent's status says of a plugin it runs without: one sentence, which and why;
+ * for one that didn't load, what it said, its first word in lower case unless it is in capitals.
+ */
+const runsWithout = ({ name, why, said = "" }: Without) => {
+  const reason =
+    why === "not carried"
+      ? "this provider doesn't carry it"
+      : why === "needs a service"
+        ? "it needs a service none of its plugins provides"
+        : said.trim().replace(/^[A-Z](?![A-Z])/, (first) => first.toLowerCase());
+  return `It runs without ${name}: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
+};
+/**
+ * All of it, one sentence a line in the order named, as many as fit in a detail; none when it
+ * runs with all it was named.
+ */
+export const withoutOf = (without: Without[]) => {
+  let detail = "";
+  for (const line of without.map(runsWithout)) {
+    const next = detail ? `${detail}\n${line}` : line;
+    if (next.length > DETAIL_MAX) return detail || head(line, DETAIL_MAX);
+    detail = next;
+  }
+  return detail || undefined;
+};
 
 /** Run the bundled agent provider as an Actor exporting `agent.provider@1` as `provider`. */
 export async function startAgentProvider(options: AgentProviderOptions): Promise<AgentProvider> {
@@ -159,6 +192,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   const open = async (agent: string, one: Held) => {
     one.state = "starting";
     delete one.detail;
+    delete one.without;
     // One whose connection ended joins again: what its plugins held before goes first.
     const earlier = one.plugins;
     delete one.plugins;
@@ -172,22 +206,25 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
       const context = await host.open(agent, { store });
       plugins = context;
       /**
-       * A plugin its settings name that isn't carried, or doesn't load, leaves the agent down with
-       * the reason, once what is being done to it is done: it runs with what its settings say it
-       * holds, or not at all.
+       * A plugin its settings name that it can't hold, it runs without: its status says which, and
+       * why, until a later hold holds it. A change is logged once.
        */
       const held: AgentPlugins = {
         ...context,
-        hold: (named) =>
-          context.hold(named).catch((error: unknown) => {
-            void queued(one, async () => {
-              if (one.plugins !== context) return;
-              await halt(one);
-              one.state = "down";
-              one.detail = error instanceof Error ? error.message : String(error);
-            });
-            throw error;
-          }),
+        hold: async (named) => {
+          const given = await context.hold(named);
+          const without = withoutOf(given.without);
+          if (one.plugins === context && without !== one.without) {
+            if (without) {
+              one.without = without;
+              log.warn("An agent runs without a plugin it can't hold.", { agent, without });
+            } else {
+              delete one.without;
+              log.info("An agent holds all the plugins its settings name again.", { agent });
+            }
+          }
+          return given;
+        },
       };
       const channel = await connect({
         hubUrl,
@@ -296,8 +333,10 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           return { agent, settings: "settings", chat: "chat" };
         },
         status: async ({ agent }) => {
-          const { state, detail } = held(agent);
-          return { state, ...(detail ? { detail } : {}) };
+          // Why it is down; or, running, what it runs without.
+          const { state, detail, without } = held(agent);
+          const said = state === "down" ? detail : state === "running" ? without : undefined;
+          return { state, ...(said ? { detail: said } : {}) };
         },
         start: ({ agent }) =>
           inTurn(agent, async (one) => {

@@ -247,7 +247,7 @@ test("the agent's other plugins reach its lines through its service", async () =
   await plugins.close();
 });
 
-test("lines that can't be read fail its load, with the reason and nothing of where they are", async () => {
+test("lines that can't be read fail its load: the agent runs without it, with the reason and nothing of where they are", async () => {
   const s = storeOf();
   const unreadable = {
     ...s.store,
@@ -256,10 +256,9 @@ test("lines that can't be read fail its load, with the reason and nothing of whe
     },
   };
   const plugins = await createPluginHost(quiet, [memory]).open("a", { store: unreadable });
-  await assert.rejects(
-    plugins.hold([{ name: "memory" }]),
-    /^Error: The plugin memory didn't load: Its lines couldn't be read\.$/,
-  );
+  assert.deepEqual((await plugins.hold([{ name: "memory" }])).without, [
+    { name: "memory", why: "didn't load", said: "Its lines couldn't be read." },
+  ]);
   // Nothing of it is offered or told, and nothing was written over its lines.
   assert.deepEqual(plugins.tools(), []);
   assert.equal(s.kept(), undefined);

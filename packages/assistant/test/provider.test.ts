@@ -18,9 +18,10 @@ import {
 } from "@agentorg/interfaces";
 import { NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
+import type { Context } from "cordis";
 import { createLocalStore } from "../src/local-store.ts";
 import type { AgentPlugin } from "../src/plugins.ts";
-import { startAgentProvider } from "../src/provider.ts";
+import { startAgentProvider, withoutOf } from "../src/provider.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
 import { saying } from "./saying.ts";
 
@@ -513,58 +514,75 @@ test("an agent holds the plugins its settings name, of those its provider carrie
   assert.deepEqual(offered(await s.turn("and now?")), ["search__do"]);
 });
 
-test("a plugin its settings name that its provider doesn't carry, or that doesn't load, leaves the agent down with the reason, until it starts with settings it can hold", async (t) => {
+test("a plugin its settings name that it can't hold, not carried or not loading, it runs without: it holds the others, says which and why while running, and holds it at a later turn once it can", async (t) => {
   const said: string[] = [];
-  const broken: AgentPlugin = {
-    name: "broken",
+  let room = false;
+  const roomy: AgentPlugin = {
+    name: "roomy",
     inject: ["tools"],
-    apply() {
-      throw new Error("no room");
+    apply(ctx: Context) {
+      if (!room) throw new Error("No room");
+      saying("roomy", said).apply(ctx, undefined);
     },
   };
-  const s = await setup(t, [saying("notes", said), broken]);
+  const s = await setup(t, [saying("notes", said), roomy]);
   const { agent, settings } = await s.create();
   let names = ["notes"];
   const management = await settingsOf(s, agent, settings, () => names);
-  const down = (detail: string) =>
-    until(async () => {
-      const status = await s.agents.status({ agent });
-      return status.state === "down" && status.detail === detail;
-    }, `the agent to be down: ${detail}`);
-  // Running, it is told its settings changed, and they name one its provider doesn't carry.
+  const running = (detail?: string) =>
+    until(
+      async () =>
+        JSON.stringify(await s.agents.status({ agent })) ===
+        JSON.stringify({ state: "running", ...(detail ? { detail } : {}) }),
+      `the agent to be running${detail ? `: ${detail}` : ""}`,
+    );
   await until(() => said.includes("notes loaded"), "the plugin its settings name");
-  names = ["notes", "memory"];
-  await until(async () => {
-    management.changed();
-    return (await s.agents.status({ agent })).state === "down";
-  }, "the change to be heard");
-  await down("This provider carries no plugin named memory.");
-  // What it held went with it, and it is off its channel.
-  assert.deepEqual(said.splice(0), ["notes loaded", "notes unloaded"]);
-  await assert.rejects(s.agents.models({ agent }), { code: "unavailable" });
-  // Started while its settings still name it, it is down again, for the same reason, with
-  // nothing loaded.
-  await s.agents.start({ agent });
-  await down("This provider carries no plugin named memory.");
-  assert.equal(said.length, 0);
-  // One it carries that doesn't load: down with what that plugin said. What loaded before it
-  // in the same go was unloaded each time its settings were read, so nothing is left loaded.
-  names = ["notes", "broken"];
-  await s.agents.start({ agent });
-  await down("The plugin broken didn't load: no room.");
-  const went = said.splice(0);
-  assert.equal(went.at(-1), "notes unloaded");
-  assert.deepEqual(
-    went.filter((_, i) => i % 2 === 0).flatMap(() => ["notes loaded", "notes unloaded"]),
-    went,
-  );
-  // With settings it can hold, it starts, and runs.
-  names = ["notes"];
-  await s.agents.start({ agent });
-  await until(() => said.includes("notes loaded"), "the plugin its settings name");
-  await until(() => s.caller.slots.chat.bound && s.hub.connected(agent), "the agent to be back");
+  // Told its settings changed, and they name one its provider doesn't carry and one that doesn't
+  // load: it runs on without both, keeps what it holds, and says each, with why.
+  names = ["notes", "memory", "roomy"];
+  management.changed();
+  const both =
+    "It runs without memory: this provider doesn't carry it.\nIt runs without roomy: no room.";
+  await running(both);
   assert.deepEqual(offered(await s.turn("hello")), ["notes__do"]);
-  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(said, ["notes loaded"]);
+  // Once one can be held, the next turn holds it, and the status says only the other.
+  room = true;
+  assert.deepEqual(offered(await s.turn("and now?")), ["notes__do", "roomy__do"]);
+  await running("It runs without memory: this provider doesn't carry it.");
+  // No longer named, the status says nothing more.
+  names = ["notes", "roomy"];
+  await s.turn("again?");
+  await running();
+  assert.deepEqual(said, ["notes loaded", "roomy loaded"]);
+  // Back after a restart, with settings that name one it can't hold now, it says so before any
+  // turn: what it holds as it joins the Hub is said.
+  room = false;
+  await s.restart();
+  await running("It runs without roomy: no room.");
+});
+
+test("what a running agent's status says of the plugins it runs without: a sentence each, a line each, in the order named, within 2,000 characters", () => {
+  assert.equal(withoutOf([]), undefined);
+  assert.equal(
+    withoutOf([
+      { name: "memory", why: "didn't load", said: "Its lines couldn't be read." },
+      { name: "search", why: "not carried" },
+      { name: "counting", why: "needs a service" },
+      { name: "keys", why: "didn't load", said: "API key missing" },
+    ]),
+    [
+      "It runs without memory: its lines couldn't be read.",
+      "It runs without search: this provider doesn't carry it.",
+      "It runs without counting: it needs a service none of its plugins provides.",
+      "It runs without keys: API key missing.",
+    ].join("\n"),
+  );
+  // Whole lines while they fit; a first line too long for it alone is cut to fit.
+  const long = { name: "long", why: "didn't load" as const, said: "x".repeat(1990) };
+  const short = { name: "search", why: "not carried" as const };
+  assert.equal(withoutOf([short, long]), "It runs without search: this provider doesn't carry it.");
+  assert.equal(withoutOf([long, short])?.length, 2000);
 });
 
 test("an agent that joins the Hub again unloads the plugins it held before, and holds what its settings name afresh", async (t) => {
