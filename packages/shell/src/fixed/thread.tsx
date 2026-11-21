@@ -44,12 +44,15 @@ import {
 } from "../ui/message-scroller.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { type ListedChat, PERSON, useAllChats } from "./all-chats.tsx";
+import { AskCard, type CardState, plainOf } from "./ask.tsx";
 import { bubblesOf, isCode } from "./bubbles.ts";
 import { age, CloseChats } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import {
+  type Answer,
+  type Ask,
   type ChatMessage,
   type ChatStatus,
   type Progress,
@@ -92,13 +95,23 @@ interface Sending {
   id: string;
   text: string;
   images: Sent[];
+  /** A card's answer, sent alone: the card shows it, and its words are the provider's to write. */
+  answer?: Answer;
   messageId?: string;
 }
 
 /** What the thread shows: each message of the person, and each of the agent's, on its own. */
 type Turn =
-  | { kind: "user"; id: string; message?: string; text: string; images: readonly Sent[] }
-  | { kind: "agent"; id: string; text: string; at?: string; streaming?: boolean };
+  | {
+      kind: "user";
+      id: string;
+      message?: string;
+      text: string;
+      images: readonly Sent[];
+      /** A card's answer: drawn by its card, never as a bubble, though it is the party's turn. */
+      answer?: Answer;
+    }
+  | { kind: "agent"; id: string; text: string; at?: string; streaming?: boolean; ask?: Ask };
 
 function turnsOf(
   messages: readonly ChatMessage[],
@@ -118,11 +131,26 @@ function turnsOf(
         message: message.id,
         text: message.text,
         images: message.images ?? [],
+        ...(message.answer ? { answer: message.answer } : {}),
       });
-    else turns.push({ kind: "agent", id: message.id, text: message.text, at: message.at });
+    else
+      turns.push({
+        kind: "agent",
+        id: message.id,
+        text: message.text,
+        at: message.at,
+        ...(message.ask ? { ask: message.ask } : {}),
+      });
   }
-  for (const { id, messageId, text, images } of unrecorded)
-    turns.push({ kind: "user", id, ...(messageId ? { message: messageId } : {}), text, images });
+  for (const { id, messageId, text, images, answer } of unrecorded)
+    turns.push({
+      kind: "user",
+      id,
+      ...(messageId ? { message: messageId } : {}),
+      text,
+      images,
+      ...(answer ? { answer } : {}),
+    });
   for (const [id, text] of streaming) turns.push({ kind: "agent", id, text, streaming: true });
   return turns;
 }
@@ -675,18 +703,40 @@ export function Thread({
   const newest = lastTurn?.kind === "user" ? lastTurn : undefined;
   const where = newest?.message === undefined ? undefined : progress.get(newest.message);
   const typing = working && !!newest && (!where || taken(where)) && !entry?.problem && !failure;
+  // What became of each card. Answered: a message of the party's names it, recorded or just sent.
+  // Passed over: the party sent anything after it, or a newer card came. Open: the newest, once
+  // the agent's turn has ended; until then it isn't drawn.
+  const newestCard = turns.findLast((turn) => turn.kind === "agent" && turn.ask)?.id;
+  const cardOf = (turn: Turn, n: number): CardState | undefined => {
+    if (turn.kind !== "agent" || !turn.ask || !plainOf(turn.ask)) return;
+    for (const one of turns)
+      if (one.kind === "user" && one.answer?.to === turn.id)
+        return { kind: "answered", picks: one.answer.picks[0] ?? [] };
+    if (turn.id !== newestCard || turns.slice(n + 1).some((one) => one.kind === "user"))
+      return { kind: "passed" };
+    return working || typing ? undefined : { kind: "open" };
+  };
+  // What is drawn: each turn but a card's answer, which its card shows. Each knows the turn before
+  // it, drawn or not, for the room between them.
+  const drawn = turns.flatMap((turn, n) =>
+    turn.kind === "user" && turn.answer
+      ? []
+      : [{ turn, card: cardOf(turn, n), after: turns[n - 1]?.kind }],
+  );
 
-  const send = async (text: string, images: Sent[]) => {
+  /** Sends words and pictures, or a card's answer alone. */
+  const send = async (text: string, images: Sent[], answer?: Answer) => {
     if (!slot) return false;
     setFailure(undefined);
     setSentHere(true);
     const key = `sending-${++sends.current}`;
-    setSending((was) => [...was, { id: key, text, images }]);
+    setSending((was) => [...was, { id: key, text, images, ...(answer ? { answer } : {}) }]);
     try {
-      const { messageId } = await api.call<{ messageId: string }>(slot, "send", {
-        text,
-        ...(images.length > 0 ? { images } : {}),
-      });
+      const { messageId } = await api.call<{ messageId: string }>(
+        slot,
+        "send",
+        answer ? { answer } : { text, ...(images.length > 0 ? { images } : {}) },
+      );
       keys.current.set(messageId, key);
       setSending((was) => was.map((m) => (m.id === key ? { ...m, messageId } : m)));
       return true;
@@ -750,13 +800,13 @@ export function Thread({
                   </Marker>
                 </MessageScrollerItem>
               )}
-              {turns.map((turn, n) => (
+              {drawn.map(({ turn, card, after }) => (
                 <MessageScrollerItem
                   key={turn.id}
                   scrollAnchor={turn.kind === "user"}
                   // A reacted message keeps the room its emoji hangs into, so what follows is as far
                   // from the emoji as it would be from the bubble.
-                  className={`[content-visibility:visible] ${n === 0 ? "" : turns[n - 1]?.kind === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-5" : ""}`}
+                  className={`[content-visibility:visible] ${after === undefined ? "" : after === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-5" : ""}`}
                 >
                   {turn.kind === "user" ? (
                     <Message align="end">
@@ -805,14 +855,32 @@ export function Thread({
                       </MessageContent>
                     </Message>
                   ) : (
-                    <Reply
-                      text={turn.text}
-                      at={turn.at}
-                      streaming={!!turn.streaming}
-                      reduced={reduced}
-                      isLast={turn === lastTurn}
-                      awaiting={awaiting}
-                    />
+                    <>
+                      <Reply
+                        text={turn.text}
+                        at={turn.at}
+                        streaming={!!turn.streaming}
+                        reduced={reduced}
+                        isLast={turn === lastTurn}
+                        awaiting={awaiting}
+                      />
+                      {/* The agent's question, its own part: 4 px under its words, or alone. Only
+                          the party answers it, and only while the agent is there to read it. */}
+                      {card && turn.ask && (
+                        <div className={turn.text ? "mt-1" : undefined}>
+                          <AskCard
+                            question={plainOf(turn.ask) as Ask["questions"][number]}
+                            agent={agent.name}
+                            state={card}
+                            onPick={
+                              off || other
+                                ? undefined
+                                : (choice) => void send("", [], { to: turn.id, picks: [[choice]] })
+                            }
+                          />
+                        </div>
+                      )}
+                    </>
                   )}
                 </MessageScrollerItem>
               ))}

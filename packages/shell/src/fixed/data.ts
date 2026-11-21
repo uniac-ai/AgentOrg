@@ -24,6 +24,10 @@ export type ConnectionEntry = Out<typeof connections.methods.list>["connections"
 export type McpProvider = Out<typeof connections.methods.providers>["providers"][number];
 export type Skill = Out<typeof skills.methods.list>["skills"][number];
 export type ChatMessage = Out<typeof chat.methods.history>["messages"][number];
+/** A decision card under one of the agent's messages, for its party to answer by picking. */
+export type Ask = NonNullable<ChatMessage["ask"]>;
+/** A card's answer: the card, by its message's id, and the choices picked for each question. */
+export type Answer = NonNullable<ChatMessage["answer"]>;
 export type ChatStatus = Out<typeof chat.methods.state>;
 /** What became of a message the party said, the latest said of it: `history` gives it with the message. */
 export type Progress = z.output<typeof MessageProgress>;

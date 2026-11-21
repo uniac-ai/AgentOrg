@@ -1259,12 +1259,23 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (method === "send") {
       // In the person's conversation, which its first message begins.
       const record = agent.chat.messages;
+      // A card's answer, sent alone: its words are the label picked, as the service writes them.
+      const answer = input.answer as Message["answer"];
+      const card = answer && record.find((m) => m.id === answer.to)?.ask?.questions[0];
       const message = {
         // Words, a picture, or both: a picture alone has none.
-        ...text(`u${record.length}-${++sent}`, "user", String(input.text ?? ""), 0),
+        ...text(
+          `u${record.length}-${++sent}`,
+          "user",
+          card && answer
+            ? (answer.picks[0] ?? []).map((n) => card.choices[n]?.label).join(", ")
+            : String(input.text ?? ""),
+          0,
+        ),
         ...(Array.isArray(input.images) && input.images.length > 0
           ? { images: input.images as Message["images"] }
           : {}),
+        ...(answer ? { answer } : {}),
       };
       record.push(message);
       // The status is said when it changes: an agent already at work says nothing more.
