@@ -106,6 +106,18 @@ export function useWorking(slot: string | undefined, running: boolean): ChatStat
   return status;
 }
 
+type Held = NonNullable<AgentDetail["capabilities"]>[number];
+/** Something an agent holds that the person's own slots reach. */
+export type Reached = Held & { person: NonNullable<Held["person"]> };
+
+/**
+ * What an agent holds that the person reaches: each one with the person's own slots to it. One
+ * with no part outside the agent has none: there is nothing of it to ask or open, and it stands as
+ * the agent does.
+ */
+export const reachedOf = (detail: AgentDetail | undefined): Reached[] =>
+  (detail?.capabilities ?? []).filter((held): held is Reached => !!held.person);
+
 /**
  * The first thing an agent holds that says it is down, kept current: each capability is asked how
  * it stands through the person's own slot to it, and again when it says it changed.
@@ -113,7 +125,7 @@ export function useWorking(slot: string | undefined, running: boolean): ChatStat
 export function useHeldDown(detail: AgentDetail | undefined): DownCapability | undefined {
   const connection = useConnection();
   const [down, setDown] = useState<DownCapability>();
-  const held = detail?.capabilities ?? [];
+  const held = reachedOf(detail);
   const key = JSON.stringify(
     held.map((c) => [c.person.capability, c.title, c.surfaces.length, c.slots.length]),
   );

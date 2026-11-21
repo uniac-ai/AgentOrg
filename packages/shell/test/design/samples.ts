@@ -613,6 +613,102 @@ export function downTriage(gateway: Gateway) {
 }
 
 /**
+ * The design's Memory: a unit that asks nothing, whose capability is the agent's own with no slots
+ * of the person's. Reviewer is built from it alone, and Research has it below its computer and
+ * the web. Its words are the design's sample.
+ */
+export function designMemory(gateway: Gateway) {
+  gateway.offerUnit({
+    provider: "units",
+    providerName: "AgentOrg",
+    id: "memory",
+    title: "Memory",
+    description: "A few lines it keeps about you and your work",
+    once: true,
+    needs: [],
+    gives: { slots: [], skills: [], results: [] },
+    form: [],
+  });
+  const memory = (agent: Agent) => {
+    agent.units = [
+      ...(agent.units ?? []),
+      {
+        instance: "i-memory",
+        provider: "units",
+        unit: "memory",
+        title: "Memory",
+        values: {},
+        needs: {},
+        status: { state: "connected" },
+      },
+    ];
+    agent.held = [
+      ...(agent.held ?? []),
+      {
+        title: "Memory",
+        state: "connected",
+        surfaces: 0,
+        slots: [],
+        from: "i-memory",
+        person: false,
+      },
+    ];
+  };
+  memory(gateway.agents.get("a-reviewer") as Agent);
+  memory(gateway.agents.get("a-research") as Agent);
+}
+
+/** Reviewer as the design has it: its one skill, GitHub under the design's slot, and its review. */
+export function designReviewer(gateway: Gateway) {
+  const at = new Date(Date.now() - 12 * 60_000).toISOString();
+  const reviewer = gateway.agents.get("a-reviewer") as Agent;
+  reviewer.skills = [
+    { name: "review-a-diff", description: "Checks a change for bugs and missing tests" },
+  ];
+  reviewer.mcp = [{ slot: "github_acme", connection: "c-github" }];
+  reviewer.works = [
+    {
+      id: "w-review",
+      title: "Review #482",
+      state: "idle",
+      at,
+      entries: [
+        {
+          id: "v1",
+          at,
+          call: {
+            name: "github_acme__get_file_contents",
+            state: "done",
+            input: JSON.stringify({ path: "src/cart/coupon.ts" }),
+            output: "export function applyCoupon(cart, code) { … }",
+          },
+        },
+      ],
+    },
+  ];
+}
+
+/** Research's control log as the design has it: made by the person, and an agent refused. */
+export function researchChanges(gateway: Gateway) {
+  const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+  gateway.logChange({
+    at: ago(3),
+    caller: "person",
+    tool: "create_assistant",
+    target: "a-research",
+    outcome: "done",
+  });
+  gateway.logChange({
+    at: ago(1),
+    caller: "a-builder",
+    tool: "agent_stop",
+    target: "a-research",
+    outcome: "refused",
+    reason: "Builder didn't create Research",
+  });
+}
+
+/**
  * Research's pieces of work as the design's sample has them when it opens: the one it works on,
  * the one whose message wasn't answered, and the oldest. Stopped, none is worked on.
  */
