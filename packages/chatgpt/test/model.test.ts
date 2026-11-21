@@ -9,7 +9,7 @@ import { defineActor } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Store } from "../src/account.ts";
 import type { Fetch } from "../src/oauth.ts";
-import { RETRIES, sleep } from "../src/responses.ts";
+import { cacheKeyOf, RETRIES, sleep } from "../src/responses.ts";
 import { serveChatGPT } from "../src/serve.ts";
 import {
   argumentsDelta,
@@ -595,6 +595,21 @@ test("each consumer gets its own streamed text, and cancels only its own request
     deltas.map((e) => [e.to, (e.payload as { text: string }).text]),
     [["alice", "for alice"]],
   );
+  // Each caller's requests go under a key of its own, in the body and the header alike: a hash,
+  // never its id.
+  const keys = s.fake.requests
+    .filter((r) => r.url.endsWith("/v1/responses"))
+    .map((r) => {
+      const key = JSON.parse(r.body).prompt_cache_key as string;
+      assert.equal(r.headers["session-id"], key);
+      return [JSON.parse(r.body).instructions, key];
+    });
+  assert.deepEqual(Object.fromEntries(keys), {
+    alice: cacheKeyOf("alice"),
+    bob: cacheKeyOf("bob"),
+  });
+  assert.notEqual(cacheKeyOf("alice"), cacheKeyOf("bob"));
+  for (const [, key] of keys) assert.match(key, /^[0-9a-f]{32}$/);
 });
 
 test("signing out during a refresh stays signed out, and the rotated token is revoked", async (t) => {
