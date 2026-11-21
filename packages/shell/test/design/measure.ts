@@ -48,6 +48,7 @@ import {
   openTemplates,
   openWindow,
   PICKED,
+  pickAs,
   placeByTab,
   REACTION,
   REACTIONS,
@@ -68,6 +69,7 @@ import {
   sampleLoad,
   sampleSettings,
   sampleWork,
+  sentAt,
   signInAccount,
   signInHash,
   signInState,
@@ -1507,16 +1509,24 @@ const probe = (what: Part): Parts => {
     parts.group = group
       ? `${group.getAttribute("aria-label")} ${group.getAttribute("aria-disabled") ?? ""}`
       : null;
-    const rows = [...card.querySelectorAll('[role="radio"]')];
-    parts.rows = rows.length;
-    for (const [i, row] of rows.entries()) {
+    // A choice's control is its row, or sits at the end of its row where picks are held.
+    const controls = [...card.querySelectorAll('[role="radio"], [role="checkbox"]')];
+    parts.rows = controls.length;
+    for (const [i, control] of controls.entries()) {
+      const row = control.closest('[data-slot="field-label"]') ?? control;
       const style = getComputedStyle(row);
       parts[`row.${i}`] = of(row);
       parts[`row.${i}.state`] =
-        `${row.getAttribute("aria-checked")} ${row.getAttribute("aria-disabled") === "true" || (row as HTMLButtonElement).disabled ? "unavailable" : "pressable"} ${style.borderTopStyle} ${style.borderTopColor}`;
+        `${control.getAttribute("aria-checked")} ${control.getAttribute("aria-disabled") === "true" || (control as HTMLButtonElement).disabled ? "unavailable" : "pressable"} ${style.borderTopStyle} ${style.borderTopColor}`;
       parts[`row.${i}.words`] = row.textContent;
       parts[`row.${i}.check`] = of(row.querySelector("svg")?.parentElement);
     }
+    // Where picks are held, the Confirm under them.
+    const confirm = [...card.querySelectorAll("button")].find(
+      (one) => one.textContent === "Confirm",
+    );
+    parts.confirm = of(confirm);
+    parts["confirm.state"] = confirm ? (confirm.disabled ? "disabled" : "enabled") : null;
     // Its room: from what is above it, and to what comes under it.
     const b = card.getBoundingClientRect();
     const bubbles = [...region.querySelectorAll('[data-slot="bubble"]')];
@@ -2178,6 +2188,11 @@ const CARD_SEEN: Record<CardCase, string> = {
   detail: "open",
   typed: "passed",
   late: "answered",
+  confirm: "open",
+  confirmHeld: "open",
+  confirmSent: "answered",
+  many: "open",
+  manySent: "answered",
 };
 if (wants("card"))
   for (const size of ["wide", "phone"] as const)
@@ -2206,10 +2221,9 @@ if (wants("card"))
             cardComes(gateway);
             gateway.setChatStatus("a-research", { state: "idle" });
           }
-          if (gateway && state === "picked")
-            await region.getByRole("radio", { name: PICKED }).click();
+          if (gateway) await pickAs(region, state);
           await region.locator(`[data-slot="card"][data-ask="${CARD_SEEN[state]}"]`).waitFor();
-          if (state === "picked" || state === "typed")
+          if (sentAt(state) || state === "typed")
             await region.locator(".typing-dot").first().waitFor();
           await region.locator('[data-slot="message-scroller-viewport"]').evaluate((room) => {
             room.scrollTop = room.scrollHeight;

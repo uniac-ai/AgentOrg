@@ -42,7 +42,7 @@ import {
   openSetup,
   openTemplates,
   openWindow,
-  PICKED,
+  pickAs,
   placeByTab,
   REACTION,
   REACTIONS,
@@ -65,6 +65,7 @@ import {
   sampleLoad,
   sampleSettings,
   sampleWork,
+  sentAt,
   signInAccount,
   signInHash,
   signInState,
@@ -804,8 +805,8 @@ const SCREENS: Screen[] = [
             .catch(() => {});
         const region = page.getByRole("region", { name: "Conversation with Research" });
         await region.locator('[data-slot="card"]').waitFor();
-        if (state === "picked") await region.locator('[data-ask="answered"]').waitFor();
-        if (state === "picked" || state === "typed")
+        if (sentAt(state)) await region.locator('[data-ask="answered"]').waitFor();
+        if (sentAt(state) || state === "typed")
           await region.locator(".typing-dot").first().waitFor();
       },
       built: async (page, gateway) => {
@@ -816,9 +817,9 @@ const SCREENS: Screen[] = [
           cardComes(gateway);
           gateway.setChatStatus("a-research", { state: "idle" });
         }
-        if (state === "picked") await region.getByRole("radio", { name: PICKED }).click();
+        await pickAs(region, state);
         await region.locator('[data-slot="card"]').waitFor();
-        if (state === "picked" || state === "typed")
+        if (sentAt(state) || state === "typed")
           await region.locator(".typing-dot").first().waitFor();
       },
     }),

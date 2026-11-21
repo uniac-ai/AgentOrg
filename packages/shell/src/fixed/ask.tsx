@@ -1,21 +1,26 @@
 // The decision the agent puts to its party under a reply, served as one card: one rounded card, the
 // agent's question at its top, and a full-width outlined row for each choice. Plain, one question's
-// choices alone, a tap picks at once and is final. Once answered, or passed over because the party
-// wrote instead or a newer card came, the card stays where it is, showing what became of it.
+// choices alone, a tap picks at once and is final. With a confirm, or where several may be picked,
+// the picks are held, changeable, until Confirm sends them. Once answered, or passed over because
+// the party wrote instead or a newer card came, the card stays where it is, showing what became of
+// it.
 import { CheckIcon } from "lucide-react";
-import { type KeyboardEvent, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useId, useRef, useState } from "react";
+import { Button } from "../ui/button.tsx";
 import { Card } from "../ui/card.tsx";
+import { Checkbox } from "../ui/checkbox.tsx";
+import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "../ui/field.tsx";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group.tsx";
 import type { Ask } from "./data.ts";
 
 type Question = Ask["questions"][number];
 type Choice = Question["choices"][number];
 
-/** A card's question when the card is plain: one question, one pick, no confirm. */
-export const plainOf = (ask: Ask): Question | undefined => {
-  const [only, ...more] = ask.questions;
-  if (!only || more.length > 0 || "many" in only || ("confirm" in ask && ask.confirm)) return;
-  return only;
-};
+/** A card's question when the card has one: plain, with a confirm, or of several picks. */
+export const oneOf = (ask: Ask): Question | undefined =>
+  ask.questions.length === 1 ? ask.questions[0] : undefined;
+/** Whether a question takes several picks. */
+const isMany = (question: Question) => "many" in question && question.many === true;
 
 /** Open, answered with the picks the answer carries, or passed over. */
 export type CardState =
@@ -28,17 +33,23 @@ const ROW =
   "flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left text-[15px] leading-5";
 
 export function AskCard({
-  question,
+  ask,
   agent,
   state,
-  onPick,
+  onAnswer,
 }: {
-  question: Question;
+  ask: Ask;
   agent: string;
   state: CardState;
-  /** Picks a choice, by its place; none where the conversation is only read. */
-  onPick?: ((choice: number) => void) | undefined;
+  /** Answers it with the choices picked, by their places; none where the conversation is only read. */
+  onAnswer?: ((picks: number[]) => void) | undefined;
 }) {
+  const question = oneOf(ask) as Question;
+  const many = isMany(question);
+  // Several picks always confirm, as a card asked to does.
+  const confirm = many || ("confirm" in ask && ask.confirm === true);
+  /** The picks held until Confirm, by their places. */
+  const [held, setHeld] = useState<number[]>([]);
   return (
     <Card
       role="group"
@@ -49,16 +60,44 @@ export function AskCard({
     >
       <div className="flex flex-col gap-2.5">
         {question.question && <p className="px-1 text-[15px] leading-5">{question.question}</p>}
-        {state.kind === "open" ? (
-          <Plain question={question} agent={agent} onPick={onPick} />
-        ) : (
+        {state.kind !== "open" ? (
           <Settled
             question={question}
             agent={agent}
             picks={state.kind === "answered" ? state.picks : []}
           />
+        ) : !confirm ? (
+          <Plain question={question} agent={agent} onPick={onAnswer && ((n) => onAnswer([n]))} />
+        ) : many ? (
+          <Several
+            question={question}
+            agent={agent}
+            picks={held}
+            disabled={!onAnswer}
+            onChange={setHeld}
+          />
+        ) : (
+          <One
+            question={question}
+            agent={agent}
+            pick={held[0]}
+            disabled={!onAnswer}
+            onChange={(n) => setHeld([n])}
+          />
         )}
       </div>
+      {confirm && state.kind === "open" && (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            className="rounded-full px-4"
+            disabled={held.length === 0}
+            onClick={() => onAnswer?.([...held].sort((a, b) => a - b))}
+          >
+            Confirm
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }
@@ -143,8 +182,9 @@ function Settled({
   picks: readonly number[];
 }) {
   return (
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: a radio group, or a group of checkboxes where several are picked.
     <div
-      role="radiogroup"
+      role={isMany(question) ? "group" : "radiogroup"}
       aria-label={question.question ?? `${agent}'s choices`}
       aria-disabled
       className="flex flex-col gap-2"
@@ -152,10 +192,10 @@ function Settled({
       {question.choices.map((choice, n) => {
         const picked = picks.includes(n);
         return (
-          // biome-ignore lint/a11y/useSemanticElements lint/a11y/useFocusableInteractive: a choice settled, read with its group and never pressed again.
+          // biome-ignore lint/a11y/useSemanticElements lint/a11y/useFocusableInteractive lint/a11y/useAriaPropsSupportedByRole: a choice settled, a radio or a checkbox, read with its group and never pressed again.
           <div
             key={choice.label}
-            role="radio"
+            role={isMany(question) ? "checkbox" : "radio"}
             aria-checked={picked}
             aria-disabled
             className={`${ROW} ${picked ? "border-foreground text-foreground" : "border-dashed border-[var(--line-strong)] opacity-50"}`}
@@ -173,5 +213,97 @@ function Settled({
         );
       })}
     </div>
+  );
+}
+
+/** With a confirm, one pick: a choice card for each, a radio at its end; changeable until Confirm. */
+function One({
+  question,
+  agent,
+  pick,
+  disabled,
+  onChange,
+}: {
+  question: Question;
+  agent: string;
+  pick: number | undefined;
+  disabled: boolean;
+  onChange(choice: number): void;
+}) {
+  const id = useId();
+  return (
+    <RadioGroup
+      value={pick === undefined ? "" : String(pick)}
+      onValueChange={(value) => onChange(Number(value))}
+      aria-label={question.question ?? `${agent}'s choices`}
+      disabled={disabled}
+      className="gap-2"
+    >
+      {question.choices.map((choice, n) => (
+        <Choose key={choice.label} id={`${id}-${n}`} choice={choice}>
+          <RadioGroupItem value={String(n)} id={`${id}-${n}`} />
+        </Choose>
+      ))}
+    </RadioGroup>
+  );
+}
+
+/** Several picks: the same rows with a checkbox at each end; changeable until Confirm. */
+function Several({
+  question,
+  agent,
+  picks,
+  disabled,
+  onChange,
+}: {
+  question: Question;
+  agent: string;
+  picks: readonly number[];
+  disabled: boolean;
+  onChange(picks: number[]): void;
+}) {
+  const id = useId();
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: one question's choices with its name, not a form.
+    <div
+      role="group"
+      aria-label={question.question ?? `${agent}'s choices`}
+      className="flex flex-col gap-2"
+    >
+      {question.choices.map((choice, n) => (
+        <Choose key={choice.label} id={`${id}-${n}`} choice={choice}>
+          <Checkbox
+            id={`${id}-${n}`}
+            checked={picks.includes(n)}
+            disabled={disabled}
+            onCheckedChange={(on) =>
+              onChange(on ? [...picks, n] : picks.filter((one) => one !== n))
+            }
+          />
+        </Choose>
+      ))}
+    </div>
+  );
+}
+
+/** A choice card (a label holding a field), drawn as the plain card's rows; held, its outline is solid and bright. */
+function Choose({ id, choice, children }: { id: string; choice: Choice; children: ReactNode }) {
+  return (
+    <FieldLabel
+      htmlFor={id}
+      className="w-full rounded-xl border-[var(--line-strong)] *:data-[slot=field]:px-4 *:data-[slot=field]:py-3 has-data-checked:border-foreground has-data-checked:bg-transparent dark:has-data-checked:border-foreground dark:has-data-checked:bg-transparent"
+    >
+      <Field orientation="horizontal" className="items-center">
+        <FieldContent className="gap-0.5">
+          <FieldTitle className="text-[15px] leading-5 font-normal">{choice.label}</FieldTitle>
+          {choice.detail && (
+            <FieldDescription className="text-[13px] leading-[18px]">
+              {choice.detail}
+            </FieldDescription>
+          )}
+        </FieldContent>
+        {children}
+      </Field>
+    </FieldLabel>
   );
 }
