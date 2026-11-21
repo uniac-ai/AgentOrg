@@ -263,6 +263,8 @@ const keyOf = (unit: CatalogUnit) => `${unit.provider} ${unit.id}`;
 /**
  * The stack it came from, as it was filled in: each unit with its questions and their answers,
  * and its "…" to change or remove it. One whose provider isn't offering it now can only be removed.
+ * One that asks nothing has no answers to show and nothing to change: its own line says what it
+ * is, and it can only be removed.
  */
 function BuiltFrom({
   units,
@@ -283,6 +285,7 @@ function BuiltFrom({
         const unit = catalog.units.find(
           (u) => u.provider === applied.provider && u.id === applied.unit,
         );
+        const asksNothing = unit?.form.length === 0;
         return (
           <li key={applied.instance} className="rounded-xl bg-card px-3 py-2.5 text-sm">
             <div className="flex items-center gap-2">
@@ -295,16 +298,21 @@ function BuiltFrom({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   {/* The dialog opens once the menu has closed, so the keyboard goes to it. */}
-                  <DropdownMenuItem
-                    disabled={!unit}
-                    onSelect={() => unit && setTimeout(() => onChange(applied, unit), 0)}
-                  >
-                    Change…
-                  </DropdownMenuItem>
+                  {!asksNothing && (
+                    <DropdownMenuItem
+                      disabled={!unit}
+                      onSelect={() => unit && setTimeout(() => onChange(applied, unit), 0)}
+                    >
+                      Change…
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem onSelect={() => onRemove(applied)}>Remove</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
+            {asksNothing && unit.description && (
+              <div className="truncate text-[13px] text-muted-foreground">{unit.description}</div>
+            )}
             {answersOf(applied.values, unit?.form ?? [], nameOf).map((line) => (
               <div key={line.id} className="flex min-w-0 gap-1.5 text-[13px]">
                 <span className="shrink-0 text-muted-foreground">{line.question}</span>

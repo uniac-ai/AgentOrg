@@ -24,6 +24,8 @@ import {
   cpuOf,
   createState,
   designAgents,
+  designMemory,
+  designReviewer,
   docsAgent,
   downTriage,
   inDesign,
@@ -46,6 +48,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchChanges,
   researchSays,
   researchTypes,
   SECTIONS,
@@ -2853,6 +2856,42 @@ if (wants("overview"))
         await page.close();
         await gateway?.close();
       }
+
+// A unit that asks nothing, Memory: Reviewer built from it alone, and Research with it below its
+// computer and the web. Their Overview and their setup, as the design's states have them.
+for (const [which, name, state] of [
+  ["memory-alone", "Reviewer", "Memory alone"],
+  ["memory-beside", "Research", "Memory beside the computer"],
+] as const)
+  for (const part of ["overview", "setup"] as const)
+    if (wants(part))
+      for (const size of ["wide", "phone"] as const)
+        for (const theme of ["dark", "light"] as const)
+          for (const side of ["design", "built"] as const) {
+            const gateway = side === "built" ? await standIn() : undefined;
+            if (gateway) {
+              designAgents(gateway);
+              designMemory(gateway);
+              designReviewer(gateway);
+              sampleWork(gateway);
+              researchChanges(gateway);
+            }
+            const id = name === "Reviewer" ? "a-reviewer" : "a-research";
+            const page = gateway
+              ? await builtPage(gateway, size, theme, `#/a/${id}/overview`)
+              : await designPage(size, theme);
+            if (!gateway) await inDesign(page, state);
+            await page
+              .getByRole("main")
+              .getByRole("region", { name: "Built from", exact: true })
+              .getByText(/Memory$/)
+              .waitFor();
+            if (part === "setup") await openSetup(page, name);
+            await rest(page, size);
+            all[`${part}.${which}.${size}.${theme}.${side}`] = await measure(page, part);
+            await page.close();
+            await gateway?.close();
+          }
 
 await browser.close();
 writeFileSync(out, JSON.stringify(all, null, 1));

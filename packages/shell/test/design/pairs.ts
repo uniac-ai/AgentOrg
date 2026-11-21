@@ -20,6 +20,8 @@ import {
   cpuOf,
   createState,
   designAgents,
+  designMemory,
+  designReviewer,
   docsAgent,
   firstStart,
   inDesign,
@@ -41,6 +43,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchChanges,
   researchSays,
   researchTypes,
   SECTIONS,
@@ -52,6 +55,7 @@ import {
   sampleChats,
   sampleLoad,
   sampleSettings,
+  sampleWork,
   signInAccount,
   signInHash,
   signInState,
@@ -94,6 +98,8 @@ interface Screen {
   chats?: boolean;
   /** The built side's agents are the design's sample: what each is for, and Research's computer. */
   agents?: boolean;
+  /** The design's Memory too, with Research's work and control log as the design has them. */
+  memory?: boolean;
   /** The built side is at its first start: one agent, with no conversation begun. */
   firstStart?: boolean;
   /** The built side's Settings lists the design's sample where it shows. */
@@ -819,6 +825,37 @@ const SCREENS: Screen[] = [
       built: (page) => openOffer(page, section),
     }),
   ),
+  // A unit that asks nothing, Memory: Reviewer built from it alone, and Research with it below its
+  // computer and the web, on their Overview and in their setup.
+  ...(
+    [
+      ["memory-alone", "Reviewer", "Memory alone"],
+      ["memory-beside-the-computer", "Research", "Memory beside the computer"],
+    ] as const
+  ).flatMap(([name, agent, state]) =>
+    [false, true].map(
+      (setup): Screen => ({
+        name: setup ? `${name}-its-setup` : name,
+        sizes: ["wide", "phone"],
+        themes: ["dark", "light"],
+        agents: true,
+        memory: true,
+        hash: `#/a/${agent === "Reviewer" ? "a-reviewer" : "a-research"}/overview`,
+        design: async (page) => {
+          await inDesign(page, state);
+          if (setup) await openSetup(page, agent);
+        },
+        built: async (page) => {
+          await page
+            .getByRole("main")
+            .getByRole("region", { name: "Built from", exact: true })
+            .getByText(/Memory$/)
+            .waitFor();
+          if (setup) await openSetup(page, agent);
+        },
+      }),
+    ),
+  ),
   {
     name: "agent-setup",
     sizes: ["wide", "phone"],
@@ -963,6 +1000,12 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
         });
         if (gateway) {
           if (screen.agents) designAgents(gateway);
+          if (screen.memory) {
+            designMemory(gateway);
+            designReviewer(gateway);
+            sampleWork(gateway);
+            researchChanges(gateway);
+          }
           // Before the page is read, as a conversation opened later reads it.
           if (screen.research) researchSays(gateway, screen.research);
           if (screen.types) researchTypes(gateway, screen.types);

@@ -64,6 +64,12 @@ export interface Held {
     values: Record<string, string | number | boolean | string[]>;
   }[];
   from?: string;
+  /**
+   * `false`: it has no part outside the agent, so the person has no slots to it, and it stands as
+   * the agent does. Today's contract still gives every capability the person's slots, so `get`'s
+   * answer loses them once it is read.
+   */
+  person?: false;
 }
 /** One change in the control log, as `agents.activity` says it. */
 export type Change = z.output<typeof agentsInterface.methods.activity.output>["entries"][number];
@@ -699,6 +705,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     tabs: [{ id: 1, url: "https://shop.example/checkout", title: "Checkout" }],
   };
   let units = UNITS;
+  /** A unit's title, as what is offered now names it. */
+  const offeredTitle = (id: string) => units.find((c) => c.id === id)?.title;
   /** The form a unit has now, as offered. */
   const formOf = (provider: string, id: string) =>
     units.find((u) => u.provider === provider && u.id === id)?.form;
@@ -1004,7 +1012,8 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           instance,
           provider: unit.provider,
           unit: unit.unit,
-          title: UNITS.find((c) => c.id === unit.unit)?.title ?? unit.unit,
+          title:
+            UNITS.find((c) => c.id === unit.unit)?.title ?? offeredTitle(unit.unit) ?? unit.unit,
           values: unit.values ?? {},
           needs: {},
           status: { state: "connected" as const },
@@ -1274,6 +1283,19 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     throw new Refusal("invalid", `chat has no method ${method} here.`);
   };
 
+  /**
+   * What an agent holds that is marked `person: false` loses the person's slots, as a capability
+   * with no part outside the agent comes: after the answer is read, since today's contract still
+   * requires them.
+   */
+  const unreached = (answer: unknown, agent: Agent) => {
+    const { capabilities = [] } = answer as { capabilities?: { id: string; person?: unknown }[] };
+    for (const capability of capabilities) {
+      const n = capability.id.startsWith("held-") ? Number(capability.id.slice(5)) : -1;
+      if (agent.held?.[n]?.person === false) delete capability.person;
+    }
+  };
+
   const person = (slot: string, method: string, input: Record<string, unknown>): unknown => {
     if (management[slot]) {
       const iface = INTERFACES[slot] as Interface;
@@ -1288,7 +1310,9 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       }
       const always = refusing.get(`${slot}.${method}`);
       if (always) throw always;
-      return spec.output.parse(run(parsed));
+      const answer = spec.output.parse(run(parsed));
+      if (slot === "agents" && method === "get") unreached(answer, agentOf(String(parsed.agent)));
+      return answer;
     }
     if (slot.startsWith("chat_")) {
       const agent = agentOf(slot.slice(5).replaceAll("_", "-"));
@@ -1759,6 +1783,10 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
       if (retrying) one.retrying = retrying;
       else delete one.retrying;
       emit(workSlot(agent), "changed", { view: "activity" });
+    },
+    /** A unit comes to be offered too, below those offered. */
+    offerUnit(unit: Units["units"][number]) {
+      units = [...units, unit];
     },
     /** What an agent can be built from comes to be this: its bases, units and templates. */
     setCatalog(next: { bases: Creatable[]; units: Units["units"]; templates: Template[] }) {

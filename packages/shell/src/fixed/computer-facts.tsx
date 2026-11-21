@@ -8,18 +8,18 @@ import type { z } from "zod";
 import { api, useConnection } from "../data.ts";
 import { type OpenSurface, targetOf, windowsOf } from "./computer.tsx";
 import { Load } from "./computer-load.tsx";
-import type { AgentDetail } from "./data.ts";
+import { type AgentDetail, reachedOf } from "./data.ts";
 import type { LiveTarget } from "./live-socket.ts";
 import { PRESENCE, usePresence } from "./presence.tsx";
 
 type Row = z.output<typeof FactRow>;
-type Held = NonNullable<AgentDetail["capabilities"]>[number];
 
 /** The column's views of these kinds, in the order their capabilities give them. */
 const KINDS = ["facts", "meters", "presence"];
 
+/** Each is read through the person's own slots, so one with none has no place there. */
 export const columnOf = (detail: AgentDetail | undefined) =>
-  (detail?.capabilities ?? []).flatMap((held) =>
+  reachedOf(detail).flatMap((held) =>
     held.views
       .filter((view) => view.place === "column" && KINDS.includes(view.kind))
       .map((view) => ({ view, held })),

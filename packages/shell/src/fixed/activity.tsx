@@ -13,7 +13,7 @@ import { CallRow } from "./call-row.tsx";
 import { type Row, rowsOf } from "./calls.ts";
 import { age } from "./chat-parts.tsx";
 import { useComputers } from "./computers.tsx";
-import { type AgentDetail, type Tone, useEvery } from "./data.ts";
+import { type AgentDetail, reachedOf, type Tone, useEvery } from "./data.ts";
 import { Face, tintOf } from "./face.tsx";
 import { Nothing, Section, UNREAD } from "./parts.tsx";
 
@@ -38,10 +38,10 @@ const SECOND = 1000;
 
 /**
  * Where an agent's activity is read: the first view of kind `activity` one of its capabilities
- * has, asked through the person's own slots to it.
+ * has, asked through the person's own slots to it. One with none to it is passed over.
  */
 export function activityOf(detail: AgentDetail | undefined) {
-  for (const held of detail?.capabilities ?? [])
+  for (const held of reachedOf(detail))
     for (const view of held.views) {
       const tools = view.slot && held.person.operations[view.slot];
       if (view.kind === "activity" && view.operation && tools)
