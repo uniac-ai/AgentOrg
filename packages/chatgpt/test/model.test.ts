@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { accountLogin, llmSession } from "@agentorg/interfaces";
 import { defineActor } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
@@ -33,7 +35,7 @@ const modelOf = (
     exports: { login: accountLogin, session: llmSession },
     start(ctx) {
       const session = serveChatGPT(ctx.exports, {
-        fetch: (request) => web.fetch(request),
+        fetch: (request, init) => web.fetch(request, init),
         store,
         log: ctx.log,
         wait,
@@ -665,12 +667,12 @@ test("a cancel before OpenAI answers is a cancel, not an outage", async (t) => {
   const requested = new Promise<void>((resolve) => {
     seen = resolve;
   });
-  s.web.fetch = (request) => {
+  s.web.fetch = (request, init) => {
     if (!request.url.endsWith("/v1/responses")) return handle(request);
     seen();
     // OpenAI hasn't answered yet: the fetch ends only when the request is aborted.
     return new Promise<Response>((_, reject) =>
-      request.signal.addEventListener("abort", () =>
+      init?.signal?.addEventListener("abort", () =>
         reject(new DOMException("aborted", "AbortError")),
       ),
     );
@@ -783,14 +785,14 @@ test("a cut connection is tried for about three minutes: one back in twenty seco
     cut = true;
     server.closeAllConnections();
   };
-  s.web.fetch = async (request) => {
+  s.web.fetch = async (request, init) => {
     const url = new URL(request.url);
     if (url.origin !== "https://api.openai.com") return s.fake.handle(request);
     return fetch(`http://127.0.0.1:${port}${url.pathname}`, {
       method: request.method,
       headers: request.headers,
       body: await request.text(),
-      signal: request.signal,
+      signal: init?.signal ?? null,
     });
   };
   const responses = () => s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).length;
@@ -858,6 +860,12 @@ test("a cut connection is tried for about three minutes: one back in twenty seco
 test("a try that gets nothing for too long, before its first byte or between two, is given up, and as no try begins so late, its failure is the answer", {
   timeout: 15_000,
 }, async (t) => {
+  // Garbage is collected all along, as on a busy machine at any moment: an abort must reach the
+  // fetch and its stream by the signal given beside the request, not by the request's own link.
+  setFlagsFromString("--expose-gc");
+  const collect = runInNewContext("gc") as () => void;
+  const collecting = setInterval(collect, 3);
+  t.after(() => clearInterval(collecting));
   // Nothing for a second gives a try up here, five minutes in the app: each stall moves the clock
   // the tries are timed by as far as the app's would have gone.
   const s = await setup(t, undefined, 1000);
@@ -900,7 +908,7 @@ test("a try that gets nothing for too long, before its first byte or between two
     server.close();
     server.closeAllConnections();
   });
-  s.web.fetch = async (request) => {
+  s.web.fetch = async (request, init) => {
     const url = new URL(request.url);
     if (url.origin !== "https://api.openai.com" || !url.pathname.endsWith("/responses"))
       return s.fake.handle(request);
@@ -908,7 +916,7 @@ test("a try that gets nothing for too long, before its first byte or between two
       method: request.method,
       headers: request.headers,
       body: await request.text(),
-      signal: request.signal,
+      signal: init?.signal ?? null,
     });
   };
   const ask = () =>

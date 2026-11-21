@@ -47,11 +47,14 @@ async function setup(t: test.TestContext) {
   };
   const sent: Request[] = [];
   const inits: RequestInit[] = [];
-  const out: { respond?: (request: Request) => Promise<Response>; discovered?: string } = {};
+  const out: {
+    respond?: (request: Request, init: RequestInit) => Promise<Response>;
+    discovered?: string;
+  } = {};
   const through = async (request: Request, init: RequestInit) => {
     sent.push(request);
     inits.push(init);
-    if (out.respond && request.url.endsWith("/v1/responses")) return out.respond(request);
+    if (out.respond && request.url.endsWith("/v1/responses")) return out.respond(request, init);
     const response = await fake.handle(request);
     if (!out.discovered || !request.url.endsWith("/.well-known/openid-configuration"))
       return response;
@@ -195,10 +198,11 @@ test("closing stops a response still waiting on OpenAI, and leaves the Hub", asy
   await s.signIn();
   let aborted = false;
   let waiting = false;
-  s.out.respond = (request) =>
+  // Ended by the signal given beside the request, as fetch is given it.
+  s.out.respond = (_, init) =>
     new Promise((_, reject) => {
       waiting = true;
-      request.signal.addEventListener("abort", () => {
+      init.signal?.addEventListener("abort", () => {
         aborted = true;
         reject(new Error("aborted"));
       });

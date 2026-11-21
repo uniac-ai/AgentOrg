@@ -14,7 +14,12 @@ export const SCOPES = `openid profile email offline_access resource.invoke ${PLA
 export const DYNAMIC_CLIENT = "dynamic_agent_client";
 export const AGENT_NAME = "AgentOrg";
 
-export type Fetch = (request: Request) => Promise<Response>;
+/**
+ * How a request goes out. A request that may be given up says so with `signal`, given beside it:
+ * a `Request` made with a signal follows it only while that `Request` is kept, so once it is
+ * collected, an abort no longer reaches the fetch, nor a response's stream.
+ */
+export type Fetch = (request: Request, init?: { signal?: AbortSignal }) => Promise<Response>;
 
 /** What a grant gives. `expiresAt` is in milliseconds. */
 export interface Grant {

@@ -22,10 +22,10 @@ export function serveChatGPT(
 ) {
   const { store, log } = options;
   /** Every request's method, host, status and request id are logged; never its content. */
-  const fetch: Fetch = async (request) => {
+  const fetch: Fetch = async (request, init) => {
     const { method } = request;
     const { host } = new URL(request.url);
-    const response = await options.fetch(request);
+    const response = await options.fetch(request, init);
     log.info("request", {
       method,
       host,
