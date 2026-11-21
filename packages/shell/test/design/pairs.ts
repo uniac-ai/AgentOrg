@@ -10,9 +10,12 @@ import { SESSION, standIn } from "../stand-in.ts";
 import {
   ASKED,
   ASKS,
+  CARD_STATES,
+  type CardCase,
   type ChatCase,
   CREATES,
   type Create,
+  cardComes,
   closeEveryTab,
   computer,
   computerSays,
@@ -39,6 +42,7 @@ import {
   openSetup,
   openTemplates,
   openWindow,
+  PICKED,
   placeByTab,
   REACTION,
   REACTIONS,
@@ -46,6 +50,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchAsks,
   researchChanges,
   researchReacts,
   researchSays,
@@ -129,6 +134,8 @@ interface Screen {
   types?: Typing;
   /** Research's conversation, built, at one of the design's states for the agent's emoji. */
   reacts?: Reacted;
+  /** Research's conversation, built, at one of the design's states for its card. */
+  asks?: CardCase;
   /** Terminals the built side is given, as the design's sample has them. */
   terminals?: { cmd: string; running: boolean }[];
   design(page: Page): Promise<unknown>;
@@ -776,6 +783,46 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
+  // The agent's decision card, plain: Research's conversation at each of the design's states for it,
+  // on Chat. The first comes as the design's does; the picked one is picked by a tap.
+  ...(Object.keys(CARD_STATES) as CardCase[]).map(
+    (state): Screen => ({
+      name: `card-${state}`,
+      sizes: ["wide", "phone"],
+      themes: ["dark", "light"],
+      agents: true,
+      chats: true,
+      asks: state,
+      hash: "#/chat/a-research",
+      design: async (page) => {
+        await inDesign(page, CARD_STATES[state]);
+        if (state === "late")
+          await page
+            .getByRole("navigation", { name: "Main" })
+            .getByRole("button", { name: /^Chat/ })
+            .click()
+            .catch(() => {});
+        const region = page.getByRole("region", { name: "Conversation with Research" });
+        await region.locator('[data-slot="card"]').waitFor();
+        if (state === "picked") await region.locator('[data-ask="answered"]').waitFor();
+        if (state === "picked" || state === "typed")
+          await region.locator(".typing-dot").first().waitFor();
+      },
+      built: async (page, gateway) => {
+        const region = page.getByRole("region", { name: "Conversation with Research" });
+        await region.locator('[data-slot="bubble"]').first().waitFor();
+        if (state === "plain") {
+          await region.getByRole("status", { name: "Research is typing" }).waitFor();
+          cardComes(gateway);
+          gateway.setChatStatus("a-research", { state: "idle" });
+        }
+        if (state === "picked") await region.getByRole("radio", { name: PICKED }).click();
+        await region.locator('[data-slot="card"]').waitFor();
+        if (state === "picked" || state === "typed")
+          await region.locator(".typing-dot").first().waitFor();
+      },
+    }),
+  ),
   // Create for an agent, small: as it opens, from a template, signed out, and refused.
   ...SMALLS.map(
     ([state, sizes]): Screen => ({
@@ -1053,6 +1100,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
               screen.reacts,
               screen.reacts === "arrives" ? "coming" : "closed",
             );
+          if (screen.asks) researchAsks(gateway, screen.asks, screen.asks === "plain");
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.create) computerSays(gateway, screen.create);

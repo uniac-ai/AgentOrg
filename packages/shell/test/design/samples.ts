@@ -486,6 +486,105 @@ export function thanksComes(gateway: Gateway) {
   gateway.setChatStatus("a-research", { state: "working" });
 }
 
+/** The question Research puts on its card, and the choices it offers, as the design's sample has them. */
+export const QUESTION = "SPRING10 still applies after its date. What should I do?";
+const FIX = [
+  { label: "Fix it now" },
+  { label: "Fix it and add a test" },
+  { label: "Leave it for now" },
+];
+/** Research's cards: plain, without its question line, and with a line under two choices. */
+export const CARDS = {
+  plain: { questions: [{ question: QUESTION, choices: FIX }] },
+  bare: { questions: [{ choices: FIX }] },
+  detail: {
+    questions: [
+      {
+        question: QUESTION,
+        choices: [
+          { label: "Fix it now", detail: "Refuse it after its date, in cart/coupons" },
+          { label: "Fix it and add a test", detail: "The same, with a test that fails today" },
+          { label: "Leave it for now" },
+        ],
+      },
+    ],
+  },
+};
+/** The choice the design's sample picks, by its place, and what it is called. */
+export const PICK = 1;
+export const PICKED = "Fix it and add a test";
+/** What the person writes instead of picking. */
+export const TYPED = "Can you check the other coupons first?";
+/** Research's reply to the pick. */
+export const DONE = "Done: SPRING10 is refused after its date now, and a new test checks it.";
+/** The card at each of the design's states for it, by its control or address. */
+export const CARD_STATES = {
+  plain: "A plain card",
+  picked: "A plain card picked",
+  bare: "A card without a question line",
+  detail: "Choices with a line under them",
+  typed: "Typed instead",
+  late: "Opened late answered",
+} as const;
+export type CardCase = keyof typeof CARD_STATES;
+/**
+ * Research's conversation, built, at one of those states, as a page opened then reads it: its
+ * answer about the coupons under a card, open; written to instead, Research at work on that; or
+ * answered and replied to, after a thanks closed with the emoji. `coming`: Research is at work on
+ * the person's question, and `cardComes` gives the answer with its card.
+ */
+export function researchAsks(gateway: Gateway, state: CardCase, coming = false) {
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const ask = (id: string, text: string, ago: number) => ({
+    id,
+    role: "user" as const,
+    text,
+    at: at(ago),
+  });
+  const said = (id: string, text: string, ago: number) => ({
+    id,
+    role: "assistant" as const,
+    text,
+    at: at(ago),
+  });
+  const card = state === "bare" || state === "detail" ? CARDS[state] : CARDS.plain;
+  const start = [ask("v-u2", SAID.longAsk, 9), said("v-a2", SAID.long, 9)];
+  if (state === "late") {
+    gateway.converse("a-research", [
+      ...start,
+      ask("v-u7", THANKS, 8),
+      ask("v-u6", SECOND_ASK, 3),
+      { ...said("v-a6", COUPONS, 3), ask: card },
+      { ...ask("v-u9", PICKED, 2), answer: { to: "v-a6", picks: [[PICK]] } },
+      said("v-a9", DONE, 0),
+    ]);
+    gateway.progress("a-research", "v-u7", { state: "closed", reaction: REACTION });
+    gateway.setChatStatus("a-research", { state: "idle" });
+    return;
+  }
+  gateway.converse("a-research", [
+    ...start,
+    ask("v-u6", SECOND_ASK, coming ? 0 : 2),
+    ...(coming ? [] : [{ ...said("v-a6", COUPONS, state === "typed" ? 2 : 0), ask: card }]),
+    ...(state === "typed" ? [ask("v-u7", TYPED, 0)] : []),
+  ]);
+  const working = coming || state === "typed";
+  if (working) gateway.progress("a-research", coming ? "v-u6" : "v-u7", { state: "taken" });
+  gateway.setChatStatus("a-research", { state: working ? "working" : "idle" });
+}
+/** Research's answer about the coupons comes, with its card; Research is still at work. */
+export const cardComes = (
+  gateway: Gateway,
+  card: (typeof CARDS)[keyof typeof CARDS] = CARDS.plain,
+) =>
+  gateway.addMessage("a-research", {
+    id: "v-a6",
+    role: "assistant",
+    text: COUPONS,
+    at: new Date().toISOString(),
+    ask: card,
+  });
+
 /** What a page asks, as the design's sample has each. */
 export const ASKS = {
   confirm: {

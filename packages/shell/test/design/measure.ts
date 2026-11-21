@@ -16,8 +16,11 @@ import {
   ASKED,
   ASKS,
   between,
+  CARD_STATES,
+  type CardCase,
   type ChatCase,
   CREATES,
+  cardComes,
   closeEveryTab,
   computerSays,
   computerWith,
@@ -44,6 +47,7 @@ import {
   openSetup,
   openTemplates,
   openWindow,
+  PICKED,
   placeByTab,
   REACTION,
   REACTIONS,
@@ -51,6 +55,7 @@ import {
   readChat,
   refuseSend,
   releaseNotes,
+  researchAsks,
   researchChanges,
   researchReacts,
   researchSays,
@@ -92,6 +97,7 @@ const PARTS = [
   "thread",
   "typing",
   "reaction",
+  "card",
   "agent",
   "computer",
   "signin",
@@ -148,6 +154,7 @@ type Part =
   | "thread"
   | "typing"
   | "reaction"
+  | "card"
   | "earlier"
   | "agent"
   | "setup"
@@ -1474,6 +1481,51 @@ const probe = (what: Part): Parts => {
     }
     return parts;
   }
+  if (what === "card") {
+    const region = document.querySelector(
+      ':is([role="region"], section)[aria-label="Conversation with Research"]',
+    );
+    if (!region) return parts;
+    // From the person's second message, under the sample's long reply, as the emoji is measured.
+    const mine = [...region.querySelectorAll('[data-slot="message"][data-align="end"]')];
+    const from = mine[1]?.querySelector('[data-slot="bubble"]');
+    if (!from) return parts;
+    origin = new DOMRect(region.getBoundingClientRect().x, from.getBoundingClientRect().y);
+    parts.said = mine.length;
+    for (const [i, message] of mine.entries())
+      if (i > 0) parts[`said.${i}`] = of(message.querySelector('[data-slot="bubble"]'));
+    // The card: what it is, its question, and each choice's row, look and state.
+    const card = region.querySelector('[data-slot="card"]');
+    parts.card = of(card);
+    if (!card) return parts;
+    parts["card.state"] = card.getAttribute("data-ask");
+    parts["card.heard"] = `${card.getAttribute("role")} ${card.getAttribute("aria-label")}`;
+    const question = card.querySelector("p");
+    parts.question = of(question);
+    parts["question.words"] = question?.textContent ?? null;
+    const group = card.querySelector('[role="radiogroup"]');
+    parts.group = group
+      ? `${group.getAttribute("aria-label")} ${group.getAttribute("aria-disabled") ?? ""}`
+      : null;
+    const rows = [...card.querySelectorAll('[role="radio"]')];
+    parts.rows = rows.length;
+    for (const [i, row] of rows.entries()) {
+      const style = getComputedStyle(row);
+      parts[`row.${i}`] = of(row);
+      parts[`row.${i}.state`] =
+        `${row.getAttribute("aria-checked")} ${row.getAttribute("aria-disabled") === "true" || (row as HTMLButtonElement).disabled ? "unavailable" : "pressable"} ${style.borderTopStyle} ${style.borderTopColor}`;
+      parts[`row.${i}.words`] = row.textContent;
+      parts[`row.${i}.check`] = of(row.querySelector("svg")?.parentElement);
+    }
+    // Its room: from what is above it, and to what comes under it.
+    const b = card.getBoundingClientRect();
+    const bubbles = [...region.querySelectorAll('[data-slot="bubble"]')];
+    const above = bubbles.filter((one) => one.getBoundingClientRect().bottom <= b.top).at(-1);
+    const below = bubbles.find((one) => one.getBoundingClientRect().top >= b.bottom);
+    parts["card.above"] = above ? round(b.top - above.getBoundingClientRect().bottom) : null;
+    parts["card.below"] = below ? round(below.getBoundingClientRect().top - b.bottom) : null;
+    return parts;
+  }
   if (what === "thread") {
     const shell = document.querySelector("[data-shell]");
     const panel = document.querySelector('aside[aria-label="Chats"]');
@@ -2112,6 +2164,58 @@ if (wants("reaction"))
           });
           await rest(page, size);
           all[`reaction.${state}.${size}.${theme}.${side}`] = await measure(page, "reaction");
+          await page.close();
+          await gateway?.close();
+        }
+
+// The agent's decision card, plain: Research's conversation on Chat at each of the design's states
+// for it, wide and on a phone, at its end. The first comes as the design's does: the person's
+// question, the typing sign, then the reply with its card; the picked one is picked by a tap.
+const CARD_SEEN: Record<CardCase, string> = {
+  plain: "open",
+  picked: "answered",
+  bare: "open",
+  detail: "open",
+  typed: "passed",
+  late: "answered",
+};
+if (wants("card"))
+  for (const size of ["wide", "phone"] as const)
+    for (const theme of ["dark", "light"] as const)
+      for (const side of ["design", "built"] as const)
+        for (const state of Object.keys(CARD_STATES) as CardCase[]) {
+          const gateway = side === "built" ? await standIn() : undefined;
+          if (gateway) {
+            designAgents(gateway);
+            researchAsks(gateway, state, state === "plain");
+          }
+          const page = gateway
+            ? await builtPage(gateway, size, theme, "#/chat/a-research")
+            : await designPage(size, theme);
+          if (!gateway) await inDesign(page, CARD_STATES[state]);
+          const region = page.getByRole("region", { name: "Conversation with Research" });
+          if (!gateway && state === "late")
+            await page
+              .getByRole("navigation", { name: "Main" })
+              .getByRole("button", { name: /^Chat/ })
+              .click()
+              .catch(() => {});
+          await region.locator('[data-slot="bubble"]').first().waitFor();
+          if (gateway && state === "plain") {
+            await region.getByRole("status", { name: "Research is typing" }).waitFor();
+            cardComes(gateway);
+            gateway.setChatStatus("a-research", { state: "idle" });
+          }
+          if (gateway && state === "picked")
+            await region.getByRole("radio", { name: PICKED }).click();
+          await region.locator(`[data-slot="card"][data-ask="${CARD_SEEN[state]}"]`).waitFor();
+          if (state === "picked" || state === "typed")
+            await region.locator(".typing-dot").first().waitFor();
+          await region.locator('[data-slot="message-scroller-viewport"]').evaluate((room) => {
+            room.scrollTop = room.scrollHeight;
+          });
+          await rest(page, size);
+          all[`card.${state}.${size}.${theme}.${side}`] = await measure(page, "card");
           await page.close();
           await gateway?.close();
         }
