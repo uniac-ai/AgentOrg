@@ -55,6 +55,7 @@ import {
   researchReacts,
   researchSays,
   researchTypes,
+  reviewerWithout,
   SECTIONS,
   SIGN_INS,
   type SignIn,
@@ -78,6 +79,8 @@ import {
   type UnitWindow,
   unreadReply,
   WINDOWS,
+  WITHOUT_MEMORY,
+  type Without,
   windowSays,
   windowState,
   writeSoFar,
@@ -111,6 +114,8 @@ interface Screen {
   agents?: boolean;
   /** The design's Memory too, with Research's work and control log as the design has them. */
   memory?: boolean;
+  /** Reviewer runs without a plugin it couldn't load, or is mended, as the design's case. */
+  without?: Without;
   /** The built side is at its first start: one agent, with no conversation begun. */
   firstStart?: boolean;
   /** The built side's Settings lists the design's sample where it shows. */
@@ -942,6 +947,38 @@ const SCREENS: Screen[] = [
       }),
     ),
   ),
+  // Reviewer running without the plugins it couldn't load, as its status says, and once mended:
+  // its page, and Team's list on a phone.
+  ...(
+    [
+      ["without-memory", "Without memory", WITHOUT_MEMORY],
+      ["two-plugins-missing", "Two plugins missing", WITHOUT_MEMORY],
+      ["two-plugins-missing-while-stopped", "Two plugins missing while stopped", "Stopped"],
+      ["mended", "mended", "Idle"],
+    ] as const
+  ).flatMap(([without, control, says]) =>
+    [false, true].map(
+      (list): Screen => ({
+        name: list ? `${without}-the-list` : without,
+        sizes: list ? ["phone"] : ["wide", "phone"],
+        themes: ["dark", "light"],
+        agents: true,
+        memory: true,
+        without,
+        hash: list ? "#/team" : "#/a/a-reviewer/overview",
+        design: (page) => inDesign(page, list ? `${control}, the list` : control),
+        built: async (page) => {
+          const main = page.getByRole("main");
+          if (!list)
+            await main
+              .getByRole("region", { name: "Built from", exact: true })
+              .getByText(/Memory$/)
+              .waitFor();
+          await main.getByText(says).first().waitFor();
+        },
+      }),
+    ),
+  ),
   {
     name: "agent-setup",
     sizes: ["wide", "phone"],
@@ -1092,6 +1129,7 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
             sampleWork(gateway);
             researchChanges(gateway);
           }
+          if (screen.without) reviewerWithout(gateway, screen.without);
           // Before the page is read, as a conversation opened later reads it.
           if (screen.research) researchSays(gateway, screen.research);
           if (screen.types) researchTypes(gateway, screen.types);

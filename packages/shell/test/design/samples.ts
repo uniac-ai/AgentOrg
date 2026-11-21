@@ -912,6 +912,25 @@ export function designMemory(gateway: Gateway) {
   memory(gateway.agents.get("a-research") as Agent);
 }
 
+/** What a status says of a plugin an agent runs without, one sentence each: the design's sample. */
+export const WITHOUT_MEMORY = "It runs without memory: its lines couldn't be read.";
+export const WITHOUT_SEARCH = "It runs without search: its provider has no plugin by that name.";
+/** The design's cases of an agent that runs without a plugin it couldn't load, by its address. */
+export type Without =
+  | "without-memory"
+  | "two-plugins-missing"
+  | "two-plugins-missing-while-stopped"
+  | "mended";
+/** Reviewer's status as the design has it in one of those cases. */
+export function reviewerWithout(gateway: Gateway, without: Without) {
+  const detail =
+    without === "without-memory" ? WITHOUT_MEMORY : `${WITHOUT_MEMORY}\n${WITHOUT_SEARCH}`;
+  (gateway.agents.get("a-reviewer") as Agent).status =
+    without === "mended"
+      ? { state: "running" }
+      : { state: without.endsWith("-while-stopped") ? "stopped" : "running", detail };
+}
+
 /** Reviewer as the design has it: its one skill, GitHub under the design's slot, and its review. */
 export function designReviewer(gateway: Gateway) {
   const at = new Date(Date.now() - 12 * 60_000).toISOString();

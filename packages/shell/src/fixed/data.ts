@@ -240,6 +240,9 @@ export const named = (title: string) =>
  * How an agent stands, of itself: what runs it first, then something it holds that is down, then
  * whether it works, then its connections. Each down thing is one sentence: what is down, what that
  * leaves out, and why. What went wrong in one of its chats is that chat's to say.
+ *
+ * Running, what its status says is wrong comes first: whole sentences, one a line, as given. A
+ * stopped or starting agent keeps its own word, since what it runs without is said once it runs.
  */
 export function nowOf(
   status: AgentEntry["status"],
@@ -248,6 +251,7 @@ export function nowOf(
   held?: DownCapability,
 ): Now {
   if (status.state === "down") return { tone: "trouble", text: status.detail ?? "Down" };
+  if (status.state === "running" && status.detail) return { tone: "trouble", text: status.detail };
   if (held && status.state === "running") {
     const out = [held.windows && "windows", held.tools && "tools"].filter(Boolean).join(" and ");
     return {
