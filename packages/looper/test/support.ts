@@ -27,6 +27,8 @@ import type { Part } from "../src/told.ts";
 export function looperWith(
   options: {
     tools?: Tool[];
+    /** Functions the main loop is offered beside its own when it decides on a message. */
+    frontDesk?: Tool[];
     stopped?: boolean;
     askAfterSend?: boolean;
     /** Asked to end what a stopped turn's calls left running, by their group. */
@@ -101,6 +103,8 @@ export function looperWith(
   const lives: string[] = [];
   /** Each close said with a reaction: `thread: id emoji`. */
   const reactions: string[] = [];
+  /** What the looper warned of in its log, in order. */
+  const warnings: string[] = [];
   /**
    * What each worker's request held, in the order the model reads it, each of the person's
    * messages without the number it starts with, and what was sent as its words; `numbered` has
@@ -280,6 +284,7 @@ export function looperWith(
           : (options.instructions ?? ""),
       tools: options.tools ?? [],
       ...(options.voice === undefined ? {} : { voice: options.voice }),
+      ...(options.frontDesk === undefined ? {} : { frontDesk: options.frontDesk }),
     }),
     out: {
       message(thread, { id, role, text, images, ask, answer }) {
@@ -310,7 +315,7 @@ export function looperWith(
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
     ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
     ...(options.files === undefined ? {} : { files: options.files }),
-    log: { info() {}, warn() {}, error() {} },
+    log: { info() {}, warn: (message) => void warnings.push(message), error() {} },
   });
   /**
    * Answer the request that ends with `text`, or fail it: the newest still out, or with `of`,
@@ -355,6 +360,7 @@ export function looperWith(
     progress,
     lives,
     reactions,
+    warnings,
     answer,
     fail,
     fill,

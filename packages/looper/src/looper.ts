@@ -202,6 +202,10 @@ export function createLooper(options: {
    * who the main loop speaks as when it answers a message itself: what the host's own model is
    * told of itself, with nothing of what it can call. `blocks` are the host's own parts the main
    * loop is told after the voice when it answers itself; a worker has them in `instructions`.
+   * `frontDesk` are functions the main loop is offered beside its own when it decides on a
+   * message, not when it hears of one that joined a turn: each it calls runs once the reply is in,
+   * before the decision is acted on, with the request's id as its group, and what it gives goes to
+   * no model. None by default.
    */
   request(): Promise<{
     instructions: string | readonly Part[];
@@ -209,6 +213,7 @@ export function createLooper(options: {
     model?: string | undefined;
     voice?: string | undefined;
     blocks?: readonly Part[] | undefined;
+    frontDesk?: readonly Tool[] | undefined;
   }>;
   out: LooperOut;
   /** Whether it starts stopped: no turn starts until `start`. */
