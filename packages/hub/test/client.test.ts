@@ -182,6 +182,35 @@ test("an event sent to one caller reaches only that consumer; a handler knows it
   );
 });
 
+test("a subscription sent before a call is in effect at the provider before that call is served", async (t) => {
+  const { url, person, makeActor } = await setup(t);
+  const p = await makeActor("provider");
+  const provider = await connect({ hubUrl: url, ...p, exports: { notes } });
+  t.after(() => provider.close());
+  // A write tells of itself as it is served, so only a subscription already in effect hears it.
+  provider.exports.notes.implement({
+    write: async ({ text }) => {
+      provider.exports.notes.emit("written", { text });
+      return { n: 1 };
+    },
+  });
+  // Exposed to the person, as each agent's chat is.
+  const exposed = await person.slots.grants.call.expose({
+    provider: p.actorId,
+    export: "notes",
+    to: PERSON,
+  });
+  const slot = () => person.exposed().find((one) => one.slot === exposed.slot);
+  await until(() => slot() !== undefined);
+  // Followed, then called with nothing awaited between, as the page follows a conversation and
+  // then reads it: nothing acknowledges the subscription.
+  const heard: unknown[] = [];
+  slot()?.on("written", (payload) => heard.push(payload));
+  assert.deepEqual(await slot()?.call.write?.({ text: "said meanwhile" }), { n: 1 });
+  await until(() => heard.length > 0).catch(() => {});
+  assert.deepEqual(heard, [{ text: "said meanwhile" }], "the event the call made was missed");
+});
+
 test("a provider that restarts: onBind runs again and events resume, with bound unchanged", async (t) => {
   const { url, makeActor, bind } = await setup(t);
   const p = await makeActor("provider");
