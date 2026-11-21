@@ -31,4 +31,5 @@ export {
   type Store,
   type Tool,
   type ToolSpec,
+  type WorkLife,
 } from "./types.js";

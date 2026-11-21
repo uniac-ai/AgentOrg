@@ -4,11 +4,13 @@ import { chat, tools } from "@agentorg/interfaces";
 import { capped, Entry, MAX_OUTPUT, REQUEST_BUDGET, textOf } from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
+import type { Context } from "cordis";
 import { z } from "zod";
+import { type AgentPlugin, createPluginHost, type Life } from "../src/plugins.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
-import engine, { EARLIER, engines, INSTRUCTIONS } from "./engine-actor.ts";
+import engine, { EARLIER, engines, given, INSTRUCTIONS } from "./engine-actor.ts";
 
 /** An interface that isn't `tools@1`. */
 const other = defineInterface({
@@ -1222,6 +1224,108 @@ test("what a worker sends streams into the chat as the reply it becomes; what it
   // The next user message has a number of its own, never the reply's id.
   const next = (await s.chat("send", { text: "Again." })) as { messageId: string };
   assert.notEqual(next.messageId, reply?.id);
+});
+
+test("a plugin's function is offered under its name and its block follows the agent's words, the front desk's included; it hears its turns start and end, and the agent go idle", async (t) => {
+  const heard: string[] = [];
+  const notes: AgentPlugin = {
+    name: "notes",
+    inject: ["agent"],
+    apply(ctx: Context) {
+      ctx.effect(() =>
+        ctx.agent.tool({
+          name: "keep",
+          parameters: { type: "object", properties: {} },
+          run: async () => ({ output: "Kept.", ok: true }) as never,
+        }),
+      );
+      ctx.effect(() => ctx.agent.block(() => "Notes: none yet."));
+      for (const event of ["turnStarted", "turnEnded", "idle"] as Life[])
+        ctx.effect(() =>
+          ctx.agent.on(event, ({ work }) => void heard.push(work ? `${event} ${work}` : event)),
+        );
+    },
+  };
+  const quiet = { info() {}, warn() {}, error() {} };
+  given.plugins = await createPluginHost(quiet).open("assistant", {
+    store: memory().handlers as never,
+    plugins: [{ plugin: notes }],
+  });
+  t.after(() => {
+    delete given.plugins;
+  });
+  const s = await setup();
+  await s.turn("Hi.");
+  const asked = s.whole[0] as Request & { instructions: string };
+  assert.ok(offeredNames(asked)?.includes("notes__keep"));
+  const told = String(asked.instructions);
+  assert.ok(told.includes("Notes: none yet."));
+  assert.ok(told.indexOf(INSTRUCTIONS) < told.indexOf("Notes: none yet."));
+  // The front desk is told it after who it speaks as, when it may answer itself.
+  const front = String(s.routed[0]?.instructions);
+  assert.ok(front.startsWith("You are the front desk."));
+  assert.ok(front.endsWith(`\n\n${INSTRUCTIONS}\n\nNotes: none yet.`));
+  assert.ok(!offeredNames(s.routed[0])?.includes("notes__keep"));
+  const work = heard.find((one) => one.startsWith("turnStarted "))?.split(" ")[1];
+  assert.ok(work);
+  assert.deepEqual(heard, [`turnStarted ${work}`, `turnEnded ${work}`, "idle"]);
+});
+
+test("a plugin hears the agent stopped last, once the turn it was in was cut", async (t) => {
+  const heard: string[] = [];
+  const listening: AgentPlugin = {
+    name: "listening",
+    inject: ["agent"],
+    apply(ctx: Context) {
+      for (const event of ["turnStarted", "turnEnded", "idle", "stopped"] as Life[])
+        ctx.effect(() => ctx.agent.on(event, () => void heard.push(event)));
+    },
+  };
+  const quiet = { info() {}, warn() {}, error() {} };
+  given.plugins = await createPluginHost(quiet).open("assistant", {
+    store: memory().handlers as never,
+    plugins: [{ plugin: listening }],
+  });
+  t.after(() => {
+    delete given.plugins;
+  });
+  const s = await setup();
+  const late = gate();
+  s.script.push(() =>
+    late.shut.then(() => {
+      throw new Refused("cancelled", "The response was cancelled.");
+    }),
+  );
+  await s.chat("send", { text: "Think long." });
+  await until(() => s.requests.length === 1, "the model request");
+  await s.host.stop();
+  late.open();
+  await s.host.settled();
+  assert.deepEqual(heard, ["turnStarted", "turnEnded", "idle", "stopped"]);
+});
+
+test("a plugin that gives nothing changes no byte of what a request carries: the same instructions and tools as with none", async (t) => {
+  const run = async () => {
+    const s = await setup();
+    await s.turn("Hi.");
+    const { instructions, tools: offered } = s.whole[0] as Request & { instructions: unknown };
+    const front = s.routed[0] as Request & { instructions: unknown };
+    return JSON.stringify({
+      instructions,
+      tools: offered,
+      front: { instructions: front.instructions, tools: front.tools },
+    });
+  };
+  const none = await run();
+  const quiet = { info() {}, warn() {}, error() {} };
+  given.plugins = await createPluginHost(quiet).open("assistant", {
+    store: memory().handlers as never,
+    plugins: [{ plugin: { name: "silent", inject: ["agent"], apply() {} } }],
+  });
+  t.after(() => {
+    delete given.plugins;
+  });
+  assert.equal(await run(), none);
 });
 
 test("a refusal from the model is its chat's problem, with its code, until the chat's next reply", async () => {

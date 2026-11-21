@@ -93,6 +93,8 @@ export function looperWith(
    * step, `thread: id fact: step`.
    */
   const progress: string[] = [];
+  /** What each piece of work's life said, in order: `work: event`. */
+  const lives: string[] = [];
   /**
    * What each worker's request held, in the order the model reads it, each of the person's
    * messages without the number it starts with, and what was sent as its words; `numbered` has
@@ -284,6 +286,7 @@ export function looperWith(
       failed: (thread, { code }) => void failures.push(`${thread}: ${code}`),
       // None for the main loop: its model request being tried again, or no longer.
       worked: (work) => void worked.push(work ?? ""),
+      life: ({ event, work }) => void lives.push(`${work}: ${event}`),
       progress: (thread, id, fact, step) =>
         void progress.push(`${thread}: ${id} ${fact}${step === undefined ? "" : `: ${step}`}`),
     },
@@ -334,6 +337,7 @@ export function looperWith(
     failures,
     worked,
     progress,
+    lives,
     answer,
     fail,
     fill,

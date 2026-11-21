@@ -26,6 +26,7 @@ import {
 } from "@agentorg/looper";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
+import type { Heard, Life } from "./plugins.js";
 import { filesOf, head, relayed } from "./tools.js";
 
 type Store = Slot<typeof kv>["call"];
@@ -167,6 +168,7 @@ export function createChats(options: {
     tools: Tool[];
     model?: string | undefined;
     voice?: string | undefined;
+    blocks?: readonly Part[] | undefined;
   }>;
   /** Whether the agent is stopped when its conversations are first held. */
   stopped: boolean;
@@ -182,6 +184,8 @@ export function createChats(options: {
     /** What a piece of the agent's work did changed. */
     worked(): void;
   };
+  /** Its plugins, told of its life: its work's turns and summaries, and its going idle. */
+  life?(event: Life, heard?: Heard): void;
   log: Log;
 }) {
   const { store, emit, log } = options;
@@ -244,7 +248,9 @@ export function createChats(options: {
         working(on) {
           working = on;
           emit.status(stateNow());
+          if (!on) options.life?.("idle");
         },
+        life: ({ event, work }) => options.life?.(event, work === undefined ? {} : { work }),
         // A message in the conversation got no answer: it is told why. The looper says this
         // before it says the agent is idle.
         failed(thread, { code, message }) {

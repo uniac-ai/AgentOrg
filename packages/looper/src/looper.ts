@@ -61,6 +61,7 @@ import {
   type Status,
   type Store,
   type Tool,
+  type WorkLife,
 } from "./types.js";
 
 /** The turns that run at once, not counting the one more for work already begun. */
@@ -150,6 +151,12 @@ export interface LooperOut {
    * the new words or none, as they change.
    */
   progress?(thread: string, id: string, progress: Progress, step?: string): void;
+  /**
+   * What happened in the life of the piece of work `work`: one of its turns started or ended, or
+   * its record is about to be, or was, summarized. Said for whoever follows the agent's life; what
+   * hears it changes nothing here.
+   */
+  life?(event: { event: WorkLife; work: string }): void;
 }
 
 /**
@@ -164,13 +171,15 @@ export function createLooper(options: {
    * change between two: what the model is told, as words or as parts in order (see `told.ts`), what
    * it can call, and which model to ask, none meaning the model's own default. `voice` is
    * who the main loop speaks as when it answers a message itself: what the host's own model is
-   * told of itself, with nothing of what it can call.
+   * told of itself, with nothing of what it can call. `blocks` are the host's own parts the main
+   * loop is told after the voice when it answers itself; a worker has them in `instructions`.
    */
   request(): Promise<{
     instructions: string | readonly Part[];
     tools: Tool[];
     model?: string | undefined;
     voice?: string | undefined;
+    blocks?: readonly Part[] | undefined;
   }>;
   out: LooperOut;
   /** Whether it starts stopped: no turn starts until `start`. */
@@ -485,8 +494,11 @@ export function createLooper(options: {
           progress: (thread, message, progress, step) =>
             out.progress?.(thread, message, progress, step),
           worked: () => out.worked(id),
+          life: (event) => out.life?.({ event, work: id }),
           status(status) {
             const on = running(status);
+            if (on !== held.active)
+              out.life?.({ event: on ? "turnStarted" : "turnEnded", work: id });
             // A turn that starts is marked, but one that goes on from a cut-off has that mark
             // taken off: it goes on once. A turn that ends takes its mark off, but one cut by the
             // looper closing keeps it, for whoever opens the store next.

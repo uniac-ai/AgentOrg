@@ -11,7 +11,7 @@
  */
 import { NO_REPLY } from "./loop.js";
 import { PICTURES_BUDGET, withPictures } from "./record.js";
-import { build } from "./told.js";
+import { build, type Part } from "./told.js";
 import {
   head,
   type Item,
@@ -189,10 +189,14 @@ const put = (said: Said[], works: Listed[], back: Returned[] = [], last?: string
 export function createMain(options: {
   model: Model;
   /**
-   * Read for each request: which model to ask, none meaning the model's own default, and who the
-   * main loop speaks as when it answers itself.
+   * Read for each request: which model to ask, none meaning the model's own default, who the main
+   * loop speaks as when it answers itself, and the host's blocks it is told after that.
    */
-  request(): Promise<{ model?: string | undefined; voice?: string | undefined }>;
+  request(): Promise<{
+    model?: string | undefined;
+    voice?: string | undefined;
+    blocks?: readonly Part[] | undefined;
+  }>;
   /** Whether its request out now is being tried again changed. */
   retried(): void;
   log: Log;
@@ -217,13 +221,25 @@ export function createMain(options: {
     options.retried();
   };
 
-  /** What the main loop is told when it may answer: its words, then who it speaks as, if anyone. */
-  const spokenAs = (instructions: string, voice: string | undefined) => {
-    if (!voice) return instructions;
+  /**
+   * What the main loop is told when it may answer: its words, then who it speaks as, if anyone, and
+   * the host's blocks after that, as a worker is told them after the agent's words.
+   */
+  const spokenAs = (
+    instructions: string,
+    voice: string | undefined,
+    blocks: readonly Part[] = [],
+  ) => {
+    if (!voice && blocks.length === 0) return instructions;
     const told = build([
       { owner: "looper", text: instructions },
-      { owner: "looper", text: VOICE },
-      { owner: "host", text: voice, max: TOLD.voice },
+      ...(voice
+        ? [
+            { owner: "looper", text: VOICE },
+            { owner: "host", text: voice, max: TOLD.voice },
+          ]
+        : []),
+      ...blocks,
     ]);
     for (const part of told.cut)
       options.log.warn(
@@ -257,12 +273,12 @@ export function createMain(options: {
     try {
       const given = await Promise.race([options.request().then((to) => ({ to })), gone]);
       if (!given || mine.dropped) return undefined;
-      const { model, voice } = given.to;
+      const { model, voice, blocks } = given.to;
       mine.requestId = crypto.randomUUID();
       const asked = options.model.respond({
         requestId: mine.requestId,
         ...(model ? { model } : {}),
-        instructions: voiced ? spokenAs(instructions, voice) : instructions,
+        instructions: voiced ? spokenAs(instructions, voice, blocks) : instructions,
         input,
         tools,
       });
