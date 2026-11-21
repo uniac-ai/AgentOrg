@@ -60,7 +60,8 @@ const OnAgent = z.object({ agent: Id });
 
 /**
  * How an agent stands now, as what runs it knows: `starting`, `running`, `stopped` by the person,
- * or `down`, which it didn't ask for. `detail` says why it is down.
+ * or `down`, which it didn't ask for. `detail` says why it is down; or, though it runs, what is
+ * wrong with it: whole sentences, each on a line of its own.
  */
 export const AgentStatus = z.object({
   state: z.enum(["starting", "running", "stopped", "down"]),
