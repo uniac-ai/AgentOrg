@@ -45,6 +45,7 @@ import {
   codeOf,
   head,
   type Item,
+  type Json,
   type Log,
   type Model,
   type Outcome,
@@ -84,6 +85,30 @@ const toolsChanged = (before: readonly string[], now: readonly string[]) => {
   };
 };
 
+/** A card's choices, as `send` offers them: short labels, or a label with a line under it. */
+const CHOICES: Record<string, Json> = {
+  type: "array",
+  minItems: 1,
+  maxItems: 4,
+  items: {
+    anyOf: [
+      { type: "string" },
+      {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          detail: { type: "string", description: "A line under it, under 120 characters." },
+        },
+        required: ["label"],
+      },
+    ],
+  },
+};
+/** A close's reaction, as `no_reply_needed` and the main loop's close offer it. */
+export const REACTION = {
+  type: "string",
+  description: "One emoji, such as 👍 to a thanks: it shows on their message and notifies no one.",
+};
 /** A function of the looper's own: what a worker says to whoever said a message, in reply to it. */
 export const SEND: ToolSpec = {
   name: SEND_NAME,
@@ -94,6 +119,16 @@ export const SEND: ToolSpec = {
     properties: {
       message: { type: "number", description: "The number the message starts with." },
       text: { type: "string", description: "What to say, as they will read it." },
+      choices: {
+        ...CHOICES,
+        description:
+          'Only when your last message of a turn leaves them a decision: one to four short choices, each under 48 characters, shown as a card they answer with a tap. Their pick comes back as their next message. The card is the offer, so don\'t also write "want me to…?".',
+      },
+      confirm: {
+        type: "boolean",
+        description: "They pick, then confirm: for what can't be undone.",
+      },
+      many: { type: "boolean", description: "They may pick several." },
     },
     required: ["message", "text"],
   },
@@ -161,15 +196,16 @@ export const STATUS: ToolSpec = {
     },
   },
 };
-/** A function of the looper's own: it says a message needs no reply, and closes it quietly. */
+/** A function of the looper's own: it says a message needs no reply, and closes it, with a reaction if one is given. */
 export const NO_REPLY: ToolSpec = {
   name: NO_REPLY_NAME,
   description:
-    "Says a message needs no reply: it is closed quietly, with nothing said to anyone. For a message that asks for nothing, such as thanks or an acknowledgement.",
+    "Says a message needs no reply: it is closed with nothing said to anyone. For a message that asks for nothing, such as thanks or an acknowledgement. Give a reaction with it, so they see it was read.",
   parameters: {
     type: "object",
     properties: {
       message: { type: "number", description: "The number the message starts with." },
+      reaction: REACTION,
     },
     required: ["message"],
   },
@@ -178,7 +214,7 @@ export const NO_REPLY: ToolSpec = {
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /**
  * A close's reaction as given: one emoji, a flag or a sequence joined into one included, or nothing
- * when what was given is no emoji. Not yet offered to the model: `no_reply_needed` takes it.
+ * when what was given is no emoji, as `no_reply_needed` and the main loop's close take it.
  */
 export const reactionOf = (value: unknown): string | undefined =>
   typeof value === "string" &&
@@ -224,9 +260,11 @@ const questionOf = (value: Record<string, unknown>): Card["questions"][number] |
   };
 };
 /**
- * A reply's card as `send` gives it: `choices`, with `question`, `many` and `confirm`, for one
- * question; or `questions`, two to four, each named by its `header`. None when neither is given;
- * `false` when what is given breaks what a card holds. Not yet offered to the model.
+ * A reply's card as `send` gives it: `choices`, with `many` and `confirm`, for one question, whose
+ * words are the message's own; or `questions`, two to four, each named by its `header`. A lone
+ * card's `question`, and `questions`, are taken and not offered: the first is the message above
+ * the card, and the second waits for a page that draws tabs. None when neither is given; `false`
+ * when what is given breaks what a card holds.
  */
 export const askOf = (args: Record<string, unknown>): Card | undefined | false => {
   const { questions, choices, confirm } = args;

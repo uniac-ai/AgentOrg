@@ -50,12 +50,30 @@ async function thanked(options: Parameters<typeof looperWith>[0] = {}) {
   return made;
 }
 
-test("neither a reaction nor a card is offered to the model yet: send, no_reply_needed and the main loop's close are as they were", () => {
-  for (const spec of [SEND, NO_REPLY, CLOSE]) {
-    const offered = Object.keys((spec.parameters as { properties: object }).properties);
-    for (const name of ["reaction", "choices", "questions"])
-      assert.ok(!offered.includes(name), `${spec.name}: ${name}`);
-  }
+test("the model is offered a card on send, and a reaction on no_reply_needed and the main loop's close, each told when to use it", () => {
+  type Offered = Record<string, { description?: string; maxItems?: number; minItems?: number }>;
+  const properties = (spec: typeof SEND) => (spec.parameters as { properties: Offered }).properties;
+  const card = properties(SEND);
+  assert.match(
+    card.choices?.description ?? "",
+    /^Only when your last message of a turn leaves them a decision/,
+  );
+  assert.match(card.choices?.description ?? "", /don't also write "want me to…\?"/);
+  assert.match(card.choices?.description ?? "", /each under 48 characters/);
+  assert.deepEqual([card.choices?.minItems, card.choices?.maxItems], [1, 4]);
+  // Several questions on one card are taken, and not offered until a page draws their tabs.
+  assert.deepEqual(Object.keys(card), ["message", "text", "choices", "confirm", "many"]);
+  for (const spec of [NO_REPLY, CLOSE])
+    assert.match(
+      properties(spec).reaction?.description ?? "",
+      /^One emoji, such as 👍 to a thanks/,
+      spec.name,
+    );
+  // The function itself says to give one: its parameter alone was never used in a run.
+  for (const spec of [NO_REPLY, CLOSE])
+    assert.match(spec.description ?? "", /Give a reaction with it, so they see it was read\.$/);
+  assert.equal("reaction" in card, false);
+  assert.equal("choices" in properties(NO_REPLY), false);
 });
 
 test("a worker's close with a reaction keeps it: said with the close, and on the message a page reads later", async () => {

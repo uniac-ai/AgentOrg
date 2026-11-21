@@ -9,7 +9,7 @@
  * and `no_reply_needed`, which it is not offered for a message that joined turns. Each time is
  * one model request, which holds nothing of those before it but what it is given.
  */
-import { NO_REPLY, reactionOf } from "./loop.js";
+import { NO_REPLY, REACTION, reactionOf } from "./loop.js";
 import { PICTURES_BUDGET, withPictures } from "./record.js";
 import { build, type Part } from "./told.js";
 import {
@@ -75,7 +75,10 @@ export const ROUTE: ToolSpec = {
  * The function the main loop calls when what came in needs no reply: a worker's, but for all it
  * decides on, which it names by no number.
  */
-export const CLOSE: ToolSpec = { ...NO_REPLY, parameters: { type: "object", properties: {} } };
+export const CLOSE: ToolSpec = {
+  ...NO_REPLY,
+  parameters: { type: "object", properties: { reaction: REACTION } },
+};
 
 /** A piece of work as the main loop is told of it. */
 export interface Listed {
