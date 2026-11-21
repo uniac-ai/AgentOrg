@@ -79,7 +79,13 @@ export async function fakeOpenAI() {
   const access = new Map<string, { clientId: string; expiresAt: number }>();
   const refresh = new Map<string, { clientId: string; live: boolean }>();
   const secrets = new Set<string>();
-  const requests: { method: string; url: string; body: string; status?: number }[] = [];
+  const requests: {
+    method: string;
+    url: string;
+    body: string;
+    headers: Record<string, string>;
+    status?: number;
+  }[] = [];
   const script: Script[] = [];
 
   const options = {
@@ -360,7 +366,12 @@ export async function fakeOpenAI() {
     },
     async handle(request: Request): Promise<Response> {
       const body = request.method === "GET" ? "" : await request.text();
-      const seen: (typeof requests)[number] = { method: request.method, url: request.url, body };
+      const seen: (typeof requests)[number] = {
+        method: request.method,
+        url: request.url,
+        body,
+        headers: Object.fromEntries(request.headers),
+      };
       requests.push(seen);
       const response = await route(request, body);
       seen.status = response.status;

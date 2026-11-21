@@ -1,4 +1,5 @@
 /** Inference on the person's ChatGPT plan: the Responses API, streamed, with nothing stored at OpenAI. */
+import { createHash } from "node:crypto";
 import type { Item, llmSession, OutputItem, Pictures } from "@agentorg/interfaces";
 import { type Log, Refused } from "@agentorg/sdk";
 import type { z } from "zod";
@@ -401,6 +402,16 @@ function stalls(signal: AbortSignal, ms: number) {
   };
 }
 
+/**
+ * The key one caller's requests are sent under, so that OpenAI keeps them together and a request
+ * can read from its cache what an earlier one of the same caller left there. It goes as the body's
+ * `prompt_cache_key` and as the `session-id` header, as Codex sends its session's to its own
+ * ChatGPT backend. Opaque: a hash of the calling Actor's id, never a name or anything a person
+ * wrote.
+ */
+export const cacheKeyOf = (caller: string) =>
+  createHash("sha256").update(`agentorg prompt cache\0${caller}`).digest("hex").slice(0, 32);
+
 export function createSession(options: {
   fetch: Fetch;
   account: Account;
@@ -598,6 +609,7 @@ export function createSession(options: {
         : {}),
       stream: true,
       store: false,
+      prompt_cache_key: cacheKeyOf(caller),
     });
     quiet.heard();
     const response = await authorized(
@@ -608,6 +620,7 @@ export function createSession(options: {
             authorization: `Bearer ${token}`,
             "content-type": "application/json",
             accept: "text/event-stream",
+            "session-id": cacheKeyOf(caller),
           },
           body,
         }),
