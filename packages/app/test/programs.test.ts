@@ -409,7 +409,7 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
     );
     return worker[from] as (typeof worker)[number];
   };
-  const line = /\n## What you remember\n- \[1\] The person is called Sam\. \(\d{4}-\d{2}-\d{2}\)\n/;
+  const line = /\nWhat you remember:\n- \[1\] The person is called Sam\. \(\d{4}-\d{2}-\d{2}\)\n/;
   await until(() => reached(person), "the chat to be exposed");
 
   // Told "Call me Sam.", the worker writes it down.
@@ -423,7 +423,7 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
   ]);
   const first = await turn("Call me Sam.");
   assert.ok(first.tools.includes("memory__edit"), "offered memory's function");
-  assert.doesNotMatch(first.instructions, /What you remember/, "nothing remembered yet");
+  assert.match(first.instructions, /\nYou remember nothing yet\.\n/, "nothing remembered yet");
   // At its next turn it is told the line.
   assert.match((await turn("What's my name?")).instructions, line);
   // And after the app starts again, from the agent's own store.

@@ -306,6 +306,8 @@ async function startService() {
 const spent = {
   total: 0,
   frontDesk: 0,
+  /** The front desk's input tokens, which grow by the functions it is offered. */
+  frontDeskInput: 0,
   input: 0,
   cached: 0,
   output: 0,
@@ -313,6 +315,61 @@ const spent = {
   models: new Set(),
 };
 const requests = [];
+/** What the colleague is for, by which its requests are told apart from the agent's. */
+const COLLEAGUE = "Asks the other agents what the person tells it to ask.";
+/** Each agent's colleague, made for a step another agent says, by the agent it may reach. */
+const colleagues = new Map();
+
+/** Where an agent's own store keeps its keys, one file each. */
+const storeOf = (agent) => join(home, "programs", "agents", "agents", agent, "kv");
+/** The words of the agent's memory lines, as its memory keeps them. */
+function memoryOf(agent) {
+  try {
+    const kept = JSON.parse(
+      readFileSync(join(storeOf(agent), encodeURIComponent("plugin/memory/lines")), "utf8"),
+    );
+    return kept.lines.map((line) => line.text);
+  } catch {
+    return [];
+  }
+}
+/**
+ * Clear the agent's conversations and keep its memory, its plugins' other keys and its settings,
+ * as when a conversation is shortened or replaced: run with the app stopped.
+ */
+function forgetConversations(agent) {
+  const keep = [encodeURIComponent("plugin/"), encodeURIComponent("settings/")];
+  for (const key of readdirSync(storeOf(agent)))
+    if (!keep.some((prefix) => key.startsWith(prefix))) unlinkSync(join(storeOf(agent), key));
+}
+
+/**
+ * An agent that may reach every other, to say a step from another agent: made once for the agent
+ * measured, with no computer, and removed with it.
+ */
+async function colleagueOf(agent) {
+  if (colleagues.has(agent)) return colleagues.get(agent);
+  const { units, bases } = await person.call("agents", "units");
+  const management = units.find((one) => one.id === "control")?.provider;
+  const base = bases.find((one) => one.id === "assistant");
+  const { agent: colleague } = await person.call("agents", "create", {
+    stack: {
+      base: { provider: base.provider, creatable: base.id },
+      units: [
+        {
+          provider: management,
+          unit: "control",
+          values: { agents: "all", templates: ["assistant"] },
+        },
+      ],
+    },
+    name: "Colleague",
+    purpose: COLLEAGUE,
+  });
+  colleagues.set(agent, colleague);
+  return colleague;
+}
+
 let stoppedWhy;
 /**
  * While held, no model request leaves, and none is counted: through `sign-in`, and in a run until
@@ -345,9 +402,23 @@ async function counting(request, init) {
     typeof body.instructions === "string" && body.instructions.startsWith("You are the front desk");
   spent.total++;
   if (frontDesk) spent.frontDesk++;
+  // The message the front desk answers: the last one said to it.
+  const said = frontDesk
+    ? (Array.isArray(body.input) ? body.input : []).findLast((item) => item.role === "user")
+    : undefined;
   const record = {
     at: now(),
     frontDesk,
+    colleague: typeof body.instructions === "string" && body.instructions.includes(COLLEAGUE),
+    ...(said
+      ? {
+          message:
+            typeof said.content === "string"
+              ? said.content
+              : (said.content ?? []).map((part) => part.text ?? "").join(""),
+          offered: (body.tools ?? []).map((tool) => tool.name),
+        }
+      : {}),
     model: body.model,
     tools: [],
     input: 0,
@@ -392,6 +463,13 @@ async function readUsage(stream, record) {
     record.tools = (event.response?.output ?? [])
       .filter((item) => item.type === "function_call")
       .map((item) => item.name);
+    // What the front desk called beyond its own functions, with what it was given.
+    if (record.frontDesk) {
+      spent.frontDeskInput += usage.input_tokens ?? 0;
+      record.calls = (event.response?.output ?? [])
+        .filter((item) => item.type === "function_call" && !OWN.has(item.name))
+        .map((item) => ({ name: item.name, arguments: item.arguments }));
+    }
     if (event.response?.model) spent.models.add(event.response.model);
     spent.input += record.input;
     spent.cached += record.cached;
@@ -668,6 +746,10 @@ if (stoppedWhy) {
 }
 run.finishedAt = new Date().toISOString();
 run.requests = { ...spent, models: [...spent.models] };
+// Every function the front desk called beyond its own, with the message it answered.
+run.frontDeskCalls = requests
+  .filter((r) => r.frontDesk && r.calls?.length)
+  .map(({ at, message, offered, calls }) => ({ at: round(at), message, offered, calls }));
 writeFileSync(resolve(flags.out), `${JSON.stringify(run, null, 2)}\n`);
 for (const c of run.conversations)
   console.log(
@@ -686,14 +768,34 @@ if (opened) {
 }
 process.exit(exitCode);
 
+/**
+ * An agent measured: the Assistant's base, a computer, the web, and memory. Memory is on offer in
+ * no template and no list of units, so this stack names management's Memory unit, as a test does,
+ * finding management as the provider of its own Skill unit: a test's arrangement, not how a
+ * person gets memory.
+ */
+async function measuredAgent(name) {
+  const { units, bases } = await person.call("agents", "units");
+  const by = (id) => units.find((one) => one.id === id)?.provider;
+  const base = bases.find((one) => one.id === "assistant");
+  const { agent } = await person.call("agents", "create", {
+    stack: {
+      base: { provider: base.provider, creatable: base.id },
+      units: [
+        { provider: by("computer"), unit: "computer", values: COMPUTER },
+        { provider: by("web"), unit: "web", values: { service: "exa" } },
+        { provider: by("skill"), unit: "memory" },
+      ],
+    },
+    name,
+  });
+  return agent;
+}
+
 /** One group on an agent of its own: made, played, measured and removed. */
 async function playGroup(group, at, service) {
   const name = `Runner ${at + 1}`;
-  const { agent } = await person.call("agents", "create", {
-    template: "assistant",
-    fill: [{ values: COMPUTER }, { values: { service: "exa" } }],
-    name,
-  });
+  const agent = await measuredAgent(name);
   try {
     await until(
       `${name} running`,
@@ -718,8 +820,13 @@ async function playGroup(group, at, service) {
       read: (path) => computer.files.read(path).catch(() => undefined),
       list: () => listAll(computer),
     };
-    return await playSteps(group, at, slot, files);
+    return await playSteps(group, at, slot, files, { agent, name });
   } finally {
+    if (colleagues.has(agent))
+      await person
+        .call("agents", "remove", { agent: colleagues.get(agent) })
+        .catch((error) => note(`Removing ${name}'s colleague: ${error}`));
+    colleagues.delete(agent);
     // Kept with its page open, for the person to look over, but stopped, and its computer gone, so
     // nothing of it reaches the next group; the next run removes it.
     if (opened) {
@@ -762,7 +869,7 @@ async function listAll(computer, path = ".") {
  * with their times. A measured step is read from its window, from its send to the idle before the
  * next step that waits for idle, or the group's last idle, and checked then.
  */
-async function playSteps(group, at, slot, files) {
+async function playSteps(group, at, slot, files, { agent, name }) {
   const events = [];
   const watch = () => {
     for (const event of ["message", "delta", "status", "progress"])
@@ -791,6 +898,8 @@ async function playSteps(group, at, slot, files) {
     ).catch(() => true);
 
   const sent = [];
+  /** Each step's memory lines as it was sent. */
+  const before = [];
   const measured = [];
   /** The steps sent and not yet measured, and whether the wait for their turn's end gave up. */
   let pending = [];
@@ -817,9 +926,52 @@ async function playSteps(group, at, slot, files) {
     }
     // A stopped run sends nothing more.
     if (stoppedWhy) break;
+    if (step.fresh) {
+      await person.close();
+      await app.close();
+      app = undefined;
+      forgetConversations(agent);
+      await startTheApp();
+      if (opened) opened = await openPage();
+      watch();
+      await until(
+        `${name} back`,
+        async () =>
+          (await person.call("agents", "list")).agents.find((one) => one.agent === agent)?.status
+            ?.state === "running",
+        READY_MS,
+      );
+    }
     sent[i] = now();
+    // Its memory as the step is sent, which a check may need to have held what it asks of.
+    before[i] = memoryOf(agent);
     pending.push(i);
-    await person.call(slot, "send", { text: step.say });
+    if (step.from === "agent") {
+      const colleague = await colleagueOf(agent);
+      const theirs = await until(
+        "The colleague's chat",
+        async () =>
+          (await person.call("bindings", "list", { actor: "person" })).bindings.find(
+            (b) => b.provider === colleague && b.export === "chat",
+          )?.slot,
+        60_000,
+      );
+      sent[i] = now();
+      await person.call(theirs, "send", { text: step.say.replaceAll("{name}", name) });
+      // The colleague's turn, and this agent's answer to it, end before it is measured.
+      await sleep(5_000);
+      await until(
+        "Both turns' end",
+        async () =>
+          (await person.call(theirs, "state")).state === "idle" &&
+          (await person.call(slot, "state")).state === "idle",
+        TURN_MS,
+      ).catch(() => (timedOut = true));
+      step.answered = async () =>
+        (await person.call(slot, "history", { with: colleague })).messages
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.text);
+    } else await person.call(slot, "send", { text: step.say });
     if (step.n === 12) {
       await until(
         "A reply to the stop",
@@ -842,10 +994,15 @@ async function playSteps(group, at, slot, files) {
       watch();
     }
   }
-  const last = await idleAfter(sent.at(-1) ?? now()).catch(() => {
-    timedOut = true;
-    return now();
-  });
+  // A last step said by another agent was waited for already: this agent may take no turn of
+  // the person's after it.
+  const last =
+    group.steps.at(-1)?.from === "agent"
+      ? now()
+      : await idleAfter(sent.at(-1) ?? now()).catch(() => {
+          timedOut = true;
+          return now();
+        });
   if (stop) {
     await sleep(15_000);
     stop.changed = stop.files !== (await files.list().catch(() => ""));
@@ -865,8 +1022,10 @@ async function playSteps(group, at, slot, files) {
         (e.event === "message" && e.payload.role === "assistant"),
     );
     const idle = mine.findLast((e) => e.event === "status" && e.payload.state === "idle");
-    const theirs = requests.filter((r) => r.at >= sent[i] && r.at < windowEnd);
-    const texts = replies.map((e) => e.payload.text);
+    // This agent's: the colleague's requests, in the same window, are its own.
+    const theirs = requests.filter((r) => r.at >= sent[i] && r.at < windowEnd && !r.colleague);
+    // Said by another agent, it is what this agent answered that agent.
+    const texts = step.answered ? await step.answered() : replies.map((e) => e.payload.text);
     const words = texts.map((text) => text.split(/\s+/).filter(Boolean).length);
     const all = texts.join("\n\n");
     // Stopped: the agent was idle within 30 s of being asked to stop.
@@ -891,6 +1050,8 @@ async function playSteps(group, at, slot, files) {
       stopped:
         step.n === 12 ? Boolean(idleAfterStop && idleAfterStop.at - stop.at <= 30) : undefined,
       changedAfterStop: step.n === 12 ? stop?.changed : undefined,
+      memory: memoryOf(agent),
+      memoryBefore: before[i] ?? [],
     };
     // What the check reads is kept with the conversation, as it was read.
     const read = {};
@@ -943,6 +1104,8 @@ async function playSteps(group, at, slot, files) {
         reasoning: theirs.reduce((a, r) => a + r.reasoning, 0),
       },
       tools: c.tools,
+      // The agent's memory lines after its turn, as its store keeps them.
+      memory: c.memory,
       right: checked.right,
       notes: checked.notes,
       ...(Object.keys(read).length ? { files: read } : {}),
