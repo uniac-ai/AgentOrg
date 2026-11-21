@@ -487,17 +487,23 @@ export function createSession(options: {
     return { items, used };
   };
 
-  /** A request with the access token, refreshed and tried once more if OpenAI says 401. */
+  /**
+   * A request with the access token, refreshed and tried once more if OpenAI says 401. `signal`
+   * is the caller's cancel; `aborts`, given to the fetch beside the request, ends it and its
+   * stream.
+   */
   const authorized = async (
     build: (token: string) => Request,
     signal?: AbortSignal,
+    aborts?: AbortSignal,
   ): Promise<Response> => {
+    const init = aborts ? { signal: aborts } : undefined;
     let response: Response;
     try {
-      response = await fetch(build(await account.token()));
+      response = await fetch(build(await account.token()), init);
       if (response.status === 401) {
         await response.body?.cancel();
-        response = await fetch(build(await account.token(true)));
+        response = await fetch(build(await account.token(true)), init);
       }
     } catch (error) {
       if (signal?.aborted) throw cancelled();
@@ -604,9 +610,9 @@ export function createSession(options: {
             accept: "text/event-stream",
           },
           body,
-          signal: quiet.signal,
         }),
       signal,
+      quiet.signal,
     );
     quiet.heard();
     const requestId = response.headers.get("x-request-id");

@@ -34,12 +34,12 @@ export async function startChatGPT(options: ChatGPTOptions): Promise<ChatGPT> {
   const log = options.log ?? quiet;
   const store = fileStore(options.dir, log);
   const send = options.fetch ?? ((request, init) => fetch(request, init));
-  const outbound: Fetch = async (request) => {
+  const outbound: Fetch = async (request, init) => {
     if (new URL(request.url).protocol !== "https:")
       throw new Error("Only https addresses are reached.");
-    // Given beside the request, not by a copy of it: a copy's link to its signal can be collected,
-    // and a cancel would then wait for OpenAI's first byte.
-    return send(request, { redirect: "manual" });
+    // The signal given to fetch itself: a request's own link to one can be collected, and an
+    // abort would then reach neither the fetch nor its response's stream.
+    return send(request, { redirect: "manual", ...(init?.signal ? { signal: init.signal } : {}) });
   };
   let session: ReturnType<typeof serveChatGPT> | undefined;
   const client = await connect({
