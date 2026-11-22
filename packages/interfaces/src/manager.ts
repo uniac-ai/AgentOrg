@@ -16,7 +16,7 @@ import {
   SkillName,
   SkillPath,
 } from "./agent-settings.js";
-import { Arguments, Mounting } from "./capability-provider.js";
+import { Arguments, CapabilityDefinition, Mounting } from "./capability-provider.js";
 import {
   ConnectionKind,
   ConnectionParams,
@@ -233,8 +233,8 @@ const AgentEntry = z.object({
  * `agents@1`: the agents the person has, each made from a creatable a connected agent provider
  * offers. What each agent is doing is read from the agent's own `chat@1`.
  *
- * `get`, `mount` and `unmount` answer whoever is bound to this export: the person, an agent, or
- * any other program on the Hub, on any agent. Being bound is the grant. Which agents a caller may
+ * `get`, `capabilities`, `mount` and `unmount` answer whoever is bound to this export: the person,
+ * an agent, or any other program on the Hub, on any agent. Being bound is the grant. Which agents a caller may
  * change, and what it may mount, are decided by the capability that offers an agent these calls,
  * never by management. The other methods answer the person; an agent reaches them through its
  * control unit.
@@ -327,6 +327,13 @@ export const agents = defineInterface({
          * mounted under it. Absent, as `capabilities` is, only from something written before this.
          */
         mounted: z.array(MountedCapability).max(HELD_MAX).optional(),
+      }),
+    }),
+    /** What every connected capability provider lists, each naming its provider. */
+    capabilities: method({
+      input: z.object({}),
+      output: z.object({
+        capabilities: z.array(CapabilityDefinition.extend({ provider: Id })).max(1024),
       }),
     }),
     /**

@@ -19,6 +19,7 @@ export {
   SkillName,
   SkillPath,
 } from "./agent-settings.js";
+export { agentSettings2, ROOTS_MAX, SettingsRoot } from "./agent-settings-2.js";
 export { capability, WayForward } from "./capability.js";
 export {
   ArgumentProblem,

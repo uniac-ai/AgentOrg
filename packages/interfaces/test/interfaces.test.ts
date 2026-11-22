@@ -9,6 +9,7 @@ import {
   accountLogin,
   agentProvider,
   agentSettings,
+  agentSettings2,
   agents,
   capability,
   capabilityProvider,
@@ -70,6 +71,7 @@ const management = [
   skills,
   unitProvider,
   capabilityProvider,
+  agentSettings2,
 ];
 
 test("the agent management interfaces are named, versioned and compile strictly", () => {
@@ -84,6 +86,7 @@ test("the agent management interfaces are named, versioned and compile strictly"
       "skills@1",
       "unit.provider@1",
       "capability.provider@1",
+      "agent.settings@2",
     ],
   );
   for (const iface of management)
@@ -1017,4 +1020,65 @@ test("a field says what an agent may do with it, from a closed list", () => {
     assert.ok(Field.safeParse({ ...field, authority }).success, authority);
   assert.equal(Field.safeParse({ ...field, authority: "anything" }).success, false);
   assert.equal(Field.parse(field).authority, undefined, "none declared: closed");
+});
+
+test("agent.settings@2 gives what is mounted on the caller, in order, each root by its id, capability and arguments; management's own name no provider", () => {
+  const settings = compiled(agentSettings2);
+  const got = settings["get.output"];
+  assert.ok(got);
+  const instructions = {
+    mounted: "instructions",
+    capability: "instructions",
+    arguments: { text: "You keep the docs.\n\nWhat you are for: the docs." },
+  };
+  const skills = {
+    mounted: "skills",
+    capability: "skills",
+    arguments: { skills: [{ name: "review", description: "Review a change." }] },
+  };
+  const memory = { mounted: "mnt_1", capability: "memory", arguments: {}, provider: "act_e" };
+  const github = {
+    mounted: "mnt_2",
+    capability: "github",
+    arguments: { owner: "o", deep: { a: [1] } },
+    provider: "act_g",
+  };
+  assert.ok(got({ mounted: [instructions, skills, memory, github] }));
+  assert.ok(got({ mounted: [] }));
+  // In place of the first major's shape, not beside it; a root says no more than this.
+  assert.equal(got({ instructions: "x", skills: [] }), false);
+  assert.equal(got({ mounted: [instructions], instructions: "x" }), false);
+  assert.equal(got({ mounted: [{ ...memory, plugins: [{ name: "memory" }] }] }), false);
+  assert.equal(got({ mounted: [{ ...memory, capability: "Memory" }] }), false);
+  assert.equal(got({ mounted: [{ ...memory, arguments: undefined }] }), false);
+  // An agent holding 64 plugins has room for them beside management's own roots and its control.
+  const many = (length: number) =>
+    Array.from({ length }, (_, i) => ({ ...memory, mounted: `mnt_${i}` }));
+  assert.ok(got({ mounted: [instructions, skills, ...many(65)] }));
+  assert.ok(got({ mounted: many(256) }));
+  assert.equal(got({ mounted: many(257) }), false);
+  // A skill's files are read as before; told what changed, it reads the tree again.
+  assert.ok(settings["skill.input"]?.({ name: "review", path: "SKILL.md" }));
+  assert.equal(settings["skill.input"]?.({ name: "review", path: "../x" }), false);
+  assert.ok(settings["changed.event"]?.({}));
+  // The first major stays as it was, for a program that still reads it.
+  assert.ok(compiled(agentSettings)["get.output"]?.({ instructions: "x", skills: [] }));
+});
+
+test("agents@1 lists every capability its providers offer, each naming its provider", () => {
+  const listed = compiled(agents)["capabilities.output"];
+  assert.ok(listed);
+  const memory = {
+    id: "memory",
+    title: "Memory",
+    description: "It remembers what you tell it to.",
+    arguments: { type: "object", properties: {} },
+    provider: "act_e",
+  };
+  assert.ok(listed({ capabilities: [memory] }));
+  assert.ok(listed({ capabilities: [] }));
+  const { provider: _, ...unnamed } = memory;
+  assert.equal(listed({ capabilities: [unnamed] }), false);
+  assert.equal(listed({ capabilities: [{ ...memory, asks: ["person"] }] }), false);
+  assert.ok(compiled(agents)["capabilities.input"]?.({}));
 });
