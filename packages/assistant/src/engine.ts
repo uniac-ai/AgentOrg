@@ -5,10 +5,11 @@
  * the records are kept and what the agent is told when no `settings` is bound.
  */
 import type { agentSettings2, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
-import type { Conversed, Model, Part } from "@agentorg/looper";
+import { type Conversed, type Model, type Part, Refusal } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { WORDS } from "./capabilities/instructions.js";
 import { createChats } from "./chats.js";
+import type { Model as AgentModel } from "./connector.js";
 import { type AgentPlugins, NO_PLUGINS } from "./plugins.js";
 import { MAX_INSTRUCTIONS } from "./settings.js";
 import { type LeftOut, listsTools, offered, offeredName, relayed } from "./tools.js";
@@ -16,7 +17,10 @@ import { ACTIVITY, serveWork } from "./work.js";
 
 /** Where the agent keeps the model chosen for it, beside its conversations in the store. */
 const MODEL_KEY = "settings/model";
-/** Its control, which it holds once its executor carries it. */
+/**
+ * Its control, which it doesn't hold from its settings yet: holding it changes what the agent is
+ * offered, so it comes with the change that measures that.
+ */
 const CONTROL = "control";
 /** How a section a capability adds through `prompt` is owned. */
 const SECTION = "plugin:";
@@ -135,11 +139,20 @@ export function startEngine(
       leftOut,
     };
   };
-  /** The model slot as the looper asks it: what it refuses is told with its code. */
+  /** Its model capability, which its loops ask through. */
+  const asking = () => {
+    const service = plugins.service?.("model") as AgentModel | undefined;
+    if (!service) throw new Refusal("not_connected", "Its model isn't mounted.");
+    return service;
+  };
+  /** The model as the looper asks it: what it refuses is told with its code. */
   const model: Model = {
-    respond: (asked) => relayed(ctx.slots.model.call.respond(asked)),
-    // A model that is gone has nothing to stop.
-    cancel: async (asked) => (ctx.slots.model.bound ? ctx.slots.model.call.cancel(asked) : {}),
+    respond: async (asked) => relayed(asking().request(asked)),
+    // With no model, there is nothing to stop.
+    cancel: async (asked) => {
+      const service = plugins.service?.("model") as AgentModel | undefined;
+      return service ? service.cancel(asked) : {};
+    },
   };
   const chats = createChats({
     store,

@@ -85,6 +85,13 @@ export interface Asked {
  */
 export interface Model {
   respond(asked: Asked, options?: { signal?: AbortSignal }): ReturnType<Respond>;
+  /**
+   * A request of the agent's own loops, sent as the looper made it, under its own request id and
+   * with the model it chose: what the loops ask goes through here.
+   */
+  request(request: Parameters<Respond>[0]): ReturnType<Respond>;
+  /** Stop the answer to a loop's request, if it is still being made; a model that is gone has none. */
+  cancel(request: { requestId: string }): Promise<unknown>;
 }
 
 /**
@@ -123,6 +130,9 @@ export const model = (chosen: () => Promise<string | undefined>): Capability => 
           asking.delete(requestId);
         }
       },
+      request: (request) => hub.slots.model.call.respond(request),
+      cancel: async (request) =>
+        hub.slots.model.bound ? hub.slots.model.call.cancel(request) : {},
     };
     ctx.provide("model", service);
     ctx.on("agent/stopped", () => {

@@ -98,6 +98,8 @@ export interface AgentPlugins {
   pass(request: Request): Request;
   /** Read, once a turn before its requests, what each capability's passes give. */
   turn(loop?: Loop): Promise<void>;
+  /** A service its capabilities provide now, by name, for its host's own use. */
+  service?(name: string): unknown;
 }
 
 /** An agent's own context, as its executor holds it: what its engine reads, and more. */
@@ -508,6 +510,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         list: host.list,
         pass: run,
         turn,
+        service: (name) => own.get(name),
         mount: (capability, args) =>
           inTurn(async () => {
             const { name } = capability;
