@@ -1012,24 +1012,32 @@ export function createLooper(options: {
     let at: string | undefined;
     let named: string | undefined;
     try {
-      const done = await of(thread).record.back(message, "Passed on.", async (where, to) => {
-        if (to.some((one) => one.work === target))
-          throw new Refusal(
-            "invalid",
-            "That work handed this message back already: answer it, or pass it to other work.",
-          );
-        await hold(where);
-        at = where;
-      });
+      // Handed back and given to `target` in one write: in between, the message would stand as
+      // handed back by all, and a routing of its thread would give it to this loop again.
+      const done = await of(thread).record.back(
+        message,
+        "Passed on.",
+        async (where, to) => {
+          if (to.some((one) => one.work === target))
+            throw new Refusal(
+              "invalid",
+              "That work handed this message back already: answer it, or pass it to other work.",
+            );
+          await hold(where);
+          at = where;
+        },
+        (text) => {
+          named =
+            work === undefined ? titled(title ?? "") || titled(text) || "A picture" : undefined;
+          return { work: target, ...(named === undefined ? {} : { title: named }) };
+        },
+      );
       if (!done)
         throw new Refusal(
           "invalid",
           "None of your messages has that number, or it was passed on already.",
         );
-      named =
-        work === undefined ? titled(title ?? "") || titled(done.text) || "A picture" : undefined;
       const into = threadOf(done.thread);
-      await into.offer([done.id], target, named);
       if (work === undefined && receipt !== undefined)
         await inLine(done.thread, async () => {
           const { last } = await into.load();

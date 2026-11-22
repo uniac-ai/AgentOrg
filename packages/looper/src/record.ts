@@ -1540,11 +1540,15 @@ export function createRecord(options: {
      * and whether every piece of work it was given to has now handed it back; or nothing, when
      * this work has no such message or has handed it back already. `first` is called with that
      * thread, and the work it names as given to, before anything is stored: it may refuse.
+     * `passTo`, given the message's words, names work it is passed on to, with its title when it
+     * is new: that work is named in the same write, so the message never stands as handed back by
+     * all it was given to.
      */
     async back(
       place: number,
       why: string,
       first: (thread: string, to: readonly { work: string }[]) => Promise<void>,
+      passTo?: (text: string) => { work: string; title?: string },
     ) {
       const held = await load();
       const found = own(held).find(
@@ -1559,19 +1563,25 @@ export function createRecord(options: {
         ...(joinedOf(record) ? { joined: true as const } : {}),
         back: why,
       };
+      const passed = passTo?.(textOf(record.entry));
+      const named = passed && !(record.entry.to ?? []).some((one) => one.work === passed.work);
       const change = options.thread(thread).change(
         record,
         // It names those it was given to from now on, which says the same of a single holder.
         ({ work: _, place: __, joined: ___, ...entry }) => ({
           ...entry,
-          to: entry.to?.map((one) => (one.work === id ? hold : one)) ?? [hold],
+          to: [
+            ...(entry.to?.map((one) => (one.work === id ? hold : one)) ?? [hold]),
+            ...(named ? [passed] : []),
+          ],
         }),
         (entry) => ({
           ...entry,
-          to: (entry.to ?? []).map((one) => {
-            if (one.work !== id) return one;
+          to: (entry.to ?? []).flatMap((one) => {
+            if (named && one.work === passed.work) return [];
+            if (one.work !== id) return [one];
             const { back: _, ...rest } = one;
-            return rest;
+            return [rest];
           }),
         }),
       );
