@@ -6,11 +6,13 @@ import {
   agents,
   type ConnectionOrigin,
   type ConnectionStatus,
+  capabilityProvider,
   connections,
   type FieldValues,
   hubActors,
   hubBindings,
   hubGrants,
+  type ProvidedStatus,
   skills,
   type Template,
   tools,
@@ -23,12 +25,14 @@ import type { z } from "zod";
 import { createActivity } from "./activity.js";
 import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
+import { createMounts } from "./mounts.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, pluginsOf, Records, slotFieldOf } from "./stack.js";
 
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
 type Units = Slot<typeof unitProvider>["call"];
+type Capabilities = Slot<typeof capabilityProvider>["call"];
 type Status = z.infer<typeof ConnectionStatus>;
 
 const FILE = "manager.json";
@@ -81,6 +85,10 @@ function changeOf(method: string, input: Record<string, unknown>): string | unde
       return "agent_add_unit";
     case "removeUnit":
       return "agent_remove_unit";
+    case "mount":
+      return "agent_mount";
+    case "unmount":
+      return "agent_unmount";
     case "expose":
       return "connection" in input ? "connection_expose" : "skill_expose";
     case "unexpose":
@@ -230,6 +238,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       const agentProviders = () => exposed<Agents>(agentProvider);
       const unitProviders = () => exposed<Units>(unitProvider);
+      const capabilityProviders = () => exposed<Capabilities>(capabilityProvider);
       const named = <T extends { actor: string }>(list: T[], actor: string, what: string) => {
         const found = list.find((one) => one.actor === actor);
         if (!found) throw new Refused("unknown", `${actor} isn't a connected ${what}.`);
@@ -286,7 +295,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         if (!origin) throw new Refused("unknown", `Management has no connection ${connection}.`);
         return origin;
       };
-      const agentStatus = async (agent: string, provider: string) => {
+      const agentStatus = async (
+        agent: string,
+        provider: string,
+      ): Promise<z.infer<typeof ProvidedStatus>> => {
         try {
           return await named(agentProviders(), provider, "agent provider").call.status({ agent });
         } catch {
@@ -390,6 +402,16 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         removeAgent,
       });
 
+      const mounts = createMounts({
+        records,
+        save,
+        log,
+        recordOf,
+        serial: stacks.serial,
+        providers: capabilityProviders,
+        changed,
+      });
+
       /** An agent's own provider, which runs it and keeps its model. */
       const makerOf = (agent: string) =>
         named(agentProviders(), recordOf(agent).provider, "agent provider").call;
@@ -399,6 +421,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       const removeWhole = (agent: string) =>
         stacks.serial(agent, async () => {
           const record = recordOf(agent);
+          await mounts.unmountAll(agent, record);
           await stacks.removeAll(agent, record);
           for (const [connection, origin] of Object.entries(records.connections)) {
             if (origin.madeFor !== agent) continue;
@@ -542,10 +565,14 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         madeBy: (connection) => records.connections[connection]?.madeBy,
         log: (entry) => activity.add(entry),
       });
-      /** Those who call management: the person. An agent comes through its control unit instead. */
+      /**
+       * Those who call management: the person. An agent comes through its control unit instead,
+       * except to the methods `open` names, which answer whoever is bound to them.
+       */
       const personOnly = <E extends { implement(handlers: never): void }>(
         exported: E,
         name: keyof typeof personHandlers,
+        open: string[] = [],
       ) => ({
         implement(handlers: Parameters<E["implement"]>[0]) {
           const held = handlers as Record<string, Handler>;
@@ -555,7 +582,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               Object.entries(held).map(([method, handler]) => [
                 method,
                 async (input: unknown, context: { caller: string }) => {
-                  if (records.agents[context.caller] || creating.has(context.caller))
+                  if (
+                    !open.includes(method) &&
+                    (records.agents[context.caller] || creating.has(context.caller))
+                  )
                     throw new Refused(
                       "forbidden",
                       "An agent reaches this through its control unit.",
@@ -568,10 +598,25 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                   const about = typeof asked.agent === "string" ? asked.agent : undefined;
                   const { caller } = context;
                   try {
-                    const output = (await handler(input, context)) as { agent?: unknown };
+                    const output = (await handler(input, context)) as {
+                      agent?: unknown;
+                      problems?: { message: string }[];
+                    };
                     const target =
                       about ?? (typeof output?.agent === "string" ? output.agent : undefined);
-                    note({ caller, tool, outcome: "done", ...(target ? { target } : {}) });
+                    // A mount whose arguments didn't fit made nothing: it was refused.
+                    if (output?.problems)
+                      note({
+                        caller,
+                        tool,
+                        outcome: "refused",
+                        ...(target ? { target } : {}),
+                        reason: output.problems
+                          .map((one) => one.message)
+                          .join(" ")
+                          .slice(0, 2000),
+                      });
+                    else note({ caller, tool, outcome: "done", ...(target ? { target } : {}) });
                     return output;
                   } catch (error) {
                     note({
@@ -632,7 +677,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
-      personOnly(ctx.exports.agents, "agents").implement({
+      personOnly(ctx.exports.agents, "agents", ["get", "mount", "unmount"]).implement({
         creatable: async () => ({
           creatables: (
             await fromEach(agentProviders(), async ({ actor, call }) =>
@@ -681,10 +726,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                 const actor = actors.get(agent);
                 return actor
                   ? [
-                      agentStatus(agent, record.provider).then((status) => ({
+                      agentStatus(agent, record.provider).then(({ state, detail }) => ({
                         agent,
                         name: actor.name,
-                        status,
+                        status: { state, ...(detail ? { detail } : {}) },
                         provider: record.provider,
                         creatable: record.creatable,
                         ...(record.purpose ? { purpose: record.purpose } : {}),
@@ -703,7 +748,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             agent,
             record,
           );
-          const [name, status, mcp] = await Promise.all([
+          const [name, { mounted: held, ...status }, mcp] = await Promise.all([
             nameOf(agent),
             agentStatus(agent, record.provider),
             Promise.all(
@@ -735,6 +780,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             mcp,
             units,
             capabilities,
+            mounted: mounts.tree(record, held),
           };
         },
         start: ({ agent }) => startAgent(agent),
@@ -775,13 +821,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           }),
         /** Units and connections go first: if one can't, the agent is still here to be tried again. */
         remove: ({ agent }) => removeWhole(agent),
-        // Not built yet: no capability provider is connected to management.
-        mount: () => {
-          throw new Refused("unimplemented", "Management can't mount a capability yet.");
-        },
-        unmount: () => {
-          throw new Refused("unimplemented", "Management can't unmount a capability yet.");
-        },
+        mount: (input, { caller }) => mounts.mount(input, caller),
+        unmount: (input) => mounts.unmount(input),
       });
 
       personOnly(ctx.exports.connections, "connections").implement({

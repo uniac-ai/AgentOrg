@@ -331,9 +331,9 @@ export const agents = defineInterface({
     }),
     /**
      * Mount a capability a connected capability provider lists on the agent, from `arguments`,
-     * through that provider. Management keeps what was mounted, with its arguments but none its
-     * schema marks `secret`. It takes effect from the agent's next model request. Arguments that
-     * don't fit give each problem, and nothing is mounted. Refused `unknown` for an agent, a
+     * through that provider. Management keeps what was mounted, with its arguments but none that
+     * its schema marks `secret`. It takes effect from the agent's next model request. Arguments
+     * that don't fit give each problem, and nothing is mounted. Refused `unknown` for an agent, a
      * provider or a capability there isn't, and `state` when the agent holds that capability
      * already.
      */

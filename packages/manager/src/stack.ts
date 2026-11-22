@@ -128,6 +128,21 @@ const withRows = (worked: Worked, rows: Rows) =>
     const given = rows[view.id];
     return given ? { ...view, fixed: given } : view;
   });
+/**
+ * A capability mounted on an agent through management: what made it, the provider's id for it,
+ * and what it was made with, with no argument its schema marks `secret`. `by` is who mounted it.
+ */
+export const MountRecord = z.object({
+  /** Management's own id for it. */
+  mounted: z.string(),
+  provider: z.string(),
+  /** The provider's id for it; empty while the provider hasn't said. */
+  providerMounted: z.string(),
+  capability: z.string(),
+  title: z.string(),
+  arguments: z.record(z.string(), z.json()),
+  by: z.string(),
+});
 /** What only management knows of an agent: where it came from, what it is told, and its skills. */
 export const AgentRecord = z.object({
   provider: z.string(),
@@ -139,6 +154,8 @@ export const AgentRecord = z.object({
   units: z.array(UnitRecord).default([]),
   /** What it holds, in its stack's order: one for each applied unit that builds one. */
   capabilities: z.array(CapabilityRecord).default([]),
+  /** What was mounted on it through management, in the order it was. */
+  mounted: z.array(MountRecord).default([]),
   /** Its export that is its chats, as its provider named it; `chat` for one kept before this was. */
   chat: z.string().default("chat"),
   /** The agent that made it, which may be gone by now. */
@@ -358,11 +375,24 @@ const chatSlot = (agent: string) => `chat_${agent}`;
 type AgentBinding = { slot: string; provider: string; export: string };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
-/** Every plugin of every capability an agent holds, each with the capability it is of. */
-export const pluginsOf = (record: TheAgent) =>
-  record.capabilities.flatMap(({ id, plugins = [] }) =>
+/**
+ * Every plugin of every capability an agent holds, each with the capability it is of. One mounted
+ * from the agent's own executor is held by the executor from here, by its id, with the arguments it
+ * was mounted with as its settings: so the executor holds it again at each start, and a turn is
+ * never behind what is mounted.
+ */
+export const pluginsOf = (record: TheAgent) => [
+  ...record.capabilities.flatMap(({ id, plugins = [] }) =>
     plugins.map((plugin) => ({ ...plugin, capability: id })),
-  );
+  ),
+  ...record.mounted
+    .filter(({ provider }) => provider === record.provider)
+    .map(({ capability, arguments: given }) => ({
+      name: capability,
+      ...(Object.keys(given).length > 0 ? { settings: given } : {}),
+      capability,
+    })),
+];
 /** The sha256 of each file of a skill, by its path. */
 const hashesOf = (files: SkillFiles) =>
   Object.fromEntries(
@@ -796,7 +826,10 @@ export function createStacks(parts: StackParts) {
           .map((binding) => binding.slot),
       ),
       skills: new Set(record.skills),
-      capabilities: new Set(record.capabilities.map((one) => one.id)),
+      capabilities: new Set([
+        ...record.capabilities.map((one) => one.id),
+        ...record.mounted.map((one) => one.capability),
+      ]),
       plugins: new Set(pluginsOf(record).map((one) => one.name)),
       givers: record.units.map((unit) => ({
         ref: unit.instance,
@@ -1800,6 +1833,7 @@ export function createStacks(parts: StackParts) {
           skills: [],
           units: [],
           capabilities: [],
+          mounted: [],
           chat: made.chat,
           ...(input.purpose ? { purpose: input.purpose } : {}),
           ...(stack.template ? { template: stack.template } : {}),
