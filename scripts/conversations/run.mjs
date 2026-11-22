@@ -303,6 +303,16 @@ async function startService() {
 
 // --- The model's requests: counted, capped, and in `--dry` answered by a stand-in --------------
 
+/**
+ * What a model request was told: the developer message first in its input, where the ChatGPT
+ * program puts instructions, or, from a program before that, its top-level instructions.
+ */
+const toldOf = (body) => {
+  const first = Array.isArray(body.input) ? body.input[0] : undefined;
+  if (first?.role === "developer" && typeof first.content === "string") return first.content;
+  return typeof body.instructions === "string" ? body.instructions : "";
+};
+
 const spent = {
   total: 0,
   frontDesk: 0,
@@ -412,9 +422,9 @@ async function counting(request, init) {
     stoppedWhy ??= `The run reached its cap of ${cap} model requests.`;
     return refusal("runner_cap", "The runner's cap is reached.");
   }
-  const frontDesk =
-    typeof body.instructions === "string" && body.instructions.startsWith("You are the front desk");
-  const hearing = typeof body.instructions === "string" && body.instructions.startsWith(HEARING);
+  const told = toldOf(body);
+  const frontDesk = told.startsWith("You are the front desk");
+  const hearing = told.startsWith(HEARING);
   spent.total++;
   if (frontDesk) spent.frontDesk++;
   if (hearing) spent.hearing++;
@@ -427,7 +437,7 @@ async function counting(request, init) {
     hearing,
     // The agent's own, having read the stop: what it calls then is after it read it.
     readStop: !hearing && input.some((item) => item.role === "user" && textOf(item).endsWith(STOP)),
-    colleague: typeof body.instructions === "string" && body.instructions.includes(COLLEAGUE),
+    colleague: told.includes(COLLEAGUE),
     ...(said
       ? { message: textOf(said), offered: (body.tools ?? []).map((tool) => tool.name) }
       : {}),
@@ -515,7 +525,7 @@ function standInResponse(body) {
       ? item.content
       : (item.content ?? []).map((part) => part.text ?? "").join("");
   let call;
-  if (String(body.instructions ?? "").startsWith("You are the front desk"))
+  if (toldOf(body).startsWith("You are the front desk"))
     call = { name: "route", arguments: { title: "Stand-in work" } };
   else {
     const asked = items

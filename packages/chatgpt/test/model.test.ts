@@ -9,7 +9,7 @@ import { defineActor } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Store } from "../src/account.ts";
 import type { Fetch } from "../src/oauth.ts";
-import { cacheKeyOf, RETRIES, sleep } from "../src/responses.ts";
+import { cacheKeyOf, POINTER, RETRIES, sleep } from "../src/responses.ts";
 import { serveChatGPT } from "../src/serve.ts";
 import {
   argumentsDelta,
@@ -118,6 +118,15 @@ async function signIn(s: Setup) {
   const { authorizeUrl } = await s.call("login", "start", { redirectUri: REDIRECT });
   return s.call("login", "complete", { callbackUrl: await s.fake.authorize(authorizeUrl) });
 }
+/** What a request sent to OpenAI was told: its developer message first in the input, or none. */
+const toldOf = (body: {
+  instructions?: string;
+  input?: { role?: string; content?: unknown }[];
+}) => {
+  const first = body.input?.[0];
+  return first?.role === "developer" ? String(first.content) : body.instructions;
+};
+
 const events = (actor: Model, name: string) =>
   actor.emitted.filter((e) => e.event === name).map((e) => e.payload);
 
@@ -342,12 +351,16 @@ test("respond streams text and a streamed function's arguments, returns the outp
   assert.equal(body.model, "gpt-test");
   for (const field of ["previous_response_id", "temperature", "max_output_tokens", "top_p"])
     assert.equal(field in body, false, field);
-  assert.deepEqual(body.input[1], {
-    type: "function_call",
-    call_id: "c0",
-    name: "layout__get",
-    arguments: "{}",
-  });
+  // What it is told goes first in its input, as a developer message, where the prompt cache reads
+  // it; then what was said and done, in order. The top level, which the model reads after the
+  // input, nearest its reply, only points back to it: the same few words for every request.
+  assert.equal(body.instructions, POINTER);
+  assert.doesNotMatch(POINTER, /assistant/);
+  assert.deepEqual(body.input.slice(0, 3), [
+    { type: "message", role: "developer", content: "You are an assistant." },
+    { type: "message", role: "user", content: "Show the board." },
+    { type: "function_call", call_id: "c0", name: "layout__get", arguments: "{}" },
+  ]);
   // Which are streamed is the provider's to know, not OpenAI's.
   assert.deepEqual(body.tools, [
     {
@@ -361,6 +374,22 @@ test("respond streams text and a streamed function's arguments, returns the outp
   ]);
   // Every request went to OpenAI's two hosts and nowhere else.
   for (const { url } of s.fake.requests) assert.match(url, /^https:\/\/(auth|api)\.openai\.com\//);
+});
+
+test("a request told nothing is sent as it was: no developer message, its instructions empty", async (t) => {
+  const s = await setup(t);
+  await signIn(s);
+  s.fake.script({ events: [completed([text("Hi.")])] });
+  await s.call("session", "respond", {
+    requestId: "bare",
+    model: "gpt-test",
+    instructions: "",
+    input: [{ type: "message", role: "user", content: "Hello." }],
+  });
+  const [sent] = s.fake.requests.filter((r) => r.url.endsWith("/v1/responses"));
+  const body = JSON.parse(sent?.body ?? "{}");
+  assert.equal(body.instructions, "");
+  assert.deepEqual(body.input, [{ type: "message", role: "user", content: "Hello." }]);
 });
 
 test("a person's pictures go as image parts of their message, and a call's with its output", async (t) => {
@@ -381,9 +410,10 @@ test("a person's pictures go as image parts of their message, and a call's with 
       { type: "function_call_output", callId: "c2", output: "", images: [png] },
     ],
   });
-  const { input } = JSON.parse(
+  const [told, ...input] = JSON.parse(
     s.fake.requests.filter((r) => r.url.endsWith("/v1/responses")).at(-1)?.body ?? "{}",
-  );
+  ).input;
+  assert.equal(told.role, "developer");
   assert.deepEqual(input[0], {
     type: "message",
     role: "user",
@@ -564,7 +594,7 @@ test("each consumer gets its own streamed text, and cancels only its own request
   const release = new Map<string, () => void>();
   s.web.fetch = async (request) => {
     if (!request.url.endsWith("/v1/responses")) return handle(request);
-    const who = JSON.parse(await request.clone().text()).instructions as string;
+    const who = toldOf(JSON.parse(await request.clone().text())) as string;
     await new Promise<void>((resolve) => release.set(who, resolve));
     return handle(request);
   };
@@ -602,7 +632,7 @@ test("each consumer gets its own streamed text, and cancels only its own request
     .map((r) => {
       const key = JSON.parse(r.body).prompt_cache_key as string;
       assert.equal(r.headers["session-id"], key);
-      return [JSON.parse(r.body).instructions, key];
+      return [toldOf(JSON.parse(r.body)) as string, key] as const;
     });
   assert.deepEqual(Object.fromEntries(keys), {
     alice: cacheKeyOf("alice"),

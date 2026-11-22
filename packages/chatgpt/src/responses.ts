@@ -254,6 +254,25 @@ const partsOf = (text: string, images: z.output<typeof Pictures> | undefined) =>
       ]
     : text;
 
+/**
+ * The instructions a request is told, as the first item of its input: a developer message, which
+ * OpenAI keeps in the cached part of a request ("Prompt caching" and "Using GPT-6.2", read
+ * 2026-11-21).
+ */
+const developerOf = (instructions: string) => ({
+  type: "message",
+  role: "developer",
+  content: instructions,
+});
+/**
+ * What a request with instructions is told at the top level, which the model reads after the
+ * input, nearest its reply: only that its instructions open the conversation, to be followed whole.
+ * The same for every agent, so it costs a few uncached tokens a request and nothing of an agent's
+ * own is in it.
+ */
+export const POINTER =
+  "Your instructions are the developer message that opens this conversation. Follow all of them in this reply, as fully as when they were first given.";
+
 const toApi = (item: z.output<typeof Item>) => {
   switch (item.type) {
     case "message":
@@ -592,8 +611,13 @@ export function createSession(options: {
     if (signal.aborted) throw cancelled();
     const body = JSON.stringify({
       model,
-      instructions: input.instructions,
-      input: items,
+      // The caller's instructions go as a developer message first in the input, where the prompt
+      // cache reads them: from GPT-6.2 on, top-level `instructions` are placed after the input
+      // and never read from the cache. The top level points back to them, nearest the reply. A
+      // request with none is sent as it always was.
+      ...(input.instructions
+        ? { instructions: POINTER, input: [developerOf(input.instructions), ...items] }
+        : { instructions: input.instructions, input: items }),
       // Nothing is stored at OpenAI, so reasoning comes back sealed, to be sent with its calls.
       include: ["reasoning.encrypted_content"],
       ...(input.tools?.length
