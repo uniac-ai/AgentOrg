@@ -1039,6 +1039,29 @@ export function createThread(
         });
       }
     },
+    /**
+     * Have the messages `ids` wait for `work` to take them again, as new: one it held and handed
+     * back, or never held. What the others it was given to said of it stays.
+     */
+    async reown(ids: string[], work: string) {
+      const held = await load();
+      for (const record of held.records) {
+        if (!ids.includes(record.entry.id)) continue;
+        const before = record.entry;
+        const given = change(
+          record,
+          ({ work: _, place: __, joined: ___, ...entry }) => ({
+            ...entry,
+            to: [...(entry.to ?? []).filter((one) => one.work !== work), { work }],
+          }),
+          () => before,
+        );
+        await given.store().catch((error: unknown) => {
+          given.undo();
+          throw error;
+        });
+      }
+    },
     /** The work that messages here wait for, each named once, new work with its title. */
     async offers() {
       return offersOf(await load());
@@ -1439,16 +1462,20 @@ export function createRecord(options: {
      * Hand the user message at `place` back, with why: once. It gives the thread it was said in,
      * and whether every piece of work it was given to has now handed it back; or nothing, when
      * this work has no such message or has handed it back already. `first` is called with that
-     * thread before anything is stored.
+     * thread, and the work it names as given to, before anything is stored: it may refuse.
      */
-    async back(place: number, why: string, first: (thread: string) => Promise<void>) {
+    async back(
+      place: number,
+      why: string,
+      first: (thread: string, to: readonly { work: string }[]) => Promise<void>,
+    ) {
       const held = await load();
       const found = own(held).find(
         ({ record }) => record.entry.role === "user" && placeOf(record) === place,
       );
       if (!found || holdOf(found.record).back !== undefined) return undefined;
       const { thread, record } = found;
-      await first(thread);
+      await first(thread, record.entry.to ?? []);
       const hold: Given = {
         work: id,
         place,
@@ -1475,7 +1502,12 @@ export function createRecord(options: {
         change.undo();
         throw error;
       });
-      return { thread, all: (record.entry.to ?? []).every((one) => one.back !== undefined) };
+      return {
+        thread,
+        all: (record.entry.to ?? []).every((one) => one.back !== undefined),
+        id: record.entry.id,
+        text: textOf(record.entry),
+      };
     },
     /**
      * The place of the last thing it did itself, other than what the main loop said: what was

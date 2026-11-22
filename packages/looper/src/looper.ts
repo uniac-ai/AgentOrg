@@ -37,12 +37,23 @@
  * on with it, once: with a turn, if anything of it was kept. A turn
  * that ends, fails or is stopped leaves no mark; a thread the main loop answered, couldn't place,
  * or was stopped over, waits for its next message, and the main loop is put what it holds.
+ *
+ * With `conversations`, a thread's own work is its conversation's loop (see conversation.ts), in
+ * place of the main loop and of intake in code: every message said there is given to it, also
+ * while work runs there, and it passes a message on, starts work with it, or stops work, with
+ * `route`. What every piece of work it was given to hands back is that loop's again.
  */
 
 import { z } from "zod";
 import type { FilesOf } from "./compaction.js";
+import {
+  CONVERSATION_AFTER,
+  CONVERSATION_INSTRUCTIONS,
+  CONVERSATION_TITLE,
+  hostedParts,
+} from "./conversation.js";
 import { createLoop, type Place } from "./loop.js";
-import { createMain, type Listed, stopWord, TOLD, titled } from "./main.js";
+import { createMain, type Listed, listing, stopWord, TOLD, titled } from "./main.js";
 import { createRecord, createThread, messageOf, READS, type Thread, userEntry } from "./record.js";
 import { MOST_STEPS, Step } from "./steps.js";
 import type { Part } from "./told.js";
@@ -92,6 +103,8 @@ export function pickedOf(card: Card, picks: number[][]): string {
   return card.questions.map((question, at) => `${question.header}: ${labels[at]}`).join("\n");
 }
 
+/** What a conversation's own loop passes on with `route`: its message, to work there is or new work. */
+type Handed = { message: number; work?: string; title?: string; receipt?: string };
 /** The turns that run at once, not counting the one more for work already begun. */
 export const PLACES = 4;
 /** The turns that may wait for a place at once. */
@@ -205,7 +218,9 @@ export function createLooper(options: {
    * `frontDesk` are functions the main loop is offered beside its own when it decides on a
    * message, not when it hears of one that joined a turn: each it calls runs once the reply is in,
    * before the decision is acted on, with the request's id as its group, and what it gives goes to
-   * no model. None by default.
+   * no model. None by default. With `conversations`, a conversation's own loop is told `voice` and
+   * `blocks` as the main loop is, and offered `frontDesk`, whose results it reads back; workers
+   * are told and offered as before.
    */
   request(): Promise<{
     instructions: string | readonly Part[];
@@ -234,6 +249,12 @@ export function createLooper(options: {
    * a work's earlier steps lists them, carried from one summary to the next.
    */
   files?: FilesOf;
+  /**
+   * Whether each thread has a loop of its own, which every message said there reaches first (see
+   * conversation.ts), in place of the main loop and of a message given to work in code. It is the
+   * thread's own work, whose id is the thread's name; work it starts has an id of its own.
+   */
+  conversations?: boolean;
   log: Log;
 }) {
   /** A message said in `thread`, as a worker or the main loop is told it: who it is from. */
@@ -242,6 +263,14 @@ export function createLooper(options: {
     return who ? `(from ${who}) ${text}` : text;
   };
   const { store, out, log } = options;
+  /**
+   * Whether the work `id` is a thread's own loop: with `conversations`, the thread's own work,
+   * which began in the thread of its name. Work it passes messages to began elsewhere.
+   */
+  const isConversation = (id: string) =>
+    options.conversations === true && (kept.get(id)?.follows[0] ?? id) === id;
+  /** The place a conversation's turn takes: none of those that turns of work share. */
+  const FREE: Place = { entered: Promise.resolve(), leave() {} };
   type Work = ReturnType<typeof open>;
   /** The pieces of work that have a loop here, by id. */
   const works = new Map<string, Work>();
@@ -454,9 +483,11 @@ export function createLooper(options: {
   };
 
   const open = (id: string) => {
+    const talk = isConversation(id);
     const record = createRecord({
       id,
-      follows: () => kept.get(id)?.follows ?? [id],
+      // A conversation's own loop follows its own thread alone, whatever its work followed before.
+      follows: () => (talk ? [id] : (kept.get(id)?.follows ?? [id])),
       thread: threadOf,
       waits: (thread) => !hasOwn(thread),
       left: (thread) => kept.get(id)?.left?.includes(thread) === true,
@@ -491,10 +522,21 @@ export function createLooper(options: {
           );
       },
       loop: createLoop({
-        request: options.request,
+        request: talk ? conversationRequest : options.request,
         model: options.model,
-        enter,
+        enter: talk ? () => FREE : enter,
         record,
+        ...(talk
+          ? {
+              conversation: {
+                first: CONVERSATION_INSTRUCTIONS,
+                after: CONVERSATION_AFTER,
+                works: async () => listing(await listed(id)),
+                pass: (handed: Handed) => passOn(id, handed),
+                stop: (work: string) => stopping(id, work),
+              },
+            }
+          : {}),
         title: () => titleOf(id),
         others: () => othersOf(id),
         back: (handed) => returned(id, handed),
@@ -560,9 +602,14 @@ export function createLooper(options: {
     works.set(id, found);
     return found;
   };
-  /** A work's title: the main loop's, or its opening line for work begun before it had one. */
+  /**
+   * A work's title: a conversation's own loop's, the main loop's, or its opening line for work
+   * begun before it had one.
+   */
   const titleOf = async (id: string): Promise<string> =>
-    kept.get(id)?.title || titled(await of(id).record.opening());
+    isConversation(id)
+      ? CONVERSATION_TITLE
+      : kept.get(id)?.title || titled(await of(id).record.opening());
   /**
    * The titles of the other work in the threads a piece of work follows and hasn't left, in the
    * order they began, the newest `TOLD.works`: kept with their messages, an order that changes
@@ -574,7 +621,8 @@ export function createLooper(options: {
     const ids = new Set<string>();
     for (const thread of work?.follows ?? [id])
       if (!work?.left?.includes(thread))
-        for (const other of await followersOf(thread)) if (other !== id) ids.add(other);
+        for (const other of await followersOf(thread))
+          if (other !== id && !isConversation(other)) ids.add(other);
     const others = await Promise.all(
       [...ids].map(async (other) => ({
         began: await of(other).record.began(),
@@ -694,18 +742,24 @@ export function createLooper(options: {
     ]);
     const reaches = (id: string) =>
       options.speaker?.(thread) === undefined || (kept.get(id)?.follows ?? [id]).includes(thread);
+    // A conversation's own loop is not work to pass a message to.
     const all = await Promise.all(
-      [...ids].filter(reaches).map(async (id) => {
-        const title = await titleOf(id);
-        return {
-          id,
-          title,
-          turn: turnOf(id),
-          last: kept.get(id)?.last,
-          failed: kept.get(id)?.failed,
-          at: kept.get(id)?.at ?? "",
-        };
-      }),
+      [...ids]
+        .filter((id) => reaches(id) && !isConversation(id))
+        .map(async (id) => {
+          const title = await titleOf(id);
+          const follows = kept.get(id)?.follows ?? [id];
+          return {
+            id,
+            title,
+            turn: turnOf(id),
+            last: kept.get(id)?.last,
+            failed: kept.get(id)?.failed,
+            // A conversation's own loop is told which work is another conversation's.
+            ...(options.conversations && !follows.includes(thread) ? { elsewhere: true } : {}),
+            at: kept.get(id)?.at ?? "",
+          };
+        }),
     );
     const latest = all
       .filter(({ title }) => title !== "")
@@ -909,6 +963,114 @@ export function createLooper(options: {
     }
     return work;
   };
+  /** What a conversation's own loop is told and offered of its host's: see conversation.ts. */
+  const conversationRequest = async () => {
+    const given = await options.request();
+    return {
+      instructions: hostedParts(given),
+      tools: [...(given.frontDesk ?? [])],
+      ...(given.model ? { model: given.model } : {}),
+    };
+  };
+  /** Whether `id` is work the loop of `thread` may pass a message to, or stop. */
+  const workThere = async (thread: string, id: string) =>
+    (await listed(thread)).some((one) => one.id === id);
+  /**
+   * Pass a message of the loop of `thread` on: it hands it back and the work named, or new work
+   * under its title, is given it, kept in one go before either takes it, as a decision of the main
+   * loop is; a receipt said with new work answers nothing, as the main loop's did. Its routing then
+   * has that work take it. Work that handed it back once is not given it again.
+   */
+  const passOn = async (
+    thread: string,
+    { message, work, title, receipt }: Handed,
+  ): Promise<string> => {
+    if (work !== undefined && !(await workThere(thread, work)))
+      throw new Refusal(
+        "invalid",
+        `There is no work ${JSON.stringify(head(work, 64))}. Leave \`work\` out for new work.`,
+      );
+    const target = work ?? crypto.randomUUID();
+    let at: string | undefined;
+    let named: string | undefined;
+    try {
+      const done = await of(thread).record.back(message, "Passed on.", async (where, to) => {
+        if (to.some((one) => one.work === target))
+          throw new Refusal(
+            "invalid",
+            "That work handed this message back already: answer it, or pass it to other work.",
+          );
+        await hold(where);
+        at = where;
+      });
+      if (!done)
+        throw new Refusal(
+          "invalid",
+          "None of your messages has that number, or it was passed on already.",
+        );
+      named =
+        work === undefined ? titled(title ?? "") || titled(done.text) || "A picture" : undefined;
+      const into = threadOf(done.thread);
+      await into.offer([done.id], target, named);
+      if (work === undefined && receipt !== undefined)
+        await inLine(done.thread, async () => {
+          const { last } = await into.load();
+          const { entry } = await into.answer(receipt, last, crypto.randomUUID(), {
+            followed: true,
+            answers: [],
+          });
+          out.message(done.thread, messageOf(entry));
+        });
+      // What waits there now is routed, whatever is being routed there meanwhile.
+      unread.add(done.thread);
+    } catch (error) {
+      if (at !== undefined) {
+        release(at);
+        await unheld(at);
+      }
+      throw error;
+    }
+    release(at as string);
+    await tidy(at as string);
+    return named === undefined
+      ? `Passed on to ${JSON.stringify(await titleOf(target))}, whose worker answers it here.`
+      : `Passed on to new work, ${JSON.stringify(named)}, whose worker answers it here.`;
+  };
+  /** Stop the turn of the work `id`, for the loop of `thread`: what it is told of that. */
+  const stopping = async (thread: string, id: string): Promise<string> => {
+    if (!(await workThere(thread, id)))
+      throw new Refusal("invalid", `There is no work ${JSON.stringify(head(id, 64))}.`);
+    const turn = works.get(id)?.loop.turn();
+    return stopWord(turn !== undefined && (await works.get(id)?.loop.cancel(turn)) === true);
+  };
+  /**
+   * With `conversations`, what waits in a thread is its own loop's to take: a message every piece
+   * of work it was given to handed back comes back to it, after a line, kept for it alone, of
+   * which work did and why; one kept before for the main loop, or never given, it takes as it is.
+   * It gives that loop.
+   */
+  const bring = async (thread: string) => {
+    const into = threadOf(thread);
+    link(thread, thread);
+    const back = await inLine(thread, () => into.returned());
+    for (const { id, by } of back) {
+      const why = by.filter(({ work }) => work !== thread);
+      if (why.length > 0) {
+        const said = await Promise.all(
+          why.map(
+            async ({ work, why }) => `${JSON.stringify(await titleOf(work))} (${work}): ${why}`,
+          ),
+        );
+        const line = `The next message was passed on, and handed back: ${said.join("; ")}`;
+        await of(thread).record.append(
+          { role: "tool", text: line, items: [{ type: "message", role: "user", content: line }] },
+          { thread },
+        );
+      }
+      await into.reown([id], thread);
+    }
+    return thread;
+  };
   /**
    * Decisions are made one at a time, each to its end, so each knows what the last began. What
    * the main loop hears of a message that joined a turn takes its place in the same line.
@@ -949,7 +1111,12 @@ export function createLooper(options: {
         // came back from all of it: then it is for that work to take.
         const follows = followed.get(thread) ?? [];
         const theirs = follows.length > 0 && (await into.returned()).length === 0;
-        const decidedOn = theirs ? undefined : await decide(thread, cut);
+        // With conversations, what waits is the thread's own loop's: a decision is its to make.
+        const decidedOn = options.conversations
+          ? await bring(thread)
+          : theirs
+            ? undefined
+            : await decide(thread, cut);
         const takers = [
           ...new Set([
             ...(theirs ? follows : []),
@@ -1098,6 +1265,8 @@ export function createLooper(options: {
    * by a stop, a close or a restart is not heard, and the workers have the message all the same.
    */
   const hear = (thread: string, joined: { work: string; turn: number }[], text: string) => {
+    // A conversation's own loop hears every message itself.
+    if (options.conversations) return;
     if (stopped || closed || joined.length === 0 || !/\S/.test(text)) return;
     const at = cuts;
     const cut = () => at !== cuts;
@@ -1441,7 +1610,8 @@ export function createLooper(options: {
      * it is given to each piece of it in a turn, which takes it at its next model request; with
      * none in a turn, to the one that follows it, if only one does, which starts a turn, waiting
      * for a place if none is free. Where several follow and none is in a turn, or nothing follows,
-     * the main loop answers it or says whose it is first.
+     * the main loop answers it or says whose it is first. With `conversations`, it is given to the
+     * thread's own loop alone, which takes it at its next request or starts a turn, taking no place.
      * Refused `busy` while `WAITING` turns already wait and it would start one more, or while the
      * looper is stopped; and `unavailable` once it has closed.
      */
@@ -1452,6 +1622,16 @@ export function createLooper(options: {
         return Promise.reject(error);
       }
       const at = cuts;
+      // With conversations, every message is the thread's own loop's first.
+      if (options.conversations)
+        return started(
+          (async () => {
+            await learn();
+            mayStart(at);
+            link(thread, thread);
+            return give([thread], thread, text, at, images, answer);
+          })(),
+        );
       // Work known here is asked at once, so a stop that comes after this cuts it too. Given to
       // several, it goes through the thread's line, so each takes one message after another in
       // the order they were said.
@@ -1487,7 +1667,14 @@ export function createLooper(options: {
       /** Most recently active first, and by id where two were last active at once. */
       const order = (a: { id: string; at?: string | undefined }, b: typeof a) =>
         (b.at ?? "").localeCompare(a.at ?? "") || b.id.localeCompare(a.id);
-      const all = [...kept]
+      // A conversation's own loop in its first turn has kept nothing of its own yet, and is listed.
+      const first = [...works.keys()]
+        .filter((id) => !kept.has(id) && isConversation(id) && workingNow(id))
+        .map((id): [string, z.output<typeof Work>] => [
+          id,
+          { title: CONVERSATION_TITLE, follows: [id] },
+        ]);
+      const all = [...kept, ...first]
         .map(([id, work]) => ({ id, work, at: workingNow(id) ? now : work.at }))
         .sort(order);
       const cursor = before === undefined ? undefined : kept.get(before);
@@ -1500,7 +1687,7 @@ export function createLooper(options: {
       return Promise.all(
         latest.map(async ({ id, work, at }) => ({
           id,
-          title: work.title,
+          title: isConversation(id) ? CONVERSATION_TITLE : work.title,
           state: workingNow(id)
             ? ("working" as const)
             : work.stopped
@@ -1521,7 +1708,8 @@ export function createLooper(options: {
      */
     async entries(work: string, before: string | undefined, limit: number) {
       await learn();
-      if (!kept.has(work)) throw new Refusal("unknown", "There is no such piece of work.");
+      if (!kept.has(work) && !(isConversation(work) && works.has(work)))
+        throw new Refusal("unknown", "There is no such piece of work.");
       return entriesOf(work, before, limit);
     },
     /** What a piece of work's loop is doing. */
