@@ -5,7 +5,10 @@ export {
   agentProvider,
   Creatable,
   CreatableId,
+  HELD_MAX,
+  HeldCapability,
   OwnCapability,
+  ProvidedStatus,
 } from "./agent-provider.js";
 export {
   agentSettings,
@@ -17,6 +20,14 @@ export {
   SkillPath,
 } from "./agent-settings.js";
 export { capability, WayForward } from "./capability.js";
+export {
+  ArgumentProblem,
+  Arguments,
+  ArgumentsSchema,
+  CapabilityDefinition,
+  capabilityProvider,
+  Mounting,
+} from "./capability-provider.js";
 export {
   Answer,
   ASK_MAX,
@@ -62,6 +73,7 @@ export {
   ConnectionOrigin,
   connections,
   ListedTemplate,
+  MountedCapability,
   Stack,
   StackBase,
   StackUnit,

@@ -11,6 +11,7 @@ import {
   agentSettings,
   agents,
   capability,
+  capabilityProvider,
   chat,
   connections,
   FactRow,
@@ -60,7 +61,16 @@ test("every interface's schemas compile under the Hub's strict validator", () =>
     assert.doesNotThrow(() => compiled(iface), describeInterface(iface).id);
 });
 
-const management = [tools, agentSettings, agentProvider, agents, connections, skills, unitProvider];
+const management = [
+  tools,
+  agentSettings,
+  agentProvider,
+  agents,
+  connections,
+  skills,
+  unitProvider,
+  capabilityProvider,
+];
 
 test("the agent management interfaces are named, versioned and compile strictly", () => {
   assert.deepEqual(
@@ -73,6 +83,7 @@ test("the agent management interfaces are named, versioned and compile strictly"
       "connections@1",
       "skills@1",
       "unit.provider@1",
+      "capability.provider@1",
     ],
   );
   for (const iface of management)
@@ -208,6 +219,151 @@ test("what an agent holds may be made of plugins, and then needn't be reached by
   const many = (count: number) => Array.from({ length: count }, (_, i) => ({ name: `part-${i}` }));
   assert.ok(holds({ ...held, plugins: many(16) }));
   assert.equal(holds({ ...held, plugins: many(17) }), false);
+});
+
+test("a capability provider lists what it makes, each made with the arguments its JSON Schema describes", () => {
+  const listed = compiled(capabilityProvider)["capabilities.output"];
+  assert.ok(listed);
+  const memory = {
+    id: "memory",
+    title: "Memory",
+    description: "It remembers what you tell it to.",
+    arguments: { type: "object", properties: {}, additionalProperties: false },
+  };
+  const github = {
+    id: "github",
+    title: "GitHub",
+    description: "Its repositories, as functions.",
+    arguments: {
+      type: "object",
+      properties: {
+        owner: { type: "string", title: "Owner" },
+        token: { type: "string", title: "Token", secret: true },
+      },
+      required: ["owner", "token"],
+    },
+  };
+  assert.ok(listed({ capabilities: [memory, github] }));
+  assert.ok(listed({ capabilities: [] }));
+  // The arguments are always an object's schema; an id is a slug; nothing else is said, no
+  // asking a person first, which is the control capability's own to decide.
+  assert.equal(listed({ capabilities: [{ ...memory, arguments: { type: "string" } }] }), false);
+  assert.equal(listed({ capabilities: [{ ...memory, arguments: {} }] }), false);
+  assert.equal(listed({ capabilities: [{ ...memory, id: "Memory" }] }), false);
+  assert.equal(listed({ capabilities: [{ ...memory, asks: ["person"] }] }), false);
+});
+
+test("a capability is mounted from its arguments, or each problem with them is said and nothing made", () => {
+  for (const iface of [capabilityProvider, agents]) {
+    const id = describeInterface(iface).id;
+    const mount = compiled(iface)["mount.output"];
+    assert.ok(mount, id);
+    assert.ok(mount({ mounted: "mnt_1" }), id);
+    assert.ok(mount({ problems: [{ path: "/token", message: "A token is needed." }] }), id);
+    assert.ok(mount({ problems: [{ message: "The owner and the token don't match." }] }), id);
+    assert.ok(mount({ problems: [{ path: "/a~1b/0", message: "x" }] }), id);
+    // Mounted, or not and why: never both, never neither, and a path is a JSON Pointer.
+    assert.equal(mount({ mounted: "mnt_1", problems: [{ message: "x" }] }), false, id);
+    assert.equal(mount({}), false, id);
+    assert.equal(mount({ problems: [] }), false, id);
+    assert.equal(mount({ problems: [{ path: "token", message: "x" }] }), false, id);
+    assert.equal(mount({ problems: [{ path: "/a~2", message: "x" }] }), false, id);
+    assert.equal(mount({ problems: [{ path: "/token", message: "" }] }), false, id);
+  }
+  const provider = compiled(capabilityProvider);
+  const asked = { agent: "act_a", capability: "memory", arguments: {} };
+  assert.ok(provider["mount.input"]?.(asked));
+  assert.ok(provider["mount.input"]?.({ ...asked, arguments: { owner: "o", deep: { a: [1] } } }));
+  assert.equal(provider["mount.input"]?.({ agent: "act_a", capability: "memory" }), false);
+  assert.equal(provider["mount.input"]?.({ ...asked, capability: "Memory" }), false);
+  assert.ok(provider["unmount.input"]?.({ agent: "act_a", mounted: "mnt_1" }));
+  assert.equal(provider["unmount.input"]?.({ mounted: "mnt_1" }), false);
+
+  // Through management, the caller names the provider too.
+  const manage = compiled(agents);
+  assert.ok(manage["mount.input"]?.({ ...asked, provider: "act_p" }));
+  assert.equal(manage["mount.input"]?.(asked), false);
+  assert.ok(manage["unmount.input"]?.({ agent: "act_a", mounted: "mnt_1" }));
+  assert.equal(manage["unmount.input"]?.({ agent: "act_a" }), false);
+  assert.ok(manage["unmount.output"]?.({}));
+});
+
+test("an agent says each capability mounted on it, with its state; management's get gives that tree under each it mounted", () => {
+  const status = compiled(agentProvider)["status.output"];
+  assert.ok(status);
+  const memory = { name: "memory", title: "Memory", state: "mounted" };
+  const tidy = {
+    name: "memory-tidy",
+    title: "Memory keeps itself",
+    state: "mounted",
+    parent: "memory",
+  };
+  const connector = {
+    name: "hub",
+    title: "Hub connector",
+    state: "down",
+    detail: "Its connection to the Hub ended.",
+  };
+  assert.ok(status({ state: "running", mounted: [connector, memory, tidy] }));
+  assert.ok(status({ state: "running", mounted: [] }));
+  assert.ok(status({ state: "running" }), "none said: a provider that doesn't say");
+  const failed = {
+    name: "memory",
+    title: "Memory",
+    state: "failed",
+    detail: "Its lines couldn't be read.",
+  };
+  assert.ok(status({ state: "running", detail: "It runs without memory.", mounted: [failed] }));
+  assert.equal(status({ state: "running", mounted: [{ ...memory, state: "loading" }] }), false);
+  assert.equal(status({ state: "running", mounted: [{ ...memory, name: "Memory" }] }), false);
+  assert.equal(status({ state: "running", mounted: [{ ...memory, by: "person" }] }), false);
+  const many = Array.from({ length: 65 }, (_, i) => ({ ...memory, name: `part-${i}` }));
+  assert.equal(status({ state: "running", mounted: many }), false);
+  // The person's list says how each agent stands, and nothing of what it holds.
+  const listed = compiled(agents)["list.output"];
+  const agent = { agent: "act_1", name: "A", provider: "act_2", creatable: "assistant" };
+  assert.ok(listed?.({ agents: [{ ...agent, status: { state: "running" } }] }));
+  assert.equal(
+    listed?.({ agents: [{ ...agent, status: { state: "running", mounted: [memory] } }] }),
+    false,
+  );
+
+  const got = compiled(agents)["get.output"];
+  assert.ok(got);
+  const entry = {
+    ...agent,
+    status: { state: "running" },
+    instructions: "",
+    skills: [],
+    mcp: [],
+    units: [],
+    capabilities: [],
+  };
+  const root = {
+    mounted: "mnt_1",
+    provider: "act_2",
+    capability: "memory",
+    title: "Memory",
+    arguments: {},
+    by: "person",
+    state: "mounted",
+    children: [tidy],
+  };
+  assert.ok(got({ ...entry, mounted: [root] }));
+  assert.ok(got({ ...entry, mounted: [] }));
+  assert.ok(got(entry), "none said: something written before this");
+  // With no state, the agent couldn't be asked; its children are then not known.
+  const { state: _, ...unknown } = root;
+  assert.ok(got({ ...entry, mounted: [{ ...unknown, children: [] }] }));
+  // Mounted by an agent or a program, by its Actor id; never with a secret kept beside it.
+  assert.ok(got({ ...entry, mounted: [{ ...root, by: "act_9", arguments: { owner: "o" } }] }));
+  assert.equal(got({ ...entry, mounted: [{ ...root, secrets: { token: "t" } }] }), false);
+  assert.equal(
+    got({ ...entry, mounted: [{ ...root, children: [{ ...tidy, state: "x" }] }] }),
+    false,
+  );
+  const { by: __, ...nobody } = root;
+  assert.equal(got({ ...entry, mounted: [nobody] }), false);
 });
 
 test("a fact may carry a note under its value, short and never empty", () => {
