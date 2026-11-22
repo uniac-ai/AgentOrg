@@ -85,6 +85,15 @@ export interface Model {
   cancel(request: { requestId: string }): Promise<unknown>;
 }
 
+/**
+ * The conversation a loop's request is for: its loop's id, which is the thread's name, and whose
+ * conversation it is, `person` or the party's id.
+ */
+export interface Conversed {
+  id: string;
+  with: string;
+}
+
 /** Where the looper keeps its records: values by key, listed in key order a page at a time. */
 export interface Store {
   get(input: { key: string }): Promise<{ value?: Json | undefined }>;

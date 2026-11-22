@@ -1,6 +1,7 @@
 import {
   type Card,
   type CardAnswer,
+  type Conversed,
   createLooper,
   Entry,
   type FilesOf,
@@ -81,6 +82,10 @@ export function looperWith(
      * or as what a function gives each time the host is asked.
      */
     instructions?: string | readonly Part[] | (() => string | readonly Part[]);
+    /** Told what each request is read for: a conversation's own loop says which conversation. */
+    requested?: (conversation?: Conversed) => void;
+    /** Run at each model request a loop makes, with its input: what it gives is sent. */
+    pass?: (input: Item[], conversation?: Conversed) => Item[];
   } = {},
 ) {
   const values = options.values ?? new Map<string, Json>();
@@ -328,15 +333,18 @@ export function looperWith(
           }
       },
     },
-    request: async () => ({
-      instructions:
-        typeof options.instructions === "function"
-          ? options.instructions()
-          : (options.instructions ?? ""),
-      tools: options.tools ?? [],
-      ...(options.voice === undefined ? {} : { voice: options.voice }),
-      ...(options.frontDesk === undefined ? {} : { frontDesk: options.frontDesk }),
-    }),
+    request: async (conversation) => {
+      options.requested?.(conversation);
+      return {
+        instructions:
+          typeof options.instructions === "function"
+            ? options.instructions()
+            : (options.instructions ?? ""),
+        tools: options.tools ?? [],
+        ...(options.voice === undefined ? {} : { voice: options.voice }),
+        ...(options.frontDesk === undefined ? {} : { frontDesk: options.frontDesk }),
+      };
+    },
     out: {
       message(thread, { id, role, text, images, ask, answer }) {
         messages.push({
@@ -367,6 +375,7 @@ export function looperWith(
     ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
     ...(options.files === undefined ? {} : { files: options.files }),
     ...(options.conversations === undefined ? {} : { conversations: options.conversations }),
+    ...(options.pass === undefined ? {} : { pass: options.pass }),
     log: { info() {}, warn: (message) => void warnings.push(message), error() {} },
   });
   /**

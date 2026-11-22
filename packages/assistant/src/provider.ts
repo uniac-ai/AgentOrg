@@ -3,6 +3,12 @@
  * process as its own Actor on its own channel. A stopped agent stays on its channel, so its
  * conversations can be read, and runs no turn until it is started. Each agent's conversations and model choice are kept
  * in the provider's private folder.
+ *
+ * It is also a capability provider for its own agents (`capability.provider@1`, as
+ * `capabilities`): it offers the capabilities it carries that it is given definitions of. What an
+ * agent holds is what its settings name: management keeps what was mounted, and names it there
+ * before it asks, so this provider's `mount` has the agent hold its settings now and answers from
+ * what it then holds. It keeps no list of its own.
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -10,8 +16,11 @@ import { join } from "node:path";
 import {
   agentProvider,
   agentSettings,
+  type CapabilityDefinition,
   capability,
+  capabilityProvider,
   chat,
+  HELD_MAX,
   hubActors,
   llmSession,
   tools,
@@ -19,9 +28,16 @@ import {
 import { type Log, NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
+import { type AgentHub, type Channel, connector, model } from "./connector.js";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
-import { type AgentPlugin, type AgentPlugins, createPluginHost, type Without } from "./plugins.js";
+import {
+  type AgentContext,
+  type AgentPlugin,
+  type AgentPlugins,
+  createPluginHost,
+  type Without,
+} from "./plugins.js";
 import { head } from "./tools.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
@@ -70,6 +86,11 @@ export interface AgentProviderOptions {
    */
   // biome-ignore lint/suspicious/noExplicitAny: each plugin's settings are its own.
   plugins?: AgentPlugin<any>[];
+  /**
+   * The capabilities it offers its agents, each by the name of a plugin it carries: a capability's
+   * id and its plugin's name are one and the same. None unless given.
+   */
+  offers?: z.infer<typeof CapabilityDefinition>[];
   log?: Log;
 }
 
@@ -88,7 +109,7 @@ interface Held {
   channel?: { close(): void; readonly closed: Promise<void> };
   engine?: ReturnType<typeof startEngine>;
   /** The plugins it holds, loaded in its own context while it is open. */
-  plugins?: AgentPlugins;
+  plugins?: AgentContext;
   /** What is being done to it: one thing at a time. */
   queue: Promise<unknown>;
 }
@@ -128,6 +149,10 @@ export const withoutOf = (without: Without[]) => {
 export async function startAgentProvider(options: AgentProviderOptions): Promise<AgentProvider> {
   const log = options.log ?? quiet;
   const { hubUrl, dir } = options;
+  const offers = options.offers ?? [];
+  const carried = new Set((options.plugins ?? []).map((plugin) => plugin.name));
+  for (const { id } of offers)
+    if (!carried.has(id)) throw new Error(`It offers ${id}, which it doesn't carry.`);
   /** Every agent's plugins, each agent in a context of its own. */
   const host = createPluginHost(log, options.plugins);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -203,7 +228,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     const store = createLocalStore(folderOf(agent));
     try {
       // Its context: it holds the plugins its settings name once its engine reads them.
-      const context = await host.open(agent, { store });
+      const context = await host.open(agent, { store, provides: ["hub", "model"] });
       plugins = context;
       /**
        * A plugin its settings name that it can't hold, it runs without: its status says which, and
@@ -226,29 +251,49 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           return given;
         },
       };
-      const channel = await connect({
-        hubUrl,
-        actorId: agent,
-        credential: (stored[agent] as z.infer<typeof Stored>).credential,
-        slots: { model: llmSession, settings: agentSettings },
-        exports: { chat, capability, tools },
-        log,
-        start(ctx) {
-          engine = startEngine(ctx, {
-            store,
-            instructions: () => ASSISTANT_INSTRUCTIONS,
-            earlier: EARLIER_INSTRUCTIONS,
-            stopped,
-            plugins: held,
-          });
-        },
+      // Its channel to the Hub is its connector's, made with the identity kept for it here; its
+      // engine starts as the channel opens. What refused it is what the provider is told.
+      let channel: Channel | undefined;
+      let refused: unknown;
+      const join = (started: (hub: AgentHub) => void) =>
+        connect({
+          hubUrl,
+          actorId: agent,
+          credential: (stored[agent] as z.infer<typeof Stored>).credential,
+          slots: { model: llmSession, settings: agentSettings },
+          exports: { chat, capability, tools },
+          log,
+          start(ctx) {
+            started(ctx);
+            engine = startEngine(ctx, {
+              store,
+              instructions: () => ASSISTANT_INSTRUCTIONS,
+              earlier: EARLIER_INSTRUCTIONS,
+              stopped,
+              plugins: held,
+            });
+          },
+        }).then(
+          (joined) => (channel = joined),
+          (error: unknown) => {
+            refused = error;
+            throw error;
+          },
+        );
+      await context.mount(connector(join)).catch((error: unknown) => {
+        throw refused ?? error;
       });
+      if (!channel || !engine) throw new Error("Its channel opened with no engine.");
+      // Its model, for its capabilities' own questions, with the model chosen for it.
+      const running = engine;
+      await context.mount(model(() => running.chosen()));
       one.channel = channel;
       one.engine = engine;
       one.plugins = context;
       one.state = stopped ? "stopped" : "running";
-      void channel.closed.then(() => {
-        if (one.channel !== channel) return;
+      const open = channel;
+      void open.closed.then(() => {
+        if (one.channel !== open) return;
         delete one.channel;
         one.state = "down";
         one.detail = "Its connection to the Hub ended.";
@@ -301,9 +346,43 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors, model: llmSession },
-    exports: { provider: agentProvider },
+    exports: { provider: agentProvider, capabilities: capabilityProvider },
     log,
     start(ctx) {
+      /**
+       * What the agent holds of its root `name` once it has held what its settings name now: one
+       * it couldn't mount says why; one its settings don't name, it doesn't hold.
+       */
+      const holding = async (one: Held, agent: string, name: string) => {
+        await engineOf(agent).hold();
+        return one.plugins?.list().find((held) => held.name === name && !held.parent);
+      };
+      ctx.exports.capabilities.implement({
+        capabilities: () => ({ capabilities: offers }),
+        mount: ({ agent, capability: name }) =>
+          inTurn(agent, async (one) => {
+            if (!offers.some((offer) => offer.id === name))
+              throw new Refused("unknown", `This provider offers no ${name}.`);
+            const held = await holding(one, agent, name);
+            if (!held)
+              throw new Refused(
+                "state",
+                `Its settings don't name ${name}: it is mounted through management, which keeps what is mounted.`,
+              );
+            if (held.state === "failed")
+              return {
+                problems: [{ message: head(held.detail ?? `${name} couldn't be mounted.`, 2000) }],
+              };
+            return { mounted: name };
+          }),
+        unmount: ({ agent, mounted }) =>
+          inTurn(agent, async (one) => {
+            const held = await holding(one, agent, mounted);
+            if (held && held.state !== "failed")
+              throw new Refused("state", `Its settings still name ${mounted}.`);
+            return {};
+          }),
+      });
       ctx.exports.provider.implement({
         creatable: async () => ({ creatables: [ASSISTANT] }),
         async create({ creatable, name }) {
@@ -333,10 +412,17 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           return { agent, settings: "settings", chat: "chat" };
         },
         status: async ({ agent }) => {
-          // Why it is down; or, running, what it runs without.
-          const { state, detail, without } = held(agent);
+          // Why it is down; or, running, what it runs without; and what it holds while it is open.
+          const { state, detail, without, plugins } = held(agent);
           const said = state === "down" ? detail : state === "running" ? without : undefined;
-          return { state, ...(said ? { detail: said } : {}) };
+          const mounted = plugins
+            ?.list()
+            .slice(0, HELD_MAX)
+            .map(({ added: _, detail: why, ...one }) => ({
+              ...one,
+              ...(why ? { detail: head(why, DETAIL_MAX) } : {}),
+            }));
+          return { state, ...(said ? { detail: said } : {}), ...(mounted ? { mounted } : {}) };
         },
         start: ({ agent }) =>
           inTurn(agent, async (one) => {

@@ -16,6 +16,7 @@ export {
   type Call,
   type Card,
   type CardAnswer,
+  type Conversed,
   cut,
   cutInside,
   Item,

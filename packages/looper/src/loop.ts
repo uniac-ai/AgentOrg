@@ -386,6 +386,9 @@ ${NUMBERED} Decide each one once. If it asks for something that belongs to this 
 ${LEFT_OUT} Message [1] is what this work was asked.`;
 
 type FunctionCall = Extract<Item, { type: "function_call" }>;
+const encoder = new TextEncoder();
+/** The bytes of JSON `value` takes in a request. */
+const bytesOf = (value: unknown) => encoder.encode(JSON.stringify(value)).byteLength;
 /** Whether a conversation's `route` call stops work, rather than passing a message on. */
 const stopsWork = (args: string) => {
   try {
@@ -513,6 +516,13 @@ export function createLoop(options: {
     tools: Tool[];
     model?: string | undefined;
   }>;
+  /**
+   * Run at each request it makes, with what it is about to send as its input: what it gives is
+   * sent in its place. What the record keeps is unchanged. What it adds is held back from the
+   * record's room, so it may be run twice for one request: once to measure what it adds, and once
+   * on what is sent. None by default.
+   */
+  pass?(input: Item[]): Item[];
   model: Model;
   /**
    * Ask for a place for a turn about to start, or a turn in the line for one. `begun` says whether
@@ -1075,11 +1085,21 @@ export function createLoop(options: {
         : [];
       let { items: input, read, thread, over } = await record.input(besides);
       input = [...input, ...tail];
+      // What its pass adds is held back from the record's room: one that adds much leads to a
+      // summary or a cut, as a long record does, not to a request too long for the model.
+      let reserve = 0;
+      if (options.pass) {
+        reserve = Math.max(0, bytesOf(options.pass(input)) - bytesOf(input));
+        if (reserve > 0) {
+          ({ items: input, read, thread, over } = await record.input(besides, reserve));
+          input = [...input, ...tail];
+        }
+      }
       if (current.cancelled) return;
       // A request that only decides whether to take what it was given is cut to fit instead: one
       // that hands it back would have summarized for nothing.
       if (over && current.acted && (await compact(current, chosen, { thread, read }, false))) {
-        ({ items: input, read, thread } = await record.input(besides));
+        ({ items: input, read, thread } = await record.input(besides, reserve));
         input = [...input, ...tail];
       }
       if (current.cancelled) return;
@@ -1101,7 +1121,7 @@ export function createLoop(options: {
         output = await respond(current, {
           ...(chosen ? { model: chosen } : {}),
           ...offered,
-          input,
+          input: options.pass ? options.pass(input) : input,
         });
       } catch (error) {
         // Refused for its length: once, the earlier steps are summarized and it is asked again.

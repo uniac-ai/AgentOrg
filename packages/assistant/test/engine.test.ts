@@ -11,6 +11,7 @@ import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
 import engine, { EARLIER, engines, given, INSTRUCTIONS } from "./engine-actor.ts";
+import { saying } from "./saying.ts";
 
 /** An interface that isn't `tools@1`. */
 const other = defineInterface({
@@ -2884,4 +2885,50 @@ test("Work carries the steps each piece of work keeps", async () => {
     work.entries.some((entry: { call?: { name: string } }) => entry.call?.name === "status"),
     false,
   );
+});
+
+test("a hold never applies settings older than one already held: what a later read named stays held", async (t) => {
+  const said: string[] = [];
+  const quiet = { info() {}, warn() {}, error() {} };
+  const plugins = await createPluginHost(quiet, [saying("notes", said)]).open("assistant", {
+    store: memory().handlers as never,
+  });
+  given.plugins = plugins;
+  t.after(() => {
+    delete given.plugins;
+  });
+  const s = await setup();
+  // Each read answers with what was named as it was read; the first waits until it is let go, as
+  // a read over a slow channel may.
+  let names: string[] = [];
+  const slow = gate();
+  let first = true;
+  s.actor.bind("settings", {
+    ...settingsOf("You keep the docs.", []),
+    get: async () => {
+      const named = names;
+      if (first) {
+        first = false;
+        await slow.shut;
+      }
+      return {
+        instructions: "You keep the docs.",
+        skills: [],
+        plugins: named.map((name) => ({ name, capability: name })),
+      };
+    },
+  });
+  // Bound, it reads them, slowly, while they name nothing. Then they name notes, and it is asked
+  // to hold them again, as a provider does once management has named one there.
+  names = ["notes"];
+  const later = s.host.hold();
+  await new Promise((done) => setTimeout(done, 20));
+  slow.open();
+  await later;
+  await new Promise((done) => setTimeout(done, 20));
+  assert.ok(
+    plugins.list().some(({ name }) => name === "notes"),
+    JSON.stringify(said),
+  );
+  assert.ok(!said.includes("notes unloaded"), JSON.stringify(said));
 });

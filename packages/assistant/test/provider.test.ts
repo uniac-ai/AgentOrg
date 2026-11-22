@@ -9,6 +9,8 @@ import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   agentProvider,
   agentSettings,
+  type CapabilityDefinition,
+  capabilityProvider,
   chat,
   hubActors,
   hubExports,
@@ -19,6 +21,7 @@ import {
 import { NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { Context } from "cordis";
+import type { z } from "zod";
 import { createLocalStore } from "../src/local-store.ts";
 import type { AgentPlugin } from "../src/plugins.ts";
 import { startAgentProvider, withoutOf } from "../src/provider.ts";
@@ -46,7 +49,11 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
 const say = (content: string) => [sendOf(content)];
 
 /** `plugins` are those the provider carries. */
-async function setup(t: test.TestContext, plugins: AgentPlugin[] = []) {
+async function setup(
+  t: test.TestContext,
+  plugins: AgentPlugin[] = [],
+  offers: z.infer<typeof CapabilityDefinition>[] = [],
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-agents-")));
   const home = join(root, "home");
   const dir = join(root, "provider");
@@ -129,23 +136,30 @@ async function setup(t: test.TestContext, plugins: AgentPlugin[] = []) {
       model: { actor: modelActor.actorId, export: "session" },
       dir,
       plugins,
+      offers,
     });
   const running = { current: await start() };
   leaving.push(() => running.current.close());
 
   const asks = hub.state.createActor(PERSON, {
     name: "Asks",
-    bindings: [{ slot: "agents", provider: made.actorId, export: "provider" }],
+    bindings: [
+      { slot: "agents", provider: made.actorId, export: "provider" },
+      { slot: "capabilities", provider: made.actorId, export: "capabilities" },
+    ],
   });
   const caller = await join_(
     connect({
       hubUrl,
       actorId: asks.actorId,
       credential: asks.credential as string,
-      slots: { agents: agentProvider, chat },
+      slots: { agents: agentProvider, capabilities: capabilityProvider, chat },
     }),
   );
-  await until(() => caller.slots.agents.bound, "the caller's binding");
+  await until(
+    () => caller.slots.agents.bound && caller.slots.capabilities.bound,
+    "the caller's bindings",
+  );
   const agents = caller.slots.agents.call;
 
   /** Make an Assistant and connect the caller to its chat. */
@@ -173,11 +187,18 @@ async function setup(t: test.TestContext, plugins: AgentPlugin[] = []) {
     return requests[from] as Request;
   };
   const texts = async () => (await talk.history({})).messages.map((m) => `${m.role}: ${m.text}`);
+  /** How an agent stands, as most of these tests compare it: its state and why, not what it holds. */
+  const standing = async (input: { agent: string }) => {
+    const { mounted: _, ...rest } = await agents.status(input);
+    return rest;
+  };
   const restart = async () => {
     await running.current.close();
     running.current = await start();
   };
   return {
+    standing,
+    capabilities: caller.slots.capabilities.call,
     hub,
     hubUrl,
     dir,
@@ -220,7 +241,7 @@ test("an Assistant is made running, bound to the model, with no store and nothin
   const s = await setup(t);
   const { agent, settings, chat: chatName } = await s.create();
   assert.deepEqual([settings, chatName], ["settings", "chat"]);
-  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(await s.standing({ agent }), { state: "running" });
   // A provider that isn't a manager gave the agent its own binding to the model.
   assert.deepEqual(
     s.hub.state
@@ -250,7 +271,7 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
 
   const chat = (await s.one()) as string;
   await s.agents.stop({ agent });
-  assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });
+  assert.deepEqual(await s.standing({ agent }), { state: "stopped" });
   // It stays on its channel, so what was said can still be read.
   assert.equal(s.hub.connected(agent), true);
   assert.deepEqual(
@@ -266,7 +287,7 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   await s.agents.stop({ agent });
 
   await s.agents.start({ agent });
-  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(await s.standing({ agent }), { state: "running" });
   assert.deepEqual(await s.texts(), ["user: first", "assistant: first reply"]);
   assert.deepEqual(await s.agents.models({ agent }), {
     models: [
@@ -287,7 +308,7 @@ test("stop and start keep the transcript, the model and the bindings", async (t)
   );
   // Starting one already running changes nothing.
   await s.agents.start({ agent });
-  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(await s.standing({ agent }), { state: "running" });
 });
 
 test("stopping cuts a turn in progress, and what was said stays", async (t) => {
@@ -319,8 +340,8 @@ test("a provider restart brings running agents back, and leaves stopped ones sto
 
   await s.restart();
   await until(() => s.caller.slots.agents.bound, "the provider to be back");
-  assert.deepEqual(await s.agents.status({ agent: up }), { state: "running" });
-  assert.deepEqual(await s.agents.status({ agent: down }), { state: "stopped" });
+  assert.deepEqual(await s.standing({ agent: up }), { state: "running" });
+  assert.deepEqual(await s.standing({ agent: down }), { state: "stopped" });
   assert.equal(s.hub.connected(up), true);
   // The stopped one is back on its channel too, as it was left: read, and taking nothing.
   await until(() => s.caller.slots.chat.bound && s.hub.connected(down), "the stopped one");
@@ -377,16 +398,24 @@ test("a stopped agent whose connection ended is down until it is stopped or star
     async () => (await s.agents.status({ agent })).state === "down",
     "the agent to be down",
   );
+  // Its connector says it can't do its part, and why.
+  const connector = (await s.agents.status({ agent })).mounted?.find(
+    ({ name }) => name === "connector",
+  );
+  assert.deepEqual(connector && { state: connector.state, detail: connector.detail }, {
+    state: "down",
+    detail: "Its connection to the Hub ended.",
+  });
   // Off its channel, it can't say its models.
   await assert.rejects(s.agents.models({ agent }), { code: "unavailable" });
   // Stopped again, it joins as it was left: read, and taking nothing.
   await s.agents.stop({ agent });
-  assert.deepEqual(await s.agents.status({ agent }), { state: "stopped" });
+  assert.deepEqual(await s.standing({ agent }), { state: "stopped" });
   await until(() => s.caller.slots.chat.bound && s.hub.connected(agent), "the agent to be back");
   assert.equal((await s.talk.history({})).messages.length, 2);
   await assert.rejects(s.talk.send({ text: "more" }), { code: "busy" });
   await s.agents.start({ agent });
-  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(await s.standing({ agent }), { state: "running" });
   await s.turn("again");
   assert.equal((await s.talk.history({})).messages.length, 4);
 });
@@ -505,7 +534,7 @@ test("an agent holds the plugins its settings name, of those its provider carrie
     return said.includes("notes unloaded");
   }, "the change to be heard");
   assert.deepEqual(said, ["notes loaded as mine", "search loaded", "notes unloaded"]);
-  assert.deepEqual(await s.agents.status({ agent }), { state: "running" });
+  assert.deepEqual(await s.standing({ agent }), { state: "running" });
   assert.deepEqual(offered(await s.turn("and now?")), ["search__do"]);
 });
 
@@ -527,7 +556,7 @@ test("a plugin its settings name that it can't hold, not carried or not loading,
   const running = (detail?: string) =>
     until(
       async () =>
-        JSON.stringify(await s.agents.status({ agent })) ===
+        JSON.stringify(await s.standing({ agent })) ===
         JSON.stringify({ state: "running", ...(detail ? { detail } : {}) }),
       `the agent to be running${detail ? `: ${detail}` : ""}`,
     );
@@ -665,4 +694,165 @@ test("the local store answers as kv@1: JSON values, ordered keys, pages", async 
   });
   assert.deepEqual(await store.delete({ key: "other" }), { deleted: true });
   assert.deepEqual(await store.get({ key: "other" }), {});
+});
+
+test("it offers the capabilities it carries, mounts one its agent's settings name, and says in the agent's status what it holds", async (t) => {
+  const said: string[] = [];
+  let room = true;
+  const roomy: AgentPlugin = {
+    name: "roomy",
+    inject: ["tools"],
+    apply() {
+      if (!room) throw new Error("No room.");
+    },
+  };
+  const offer = (id: string) => ({
+    id,
+    title: id === "notes" ? "Notes" : "Roomy",
+    description: `The ${id} capability.`,
+    arguments: { type: "object" as const, properties: {} },
+  });
+  const s = await setup(t, [saying("notes", said), roomy], [offer("notes"), offer("roomy")]);
+  // Offered, by the names of the plugins it carries; one it doesn't carry can't be offered.
+  assert.deepEqual(
+    (await s.capabilities.capabilities({})).capabilities.map(({ id }) => id),
+    ["notes", "roomy"],
+  );
+  const { agent, settings } = await s.create();
+  let names: string[] = [];
+  const management = await settingsOf(s, agent, settings, () => names);
+  const mount = (capability: string) => s.capabilities.mount({ agent, capability, arguments: {} });
+  // Not named by its settings: management keeps what is mounted, and names it there first.
+  await assert.rejects(mount("notes"), refused("state"));
+  names = ["notes"];
+  assert.deepEqual(await mount("notes"), { mounted: "notes" });
+  assert.ok(said.includes("notes loaded"));
+  const held = async () =>
+    ((await s.agents.status({ agent })).mounted ?? []).map(({ name, state, parent }) => ({
+      name,
+      state,
+      ...(parent ? { parent } : {}),
+    }));
+  const bundled = ["agent", "store", "tools", "prompt", "connector", "model"].map((name) => ({
+    name,
+    state: "mounted",
+  }));
+  assert.deepEqual(await held(), [...bundled, { name: "notes", state: "mounted" }]);
+  // One that can't be mounted is said with why, and nothing is mounted.
+  room = false;
+  names = ["notes", "roomy"];
+  assert.deepEqual(await mount("roomy"), { problems: [{ message: "No room." }] });
+  assert.deepEqual((await s.agents.status({ agent })).mounted?.at(-1), {
+    name: "roomy",
+    title: "roomy",
+    state: "failed",
+    detail: "No room.",
+  });
+  // Unmounted once its settings no longer name it; refused while they still do.
+  await assert.rejects(s.capabilities.unmount({ agent, mounted: "notes" }), refused("state"));
+  names = [];
+  management.changed();
+  assert.deepEqual(await s.capabilities.unmount({ agent, mounted: "notes" }), {});
+  assert.ok(said.includes("notes unloaded"));
+  assert.deepEqual(await held(), bundled);
+  // What it doesn't offer, and an agent it didn't make, are unknown to it.
+  await assert.rejects(mount("search"), refused("unknown"));
+  await assert.rejects(
+    s.capabilities.mount({ agent: "act_none", capability: "notes", arguments: {} }),
+    refused("unknown"),
+  );
+});
+
+test("a capability asks the agent's model with its own words, under the agent's model choice, and its question ends when it goes or the agent stops", async (t) => {
+  type Ask = (asked: { instructions: string; input: object[] }) => Promise<unknown>;
+  const asking: Ask[] = [];
+  const asker: AgentPlugin = {
+    name: "asker",
+    inject: ["model", "capabilities"],
+    apply(ctx: Context) {
+      const { signal } = ctx.capabilities;
+      asking.push((asked) => ctx.model.respond(asked as never, { signal }));
+    },
+  };
+  const s = await setup(t, [asker]);
+  const { agent, settings } = await s.create();
+  let names = ["asker"];
+  const management = await settingsOf(s, agent, settings, () => names);
+  await until(() => asking.length > 0, "the asker to be held");
+  await s.agents.setModel({ agent, model: "gpt-b" });
+  const question = {
+    instructions: "Sum it up.",
+    input: [{ type: "message", role: "user", content: "One, two." }],
+  };
+  // Its own words only: no frame, no section, no function; the model chosen for the agent.
+  const from = s.requests.length;
+  await asking.at(-1)?.(question);
+  const asked = s.requests[from] as Request & { requestId: string; model?: string };
+  assert.equal(asked.instructions, "Sum it up.");
+  assert.equal(asked.tools, undefined);
+  assert.equal(asked.model, "gpt-b");
+  assert.match(asked.requestId, /^capability-/);
+  // The agent stopped: its question out now is cancelled.
+  s.gates.push(new Promise(() => {}));
+  // Never answered: what it rejects with as the test ends is nothing to it.
+  void asking
+    .at(-1)?.(question)
+    .catch(() => {});
+  await until(() => s.requests.length > from + 1, "the second question");
+  const second = (s.requests.at(-1) as { requestId: string }).requestId;
+  await s.agents.stop({ agent });
+  await until(() => s.cancelled.includes(second), "the question to be cancelled");
+  // Started again, the same asker is held: a stop unmounts nothing. Taken off, its question out
+  // now is cancelled with it.
+  await s.agents.start({ agent });
+  assert.equal(asking.length, 1);
+  s.gates.push(new Promise(() => {}));
+  // Never answered: what it rejects with as the test ends is nothing to it.
+  void asking
+    .at(-1)?.(question)
+    .catch(() => {});
+  await until(() => s.requests.length > from + 2, "the third question");
+  const third = (s.requests.at(-1) as { requestId: string }).requestId;
+  names = [];
+  management.changed();
+  await until(() => s.cancelled.includes(third), "the question to be cancelled with its asker");
+});
+
+test("a capability's pass is told whose conversation a request is for, and what it adds is sent, its input at each request, never kept", async (t) => {
+  // The note goes first: the stand-in model ends a turn by what its input ends with.
+  const whose: AgentPlugin = {
+    name: "whose",
+    inject: ["context"],
+    apply(ctx: Context) {
+      ctx.context.pass((request) => {
+        if (!request.loop) return;
+        request.instructions.push({
+          owner: "plugin:whose/with",
+          text: `This conversation is with ${request.loop.with}.`,
+        });
+        request.input.unshift({ type: "message", role: "assistant", content: "(a note)" });
+      });
+    },
+  };
+  const s = await setup(t, [whose]);
+  const { agent, settings } = await s.create();
+  await settingsOf(s, agent, settings, () => ["whose"]);
+  await until(
+    async () =>
+      ((await s.agents.status({ agent })).mounted ?? []).some(({ name }) => name === "whose"),
+    "the capability to be held",
+  );
+  const first = await s.turn("hello");
+  assert.match(
+    String(first.instructions),
+    new RegExp(`This conversation is with ${s.callerId}\\.`),
+  );
+  const notes = (request: Request) =>
+    (request.input as { content?: unknown }[]).filter(({ content }) => content === "(a note)");
+  assert.equal(notes(first).length, 1);
+  assert.equal((first.input[0] as { content?: unknown }).content, "(a note)");
+  // The next turn reads the record, which never kept the note: it is sent once, first.
+  const second = await s.turn("and again");
+  assert.equal(notes(second).length, 1);
+  assert.equal((second.input[0] as { content?: unknown }).content, "(a note)");
 });
