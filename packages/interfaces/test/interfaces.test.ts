@@ -1051,8 +1051,12 @@ test("agent.settings@2 gives what is mounted on the caller, in order, each root 
   assert.equal(got({ mounted: [{ ...memory, plugins: [{ name: "memory" }] }] }), false);
   assert.equal(got({ mounted: [{ ...memory, capability: "Memory" }] }), false);
   assert.equal(got({ mounted: [{ ...memory, arguments: undefined }] }), false);
-  const many = Array.from({ length: 65 }, (_, i) => ({ ...memory, mounted: `mnt_${i}` }));
-  assert.equal(got({ mounted: many }), false);
+  // An agent holding 64 plugins has room for them beside management's own roots and its control.
+  const many = (length: number) =>
+    Array.from({ length }, (_, i) => ({ ...memory, mounted: `mnt_${i}` }));
+  assert.ok(got({ mounted: [instructions, skills, ...many(65)] }));
+  assert.ok(got({ mounted: many(256) }));
+  assert.equal(got({ mounted: many(257) }), false);
   // A skill's files are read as before; told what changed, it reads the tree again.
   assert.ok(settings["skill.input"]?.({ name: "review", path: "SKILL.md" }));
   assert.equal(settings["skill.input"]?.({ name: "review", path: "../x" }), false);

@@ -1,6 +1,5 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { HELD_MAX } from "./agent-provider.js";
 import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
 import { Arguments } from "./capability-provider.js";
 import { Id } from "./hub.js";
@@ -25,6 +24,12 @@ export const SettingsRoot = z.strictObject({
 });
 
 /**
+ * The most roots an agent's tree has: management's own, and beside them what it holds, of which
+ * its executor holds at most 64 plugins.
+ */
+export const ROOTS_MAX = 256;
+
+/**
  * `agent.settings@2`: what an agent is run with, read by the program that runs it: the tree of what
  * is mounted on it, in the order it was mounted, in place of `agent.settings@1`'s instructions,
  * skills and plugins. Each caller is answered with its own, so an agent sees nothing of another's.
@@ -36,7 +41,7 @@ export const agentSettings2 = defineInterface({
   methods: {
     get: method({
       input: z.object({}),
-      output: z.object({ mounted: z.array(SettingsRoot).max(HELD_MAX) }),
+      output: z.object({ mounted: z.array(SettingsRoot).max(ROOTS_MAX) }),
     }),
     /**
      * A file of a skill exposed to the caller, `SKILL.md` if no `path`. Refused `unknown` when the
