@@ -308,6 +308,9 @@ const spent = {
   frontDesk: 0,
   /** The front desk's input tokens, which grow by the functions it is offered. */
   frontDeskInput: 0,
+  /** Messages heard apart while the agent alone ran a call, and their input tokens. */
+  hearing: 0,
+  hearingInput: 0,
   input: 0,
   cached: 0,
   output: 0,
@@ -315,6 +318,17 @@ const spent = {
   models: new Set(),
 };
 const requests = [];
+/** Woken as each response that called one of the agent's tools ends: see `firstTool`. */
+const calledWaiters = new Set();
+/** How a request to hear a message apart, while the agent alone runs a call, begins. */
+const HEARING = "You are given the agent's work in a conversation";
+/** What conversation 12 says to stop: a request whose input holds it has read the stop. */
+const STOP = GROUPS.flatMap((group) => group.steps).find((step) => step.n === 12)?.say;
+/** A message's text, as a request's input holds it. */
+const textOf = (item) =>
+  typeof item?.content === "string"
+    ? item.content
+    : (item?.content ?? []).map((part) => part.text ?? "").join("");
 /** What the colleague is for, by which its requests are told apart from the agent's. */
 const COLLEAGUE = "Asks the other agents what the person tells it to ask.";
 /** Each agent's colleague, made for a step another agent says, by the agent it may reach. */
@@ -400,24 +414,22 @@ async function counting(request, init) {
   }
   const frontDesk =
     typeof body.instructions === "string" && body.instructions.startsWith("You are the front desk");
+  const hearing = typeof body.instructions === "string" && body.instructions.startsWith(HEARING);
   spent.total++;
   if (frontDesk) spent.frontDesk++;
+  if (hearing) spent.hearing++;
+  const input = Array.isArray(body.input) ? body.input : [];
   // The message the front desk answers: the last one said to it.
-  const said = frontDesk
-    ? (Array.isArray(body.input) ? body.input : []).findLast((item) => item.role === "user")
-    : undefined;
+  const said = frontDesk ? input.findLast((item) => item.role === "user") : undefined;
   const record = {
     at: now(),
     frontDesk,
+    hearing,
+    // The agent's own, having read the stop: what it calls then is after it read it.
+    readStop: !hearing && input.some((item) => item.role === "user" && textOf(item).endsWith(STOP)),
     colleague: typeof body.instructions === "string" && body.instructions.includes(COLLEAGUE),
     ...(said
-      ? {
-          message:
-            typeof said.content === "string"
-              ? said.content
-              : (said.content ?? []).map((part) => part.text ?? "").join(""),
-          offered: (body.tools ?? []).map((tool) => tool.name),
-        }
+      ? { message: textOf(said), offered: (body.tools ?? []).map((tool) => tool.name) }
       : {}),
     model: body.model,
     tools: [],
@@ -443,7 +455,12 @@ async function readUsage(stream, record) {
   let text = "";
   const decoder = new TextDecoder();
   try {
-    for await (const piece of stream) text += decoder.decode(piece, { stream: true });
+    for await (const piece of stream) {
+      text += decoder.decode(piece, { stream: true });
+      // When its first output came: the first item the model writes.
+      if (record.first === undefined && text.includes('"response.output_item.added"'))
+        record.first = now();
+    }
   } catch {}
   for (const block of text.split(/\r?\n\r?\n/)) {
     const line = block.split(/\r?\n/).find((one) => one.startsWith("data: "));
@@ -463,7 +480,10 @@ async function readUsage(stream, record) {
     record.tools = (event.response?.output ?? [])
       .filter((item) => item.type === "function_call")
       .map((item) => item.name);
+    record.done = now();
+    if (record.tools.some((name) => !OWN.has(name))) for (const wake of calledWaiters) wake();
     // What the front desk called beyond its own functions, with what it was given.
+    if (record.hearing) spent.hearingInput += usage.input_tokens ?? 0;
     if (record.frontDesk) {
       spent.frontDeskInput += usage.input_tokens ?? 0;
       record.calls = (event.response?.output ?? [])
@@ -758,7 +778,7 @@ for (const c of run.conversations)
 if (run.error) console.error(run.error);
 if (stoppedWhy) console.error(stoppedWhy);
 console.log(
-  `Model requests: ${spent.total} (front desk ${spent.frontDesk}); input tokens ${spent.input}, ${spent.cached} of them cached; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
+  `Model requests: ${spent.total} (front desk ${spent.frontDesk}, hearing ${spent.hearing}, ${spent.hearingInput} input tokens); input tokens ${spent.input}, ${spent.cached} of them cached; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
 );
 if (opened) {
   console.log(
@@ -890,12 +910,24 @@ async function playSteps(group, at, slot, files, { agent, name }) {
       },
       TURN_MS,
     );
+  /**
+   * Once a response since `since` called one of the agent's tools: at once, as that response ends,
+   * so what is said next comes while the call runs. Given up after a while.
+   */
   const firstTool = (since) =>
-    until(
-      "A call to a tool",
-      async () => requests.some((r) => r.at >= since && r.tools.some((name) => !OWN.has(name))),
-      flags.dry ? 5_000 : 90_000,
-    ).catch(() => true);
+    new Promise((resolve) => {
+      const found = () =>
+        requests.some((r) => r.at >= since && r.tools.some((name) => !OWN.has(name)));
+      if (found()) return resolve(true);
+      const done = () => {
+        calledWaiters.delete(wake);
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const wake = () => found() && done();
+      const timer = setTimeout(done, flags.dry ? 5_000 : 90_000);
+      calledWaiters.add(wake);
+    });
 
   const sent = [];
   /** Each step's memory lines as it was sent. */
@@ -904,7 +936,7 @@ async function playSteps(group, at, slot, files, { agent, name }) {
   /** The steps sent and not yet measured, and whether the wait for their turn's end gave up. */
   let pending = [];
   let timedOut = false;
-  /** For 12: when the stop was sent, and the workspace's files as they stood at its reply. */
+  /** For 12: when the stop was sent, and the workspace's files as they stood when it was said. */
   let stop;
   const measurePending = async (windowEnd) => {
     for (const i of pending) {
@@ -917,7 +949,8 @@ async function playSteps(group, at, slot, files, { agent, name }) {
   };
   for (const [i, step] of group.steps.entries()) {
     const when = step.when ?? "idle";
-    if (i > 0 && when === "working") await firstTool(sent[i - 1]);
+    // Said once a call has begun: a moment after the response that made it, so it has started.
+    if (i > 0 && when === "working") await firstTool(sent[i - 1]).then(() => sleep(200));
     else if (i > 0 && when === "soon") await sleep(1000);
     else if (i > 0) {
       await idleAfter(sent[i - 1]).catch(() => (timedOut = true));
@@ -942,6 +975,8 @@ async function playSteps(group, at, slot, files, { agent, name }) {
         READY_MS,
       );
     }
+    // For 12, what nothing may change after the stop: the files as they stand as it is said.
+    const standing = step.n === 12 ? await files.list().catch(() => "") : undefined;
     sent[i] = now();
     // Its memory as the step is sent, which a check may need to have held what it asks of.
     before[i] = memoryOf(agent);
@@ -972,17 +1007,7 @@ async function playSteps(group, at, slot, files, { agent, name }) {
           .filter((message) => message.role === "assistant")
           .map((message) => message.text);
     } else await person.call(slot, "send", { text: step.say });
-    if (step.n === 12) {
-      await until(
-        "A reply to the stop",
-        async () =>
-          events.some(
-            (e) => e.at >= sent[i] && e.event === "message" && e.payload.role === "assistant",
-          ),
-        30_000,
-      ).catch(() => {});
-      stop = { at: sent[i], files: await files.list().catch(() => "") };
-    }
+    if (step.n === 12) stop = { at: sent[i], files: standing };
     if (step.restart) {
       await firstTool(sent[i]);
       await person.close();
@@ -1022,6 +1047,8 @@ async function playSteps(group, at, slot, files, { agent, name }) {
         (e.event === "message" && e.payload.role === "assistant"),
     );
     const idle = mine.findLast((e) => e.event === "status" && e.payload.state === "idle");
+    // A message closed with no reply: when that, with its reaction, was shown.
+    const closed = mine.find((e) => e.event === "progress" && e.payload.state === "closed");
     // This agent's: the colleague's requests, in the same window, are its own.
     const theirs = requests.filter((r) => r.at >= sent[i] && r.at < windowEnd && !r.colleague);
     // Said by another agent, it is what this agent answered that agent.
@@ -1045,11 +1072,40 @@ async function playSteps(group, at, slot, files, { agent, name }) {
       bold: (all.match(/\*\*[^*]+\*\*/g) ?? []).length,
       tools: theirs.flatMap((r) => r.tools).filter((name) => !OWN.has(name)),
       firstSeen: shown ? round(shown.at - sent[i]) : undefined,
-      requests: { total: theirs.length },
+      // Up to its last reply: a request after it, which calls nothing, adds no wait.
+      requests: {
+        total: theirs.length,
+        toReply: replies.length
+          ? theirs.filter((r) => r.at <= replies.at(-1).at).length
+          : theirs.length,
+      },
       unanswered: Math.max(0, asked - replies.length),
       stopped:
         step.n === 12 ? Boolean(idleAfterStop && idleAfterStop.at - stop.at <= 30) : undefined,
       changedAfterStop: step.n === 12 ? stop?.changed : undefined,
+      // For 12: whether the stop was said while a call of the agent's ran, as its latest request
+      // before the stop had called a tool, and it was asked nothing more until after.
+      stopWhileCalling:
+        step.n === 12
+          ? (() => {
+              const latest = requests
+                .filter((r) => !r.colleague && !r.hearing && r.at <= stop.at)
+                .at(-1);
+              return Boolean(
+                latest?.done !== undefined &&
+                  latest.done <= stop.at &&
+                  latest.tools.some((name) => !OWN.has(name)),
+              );
+            })()
+          : undefined,
+      // For 12: what the agent called of its tools once it had read the stop.
+      callsAfterStop:
+        step.n === 12
+          ? theirs
+              .filter((r) => r.readStop)
+              .flatMap((r) => r.tools)
+              .filter((name) => !OWN.has(name))
+          : undefined,
       memory: memoryOf(agent),
       memoryBefore: before[i] ?? [],
     };
@@ -1075,6 +1131,7 @@ async function playSteps(group, at, slot, files, { agent, name }) {
         firstSeen: c.firstSeen,
         finalReply: replies.length ? round(replies.at(-1).at - sent[i]) : undefined,
         idle: idle ? round(idle.at - sent[i]) : undefined,
+        ...(closed ? { closed: round(closed.at - sent[i]) } : {}),
       },
       replies: texts.map((text, k) => ({
         text,
@@ -1096,14 +1153,44 @@ async function playSteps(group, at, slot, files, { agent, name }) {
       },
       requests: {
         total: theirs.length,
+        toReply: c.requests.toReply,
         frontDesk: theirs.filter((r) => r.frontDesk).length,
-        worker: theirs.filter((r) => !r.frontDesk).length,
+        hearing: theirs.filter((r) => r.hearing).length,
+        worker: theirs.filter((r) => !r.frontDesk && !r.hearing).length,
         input: theirs.reduce((a, r) => a + r.input, 0),
         cached: theirs.reduce((a, r) => a + r.cached, 0),
         output: theirs.reduce((a, r) => a + r.output, 0),
         reasoning: theirs.reduce((a, r) => a + r.reasoning, 0),
+        // Each request, from the step's send: when it started, when its first output came and
+        // when it ended, what it read and what it called.
+        each: [
+          ...theirs,
+          // Said by another agent, that agent's requests too: what it called, as it asked.
+          ...(step.from === "agent"
+            ? requests.filter((r) => r.at >= sent[i] && r.at < windowEnd && r.colleague)
+            : []),
+        ]
+          .sort((a, b) => a.at - b.at)
+          .map((r) => ({
+            kind: r.colleague
+              ? "colleague"
+              : r.hearing
+                ? "hearing"
+                : r.frontDesk
+                  ? "front desk"
+                  : "agent",
+            at: hundredths(r.at - sent[i]),
+            ...(r.first === undefined ? {} : { first: hundredths(r.first - sent[i]) }),
+            ...(r.done === undefined ? {} : { done: hundredths(r.done - sent[i]) }),
+            input: r.input,
+            cached: r.cached,
+            output: r.output,
+            tools: r.tools,
+          })),
       },
       tools: c.tools,
+      ...(c.callsAfterStop ? { callsAfterStop: c.callsAfterStop } : {}),
+      ...(c.stopWhileCalling === undefined ? {} : { stopWhileCalling: c.stopWhileCalling }),
       // The agent's memory lines after its turn, as its store keeps them.
       memory: c.memory,
       right: checked.right,
@@ -1112,6 +1199,10 @@ async function playSteps(group, at, slot, files, { agent, name }) {
       ...(timedOut ? { timedOut: true } : {}),
     };
   }
+}
+
+function hundredths(seconds) {
+  return Math.round(seconds * 100) / 100;
 }
 
 function round(seconds) {
