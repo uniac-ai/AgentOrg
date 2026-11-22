@@ -115,6 +115,74 @@ test(
   }),
 );
 
+/** Sends words from the conversation's composer, as the person does. */
+async function send(page: Page, text: string) {
+  const box = page.getByRole("main").getByRole("textbox", { name: "Message" });
+  await box.fill(text);
+  await box.press("Enter");
+}
+/** The newest message of Research's conversation, as the stand-in has it. */
+const newestOf = (gateway: Gateway) =>
+  gateway.agents.get("a-research")?.chat.messages.at(-1)?.id as string;
+const working = (gateway: Gateway) => gateway.agents.get("a-research")?.chat.status.state;
+
+test(
+  "a message closed with an emoji ends it as the emoji comes, though the agent still works",
+  withGateway(async (gateway) => {
+    const { page, thread } = await at(gateway, "result");
+    await send(page, "Thanks!");
+    await sign(thread).waitFor();
+    const thanks = newestOf(gateway);
+    gateway.progress("a-research", thanks, { state: "taken" });
+    gateway.progress("a-research", thanks, { state: "closed", reaction: "👍" });
+    await thread.getByRole("img", { name: "Research reacted 👍" }).waitFor();
+    await sign(thread).waitFor({ state: "detached" });
+    // Its turn goes on: what it does after is its own, and the sign doesn't come back for it.
+    assert.equal(working(gateway), "working");
+    gateway.setChatStatus("a-research", { state: "idle" });
+    await page.waitForFunction(() => !document.querySelector(".typing-dot"));
+    await page.close();
+  }),
+);
+
+test(
+  "a message sent after the last was answered brings the sign back until it is answered too",
+  withGateway(async (gateway) => {
+    const { page, thread } = await at(gateway, "result");
+    await send(page, "Is the coupon fixed?");
+    await sign(thread).waitFor();
+    const first = newestOf(gateway);
+    gateway.progress("a-research", first, { state: "taken" });
+    gateway.addMessage("a-research", {
+      id: "v-a10",
+      role: "assistant",
+      text: "Yes: it's refused after its date.",
+      at: at_(0),
+    });
+    gateway.progress("a-research", first, { state: "answered" });
+    await thread.getByText("Yes: it's refused after its date.").waitFor();
+    await sign(thread).waitFor({ state: "detached" });
+    // The agent still works. The next message brings the sign back at once, under it.
+    assert.equal(working(gateway), "working");
+    await send(page, "And the tests?");
+    await sign(thread).waitFor();
+    assert.deepEqual((await drawn(thread)).slice(-2), ["you: And the tests?", "typing"]);
+    const second = newestOf(gateway);
+    gateway.progress("a-research", second, { state: "taken" });
+    gateway.addMessage("a-research", {
+      id: "v-a11",
+      role: "assistant",
+      text: "They pass.",
+      at: at_(0),
+    });
+    gateway.progress("a-research", second, { state: "answered" });
+    await thread.getByText("They pass.").waitFor();
+    await sign(thread).waitFor({ state: "detached" });
+    assert.equal(working(gateway), "working");
+    await page.close();
+  }),
+);
+
 test(
   "the turn ending unanswered ends it, and the problem line says why",
   withGateway(async (gateway) => {
