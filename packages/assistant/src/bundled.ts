@@ -220,5 +220,12 @@ export function bundled(options: { agent: string; kv: KvStore; fibers: Fibers; l
       },
     },
   ];
-  return { capabilities, provides: ["agent", "store", "tools", "prompt"] };
+  return {
+    capabilities,
+    provides: ["agent", "store", "tools", "prompt"],
+    /** The functions capabilities give through `tools` now. */
+    registered: () => [...tools.values()],
+    /** The sections they add through `prompt` now, in order, each read afresh. */
+    sections: blocks,
+  };
 }

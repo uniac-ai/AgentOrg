@@ -4,7 +4,9 @@
  * - `capabilities`: what the agent holds. A capability mounts another, as its child, takes one off,
  *   lists them all with each one's state, and has an abort signal that ends with it.
  * - `context`: what the model is sent. A capability passes each request (its instructions, its
- *   functions and its input) and may change it, in the order the capabilities were mounted.
+ *   functions and its input) and may change it: by each pass's order, then in the order the agent
+ *   holds the capabilities. Once a turn, before its requests, a capability may read what its
+ *   passes will give.
  * - `record`: what the agent's loops have seen and done. It says the agent's life as Cordis events
  *   (`AGENT_EVENTS`): a turn starting and ending, a record being summarized, the agent idle or
  *   stopped. Reading a loop's record and adding to it come with the first capability that reads it.
@@ -14,7 +16,7 @@
  */
 import type { Conversed, Item, Part } from "@agentorg/looper";
 import { type Context, type Fiber, Service } from "cordis";
-import type { Candidate } from "./tools.js";
+import type { Candidate, LeftOut } from "./tools.js";
 
 /**
  * A capability: code mounted in an agent's own Cordis context. It names in `inject` the services
@@ -67,12 +69,19 @@ export interface Request {
   instructions: Part[];
   functions: Candidate[];
   input: Item[];
+  /** What a pass couldn't give, and why: the model isn't told of it, the agent's host is. */
+  leftOut: LeftOut[];
 }
 /**
  * A pass over each request the agent's loops make, run to its end before the next: what it throws
  * is logged, and the request goes on.
  */
 export type Pass = (request: Request) => void;
+/**
+ * What a capability reads once a turn, before its requests, for its passes to give: awaited, in
+ * the order the passes run. What it throws is logged, and the turn goes on.
+ */
+export type Turn = (loop: Loop | undefined) => Promise<void> | void;
 
 /**
  * What a capability hears of the agent's life: a piece of work's turn starting and ending, that
@@ -132,7 +141,9 @@ export interface Host {
   /** What the capability named says of itself now. */
   say(name: string, state: "mounted" | "down", detail?: string): void;
   /** Add a pass of the capability named, until the function it gives is called or it goes. */
-  pass(owner: string, ctx: Context, pass: Pass): () => void;
+  pass(owner: string, ctx: Context, pass: Pass, order: number): () => void;
+  /** Add what the capability named reads once a turn, until the function it gives is called or it goes. */
+  turn(owner: string, ctx: Context, turn: Turn): () => void;
 }
 
 /** Where Cordis keeps, on a service as a capability reaches it, the context it was reached from. */
@@ -203,12 +214,22 @@ export class Passes extends Service {
     this.host = host;
   }
   /**
-   * Pass each request the agent's loops make, in the order the capabilities were mounted, until
-   * the caller goes or the function it gives is called.
+   * Pass each request the agent's loops make, until the caller goes or the function it gives is
+   * called. Passes run by `order`, lowest first, 0 if none; then in the order the agent holds their
+   * capabilities: those every agent has, then those its settings name, in the order they name them,
+   * each with what it mounted after it.
    */
-  pass(pass: Pass): () => void {
+  pass(pass: Pass, options: { order?: number } = {}): () => void {
     const { name, ctx } = callerOf(this.host.fibers, this);
-    return this.host.pass(name, ctx, pass);
+    return this.host.pass(name, ctx, pass, options.order ?? 0);
+  }
+  /**
+   * Read, once a turn before its requests, what the caller's passes give: what can't be read in a
+   * pass, which runs at once. Until the caller goes or the function it gives is called.
+   */
+  turn(turn: Turn): () => void {
+    const { name, ctx } = callerOf(this.host.fibers, this);
+    return this.host.turn(name, ctx, turn);
   }
 }
 

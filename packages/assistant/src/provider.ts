@@ -28,6 +28,9 @@ import {
 import { type Log, NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
+import { connections } from "./capabilities/connections.js";
+import { instructions } from "./capabilities/instructions.js";
+import { skills } from "./capabilities/skills.js";
 import { type AgentHub, type Channel, connector, model } from "./connector.js";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
@@ -39,7 +42,6 @@ import {
   type Without,
 } from "./plugins.js";
 import { head } from "./tools.js";
-import { asSettings } from "./tree.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
 /** Who an agent made from the template is. How it works and speaks is the looper's frame. */
@@ -155,7 +157,11 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   for (const { id } of offers)
     if (!carried.has(id)) throw new Error(`It offers ${id}, which it doesn't carry.`);
   /** Every agent's plugins, each agent in a context of its own. */
-  const host = createPluginHost(log, options.plugins);
+  const host = createPluginHost(log, [
+    instructions({ now: () => ASSISTANT_INSTRUCTIONS, earlier: EARLIER_INSTRUCTIONS }),
+    skills(),
+    ...(options.plugins ?? []),
+  ]);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
@@ -256,6 +262,11 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
       // engine starts as the channel opens. What refused it is what the provider is told.
       let channel: Channel | undefined;
       let refused: unknown;
+      /** Settles once what every agent has is mounted: no turn of its goes on before. */
+      let isMounted = () => {};
+      const mounted = new Promise<void>((resolve) => {
+        isMounted = resolve;
+      });
       const join = (started: (hub: AgentHub) => void) =>
         connect({
           hubUrl,
@@ -266,18 +277,14 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           log,
           start(ctx) {
             started(ctx);
-            // Its engine reads the tree its settings give as it read them before.
-            const settings = asSettings(ctx.slots.settings, options.actorId);
-            engine = startEngine(
-              { ...ctx, slots: { ...ctx.slots, settings } },
-              {
-                store,
-                instructions: () => ASSISTANT_INSTRUCTIONS,
-                earlier: EARLIER_INSTRUCTIONS,
-                stopped,
-                plugins: held,
-              },
-            );
+            engine = startEngine(ctx, {
+              store,
+              instructions: () => ASSISTANT_INSTRUCTIONS,
+              self: options.actorId,
+              ready: mounted,
+              stopped,
+              plugins: held,
+            });
           },
         }).then(
           (joined) => (channel = joined),
@@ -290,9 +297,15 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         throw refused ?? error;
       });
       if (!channel || !engine) throw new Error("Its channel opened with no engine.");
-      // Its model, for its capabilities' own questions, with the model chosen for it.
+      // Its model, for its capabilities' own questions, with the model chosen for it; and its
+      // connections, which offer the model what is exposed to it.
       const running = engine;
-      await context.mount(model(() => running.chosen()));
+      try {
+        await context.mount(model(() => running.chosen()));
+        await context.mount(connections());
+      } finally {
+        isMounted();
+      }
       one.channel = channel;
       one.engine = engine;
       one.plugins = context;

@@ -21,9 +21,11 @@ import {
   type Held,
   type Host,
   type Life,
+  type Loop,
   type Pass,
   Passes,
   type Request,
+  type Turn,
 } from "./substrate.js";
 import type { Candidate } from "./tools.js";
 
@@ -37,6 +39,7 @@ export {
   type Loop,
   type Pass,
   type Request,
+  type Turn,
 } from "./substrate.js";
 
 /** Cordis's `FiberState.ACTIVE`: a const enum it declares, which this build can't name. */
@@ -74,9 +77,9 @@ export interface Given {
 
 /** An agent's plugins, as its engine reads them. */
 export interface AgentPlugins {
-  /** The functions they give the model now. */
+  /** The functions they give the model through `tools` now. */
   tools(): Candidate[];
-  /** The sections they add to a request now, in order, each read afresh. */
+  /** The sections they add through `prompt` now, in order, each read afresh. */
   blocks(): Part[];
   /** Tell them of the agent's life. */
   life(event: Life, heard?: Heard): void;
@@ -91,8 +94,10 @@ export interface AgentPlugins {
   hold(named: Named[]): Promise<Given>;
   /** Unload them all: what each registered goes with it. */
   close(): Promise<void>;
-  /** Pass a request through every capability's passes, in the order they were mounted. */
+  /** Pass a request through every capability's passes, in their order. */
   pass(request: Request): Request;
+  /** Read, once a turn before its requests, what each capability's passes give. */
+  turn(loop?: Loop): Promise<void>;
 }
 
 /** An agent's own context, as its executor holds it: what its engine reads, and more. */
@@ -115,6 +120,7 @@ export const NO_PLUGINS: AgentPlugins = {
   hold: async () => ({ tools: [], blocks: [], without: [] }),
   close: async () => {},
   pass: (request) => request,
+  turn: async () => {},
 };
 
 /** One capability as the agent holds it, from when it is asked to mount until it goes. */
@@ -159,7 +165,10 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
       const entries = new Map<string, Entry>();
       /** Each that couldn't be mounted, and why, until it is tried again. */
       const failed = new Map<string, Held & { kind: Entry["kind"] }>();
-      const passes: { owner: string; pass: Pass }[] = [];
+      const passes: { owner: string; pass: Pass; order: number }[] = [];
+      const turns: { owner: string; turn: Turn }[] = [];
+      /** The plugins its settings named last, in the order they named them. */
+      let namedOrder: string[] = [];
       const made = bundled({ agent, kv: options.store, fibers, log });
 
       /** Everything under `name`, deepest first. */
@@ -336,11 +345,19 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
           const entry = entries.get(name);
           if (entry) entry.said = { state, ...(detail ? { detail } : {}) };
         },
-        pass(owner, ctx, pass) {
-          const one = { owner, pass };
+        pass(owner, ctx, pass, order) {
+          const one = { owner, pass, order };
           const gone = ctx.effect(() => {
             passes.push(one);
             return () => void passes.splice(passes.indexOf(one), 1);
+          });
+          return () => void gone();
+        },
+        turn(owner, ctx, turn) {
+          const one = { owner, turn };
+          const gone = ctx.effect(() => {
+            turns.push(one);
+            return () => void turns.splice(turns.indexOf(one), 1);
           });
           return () => void gone();
         },
@@ -362,10 +379,31 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         if (why) throw new Error(`The agent's ${entry.capability.name} didn't mount.`);
       }
 
-      /** Each request through every pass, in the order their capabilities were mounted. */
+      /**
+       * The order the agent holds its capabilities in: those every agent has, in the order they
+       * were mounted, then those its settings name, in the order they name them, each followed by
+       * what it mounted. One loaded again with other settings keeps its place.
+       */
+      const holding = () => {
+        const top = [...entries.values()].filter((one) => one.parent === undefined);
+        const named = (one: Entry) =>
+          one.kind === "named" ? namedOrder.indexOf(one.capability.name) : -1;
+        const tops = [
+          ...top.filter((one) => one.kind !== "named"),
+          ...top.filter((one) => one.kind === "named").sort((a, b) => named(a) - named(b)),
+        ];
+        const below = (name: string): string[] =>
+          [...entries.values()]
+            .filter((one) => one.parent === name)
+            .flatMap((one) => [one.capability.name, ...below(one.capability.name)]);
+        return tops.flatMap((one) => [one.capability.name, ...below(one.capability.name)]);
+      };
+      /** Each request through every pass: by its order, then the order the agent holds them in. */
       const run = (request: Request): Request => {
-        const order = [...entries.keys()];
-        const ordered = [...passes].sort((a, b) => order.indexOf(a.owner) - order.indexOf(b.owner));
+        const order = holding();
+        const ordered = [...passes].sort(
+          (a, b) => a.order - b.order || order.indexOf(a.owner) - order.indexOf(b.owner),
+        );
         for (const { owner, pass } of ordered)
           try {
             pass(request);
@@ -378,12 +416,27 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
           }
         return request;
       };
-      const fresh = (): Request => ({ instructions: [], functions: [], input: [] });
-      const tools = () => run(fresh()).functions;
-      const blocks = () => run(fresh()).instructions;
+      /** What every capability reads once a turn, one after another, in the order they hold. */
+      const turn = async (loop?: Loop) => {
+        const order = holding();
+        const ordered = [...turns].sort((a, b) => order.indexOf(a.owner) - order.indexOf(b.owner));
+        for (const { owner, turn: read } of ordered)
+          try {
+            await read(loop);
+          } catch (error) {
+            log.warn("A capability couldn't read what its passes give; the turn goes on.", {
+              agent,
+              capability: owner,
+              error: messageOf(error),
+            });
+          }
+      };
+      const tools = made.registered;
+      const blocks = made.sections;
 
       /** What it couldn't hold of `named`, each with why; it holds all the rest. */
       const hold = async (named: Named[]): Promise<Without[]> => {
+        namedOrder = named.map(({ name }) => name);
         const without = new Map<string, Without>();
         for (const [name, held] of failed) if (held.kind === "named") failed.delete(name);
         for (const { name } of named)
@@ -454,6 +507,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         blocks,
         list: host.list,
         pass: run,
+        turn,
         mount: (capability, args) =>
           inTurn(async () => {
             const { name } = capability;

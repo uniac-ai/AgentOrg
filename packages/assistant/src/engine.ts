@@ -1,32 +1,29 @@
 /**
- * The engine: the looper bound to one agent. Its conversations are the looper's threads, its model is the
- * agent's `model` slot, and what a request says and offers is read from what the agent is bound to.
- * Its host says where the records are kept and what the agent is told when no `settings` is bound.
+ * The engine: the looper bound to one agent. Its conversations are the looper's threads, its model
+ * is the agent's `model` slot, and what a request says and offers is what the agent's capabilities
+ * give: those every agent has, and those the tree its `settings` give names. Its host says where
+ * the records are kept and what the agent is told when no `settings` is bound.
  */
-import type { agentSettings, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
-import type { Conversed, Model } from "@agentorg/looper";
+import type { agentSettings2, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
+import type { Conversed, Model, Part } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
-import { agentTools } from "./agents.js";
+import { WORDS } from "./capabilities/instructions.js";
 import { createChats } from "./chats.js";
 import { type AgentPlugins, NO_PLUGINS } from "./plugins.js";
-import { alwaysOf, instructionsWith, skillTool } from "./settings.js";
-import {
-  type Candidate,
-  type LeftOut,
-  listedBy,
-  listsTools,
-  offered,
-  offeredName,
-  relayed,
-} from "./tools.js";
+import { MAX_INSTRUCTIONS } from "./settings.js";
+import { type LeftOut, listsTools, offered, offeredName, relayed } from "./tools.js";
 import { ACTIVITY, serveWork } from "./work.js";
 
 /** Where the agent keeps the model chosen for it, beside its conversations in the store. */
 const MODEL_KEY = "settings/model";
+/** Its control, which it holds once its executor carries it. */
+const CONTROL = "control";
+/** How a section a capability adds through `prompt` is owned. */
+const SECTION = "plugin:";
 
 type Host = Pick<
   Context<
-    { model: typeof llmSession; settings: typeof agentSettings },
+    { model: typeof llmSession; settings: typeof agentSettings2 },
     { chat: typeof chat; capability: typeof capability; tools: typeof tools }
   >,
   "slots" | "exports" | "exposed" | "onExposed" | "log"
@@ -39,10 +36,12 @@ export function startEngine(
     /** What the agent is told while no `settings` is bound. */
     instructions(): string;
     /**
-     * Words its template gave before what `instructions` gives now. Settings that open with them,
-     * as their own paragraph, are read with `instructions` in their place.
+     * Its executor's own id: of the tree its settings give, it holds the roots that name it as
+     * their provider, and management's own, which name none.
      */
-    earlier?: string;
+    self?: string;
+    /** Settles once the capabilities every agent has are mounted: no turn goes on before. */
+    ready?: Promise<unknown>;
     /** Whether it starts stopped, as it was left. */
     stopped?: boolean;
     /**
@@ -59,13 +58,6 @@ export function startEngine(
     const { value } = await store.get({ key: MODEL_KEY });
     return typeof value === "string" ? value : undefined;
   };
-  /** An agent's own instructions, with its template's earlier words read as its words now. */
-  const current = (instructions: string) => {
-    const { earlier } = options;
-    if (!earlier || !(instructions === earlier || instructions.startsWith(`${earlier}\n\n`)))
-      return instructions;
-    return `${options.instructions()}${instructions.slice(earlier.length)}`;
-  };
   /** What was last reported as left out, so a change is logged once. */
   let reported = "[]";
   const report = (leftOut: LeftOut[]) => {
@@ -75,16 +67,6 @@ export function startEngine(
     if (leftOut.length > 0) ctx.log.warn("Not everything is offered to the model.", { leftOut });
     else ctx.log.info("Everything is offered to the model again.");
   };
-  /**
-   * A slot as exposed when a call runs, not when its tools were listed: a turn keeps what it was
-   * offered, and a slot bound again meanwhile is reached through its new handle. One that is gone
-   * answers through the handle it had, which refuses as it does.
-   */
-  const live = (slot: ReturnType<typeof ctx.exposed>[number]) => ({
-    get call() {
-      return (ctx.exposed().find((one) => one.slot === slot.slot) ?? slot).call;
-    },
-  });
   /**
    * What a turn says and offers, and to which model, read afresh for each: none of it outlives it.
    * `leftOut` is what it couldn't offer, and why.
@@ -99,57 +81,52 @@ export function startEngine(
   const readAndHold = () => {
     const done = reading.then(async () => {
       if (!ctx.slots.settings.bound) return undefined;
-      const settings = await ctx.slots.settings.call.get({});
-      return { settings, given: await plugins.hold(settings.plugins ?? []) };
+      const { mounted } = await ctx.slots.settings.call.get({});
+      const named = mounted
+        .filter(
+          ({ provider, capability }) =>
+            (provider === undefined || provider === options.self) && capability !== CONTROL,
+        )
+        .map(({ capability, arguments: settings }) => ({ name: capability, settings }));
+      return { mounted, given: await plugins.hold(named) };
     });
     reading = done.catch(() => {});
     return done;
   };
   const request = async (conversation?: Conversed) => {
-    // It holds the plugins its settings name and reads what they give in one step, which no
-    // other change comes between: a turn is never behind its settings, whether or not it heard
-    // them change.
+    await options.ready;
+    // It holds what its settings name and reads what they give in one step, which no other change
+    // comes between: a turn is never behind its settings, whether or not it heard them change.
     const read = ctx.slots.settings.bound ? await readAndHold() : undefined;
-    const settings = read?.settings;
-    const held = read
-      ? read.given
-      : { tools: plugins.tools(), blocks: plugins.blocks(), without: [] };
-    // For a conversation's own loop, what its capabilities add is passed with the conversation,
-    // so a pass can tell whose it is.
-    const given = conversation
-      ? (({ instructions, functions }) => ({ tools: functions, blocks: instructions }))(
-          plugins.pass({ loop: conversation, instructions: [], functions: [], input: [] }),
-        )
-      : held;
-    // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
-    const voice = settings ? current(settings.instructions) : options.instructions();
-    const skills = settings?.skills ?? [];
-    const always = settings ? await alwaysOf(ctx.slots.settings, skills) : [];
-    const told = instructionsWith(voice, skills, always);
-    const own: Candidate[] = [
-      ...(settings?.skills.length ? [skillTool(ctx.slots.settings)] : []),
-      // The agents whose conversations are exposed to it, which it talks to from itself.
-      ...agentTools(ctx.exposed(), () => ctx.exposed()),
-      // What its plugins give it.
-      ...given.tools,
-    ];
-    // In the order they came, each asked at once so one slow server delays only itself.
-    const exposed = await Promise.all(
-      ctx
-        .exposed()
-        .filter((slot) => listsTools(slot.described))
-        .map((slot) => listedBy(slot.slot, live(slot))),
-    );
-    const fitted = offered([...own, ...exposed.flatMap((one) => one.candidates)]);
-    const leftOut = [...told.leftOut, ...exposed.flatMap((one) => one.leftOut), ...fitted.leftOut];
+    // What its capabilities read once a turn, then what they give. For a conversation's own loop,
+    // they are passed the conversation, so a pass can tell whose it is.
+    await plugins.turn(conversation);
+    const given = plugins.pass({
+      ...(conversation ? { loop: conversation } : {}),
+      instructions: [],
+      functions: [],
+      input: [],
+      leftOut: [],
+    });
+    // With no settings bound, it is told its host's words, first.
+    const instructions: Part[] = read
+      ? given.instructions
+      : [
+          { owner: WORDS, text: options.instructions(), max: MAX_INSTRUCTIONS },
+          ...given.instructions,
+        ];
+    // Its own words: who its main loop speaks as, with nothing of its skills.
+    const voice = instructions.find((part) => part.owner === WORDS)?.text ?? "";
+    const fitted = offered(given.functions);
+    const leftOut = [...given.leftOut, ...fitted.leftOut];
     report(leftOut);
-    // Its plugins' blocks, read once for the request: a worker is told them after its own words and
-    // its skills, the front desk after who it speaks as. Its plugins' functions, of those offered,
-    // are the front desk's too, and none other of its own.
-    const { blocks } = given;
-    const theirs = new Set(given.tools.map(({ slot, name }) => offeredName(slot, name)));
+    // Its capabilities' sections: a worker is told them after its own words and its skills, the
+    // front desk after who it speaks as. The functions they give through `tools`, of those
+    // offered, are the front desk's too, and none other of its own.
+    const blocks = instructions.filter((part) => part.owner.startsWith(SECTION));
+    const theirs = new Set(plugins.tools().map(({ slot, name }) => offeredName(slot, name)));
     return {
-      instructions: [...told.parts, ...blocks],
+      instructions,
       blocks,
       tools: fitted.tools,
       frontDesk: fitted.tools.filter(({ name }) => theirs.has(name)),
@@ -177,6 +154,7 @@ export function startEngine(
         instructions: [],
         functions: [],
         input: [...input],
+        leftOut: [],
       }).input,
     // Asked of every tools slot: one that ran nothing of the group ends nothing. A provider
     // whose tools@1 has no `stop` isn't asked.

@@ -3,11 +3,14 @@
  * instructions, and one tool to read them. A skill's text is read only when the model asks for it,
  * but for its `ALWAYS.md`, which every request is told while the skill is exposed (see the README).
  */
-import type { agentSettings, SkillEntry } from "@agentorg/interfaces";
+import type { agentSettings2, SkillEntry } from "@agentorg/interfaces";
 import { FRAME, type Part } from "@agentorg/looper";
 import type { Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import type { Candidate, LeftOut } from "./tools.js";
+
+/** What reads a skill's files: the agent's `settings` slot. */
+type Reads = Pick<Slot<typeof agentSettings2>, "call">;
 
 /**
  * The longest the agent's own instructions may be: what a request can carry, less room for what
@@ -26,7 +29,7 @@ export const ALWAYS_MAX = 2_000;
  * read now.
  */
 export async function alwaysOf(
-  slot: Slot<typeof agentSettings>,
+  slot: Reads,
   skills: z.output<typeof SkillEntry>[],
 ): Promise<Part[]> {
   const read = await Promise.all(
@@ -88,7 +91,7 @@ export function instructionsWith(
 }
 
 /** The one way the model reads a skill: its `SKILL.md`, or a file of its folder by `path`. */
-export function skillTool(slot: Slot<typeof agentSettings>): Candidate {
+export function skillTool(slot: Reads): Candidate {
   return {
     slot: SLOT,
     name: "skill",
