@@ -89,13 +89,30 @@ export function startEngine(
    * What a turn says and offers, and to which model, read afresh for each: none of it outlives it.
    * `leftOut` is what it couldn't offer, and why.
    */
+  /**
+   * Read its settings and hold the plugins they name, as one step: one at a time, in the order
+   * asked, each reading only once the one before has held. So no hold applies settings older than
+   * one already held, as a read over a slow channel otherwise could, after a later read named a
+   * capability just mounted. With no settings bound, it reads nothing and holds what it holds.
+   */
+  let reading: Promise<unknown> = Promise.resolve();
+  const readAndHold = () => {
+    const done = reading.then(async () => {
+      if (!ctx.slots.settings.bound) return undefined;
+      const settings = await ctx.slots.settings.call.get({});
+      return { settings, given: await plugins.hold(settings.plugins ?? []) };
+    });
+    reading = done.catch(() => {});
+    return done;
+  };
   const request = async (conversation?: Conversed) => {
-    const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
     // It holds the plugins its settings name and reads what they give in one step, which no
     // other change comes between: a turn is never behind its settings, whether or not it heard
     // them change.
-    const held = settings
-      ? await plugins.hold(settings.plugins ?? [])
+    const read = ctx.slots.settings.bound ? await readAndHold() : undefined;
+    const settings = read?.settings;
+    const held = read
+      ? read.given
       : { tools: plugins.tools(), blocks: plugins.blocks(), without: [] };
     // For a conversation's own loop, what its capabilities add is passed with the conversation,
     // so a pass can tell whose it is.
@@ -245,8 +262,7 @@ export function startEngine(
    * One it can't hold it runs without, as its host says, and it is tried again at the next hold.
    */
   const holdNamed = async () => {
-    if (!ctx.slots.settings.bound) return;
-    await plugins.hold((await ctx.slots.settings.call.get({})).plugins ?? []);
+    await readAndHold();
   };
   const hold = () =>
     void holdNamed().catch((error: unknown) =>
