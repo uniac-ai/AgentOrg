@@ -21,6 +21,7 @@ import {
   agentSettings,
   agents,
   capability,
+  capabilityProvider,
   chat,
   connections,
   hubActors,
@@ -348,6 +349,35 @@ const UNITS = [
 ] as const;
 
 /** A real Hub, management on it, one who calls it, and stand-in providers that can fail on cue. */
+/** What the stand-in agent provider makes for its agents, as the executor makes memory. */
+const MEMORY = {
+  id: "memory",
+  title: "Memory",
+  description: "It remembers what you tell it to.",
+  arguments: { type: "object" as const, properties: {}, additionalProperties: false },
+};
+const GITHUB = {
+  id: "github",
+  title: "GitHub",
+  description: "Its repositories, as functions.",
+  arguments: {
+    type: "object" as const,
+    properties: {
+      owner: { type: "string", title: "Owner" },
+      token: { type: "string", title: "Token", secret: true },
+    },
+    required: ["owner", "token"],
+  },
+};
+/** Memory as an agent says it holds it, and what memory mounted inside the agent. */
+const MEMORY_HELD = { name: "memory", title: "Memory", state: "mounted" as const };
+const TIDY_HELD = {
+  name: "memory-tidy",
+  title: "Memory keeps itself",
+  state: "mounted" as const,
+  parent: "memory",
+};
+
 async function setup(t: test.TestContext) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-manager-")));
   const home = join(root, "home");
@@ -441,18 +471,27 @@ async function setup(t: test.TestContext) {
      * none, or greyed, as where the provider can't make one now.
      */
     container?: "none" | "greyed";
+    /** Problems the capability provider finds with the arguments of a mount. */
+    mountProblems?: { path?: string; message: string }[];
   } = {};
   const given: {
     secrets: unknown[];
     removed: string[];
     applied: { unit: string; values: object; secrets: object; needs: object; agent: string }[];
     checked: { unit: string; values: object; secrets: string[] }[];
+    /** What the capability provider was asked to mount, and to take off. */
+    mounted: { agent: string; capability: string; arguments: object }[];
+    unmounted: { agent: string; mounted: string }[];
   } = {
     secrets: [],
     removed: [],
     applied: [],
     checked: [],
+    mounted: [],
+    unmounted: [],
   };
+  /** What the capability provider holds on each agent, by its id for each. */
+  const mountedOn = new Map<string, Map<string, string>>();
   const failing = (step: string) => {
     if (script.fail === step || script.alsoFail === step)
       throw new Refused("failed", `${step} failed on cue.`);
@@ -480,8 +519,35 @@ async function setup(t: test.TestContext) {
     actorId: agentActor.actorId,
     credential: agentActor.credential as string,
     slots: { actors: hubActors },
-    exports: { provider: agentProvider },
+    // It makes capabilities for its agents too, as the bundled one does.
+    exports: { provider: agentProvider, capabilities: capabilityProvider },
     start(ctx) {
+      ctx.exports.capabilities.implement({
+        capabilities: () => ({ capabilities: [MEMORY, GITHUB] }),
+        mount(input) {
+          given.mounted.push(input);
+          if (script.mountProblems) return { problems: script.mountProblems };
+          if (script.fail === "mount")
+            throw new Refused(
+              "failed",
+              `GitHub refused the token ${String(input.arguments.token)}.`,
+            );
+          const held = mountedOn.get(input.agent) ?? new Map<string, string>();
+          if ([...held.values()].includes(input.capability))
+            throw new Refused("state", "It holds that already.");
+          const id = `held-${input.capability}-${held.size + 1}`;
+          held.set(id, input.capability);
+          mountedOn.set(input.agent, held);
+          return { mounted: id };
+        },
+        unmount(input) {
+          given.unmounted.push(input);
+          failing("unmount");
+          if (!mountedOn.get(input.agent)?.delete(input.mounted))
+            throw new Refused("unknown", "Not held.");
+          return {};
+        },
+      });
       ctx.exports.provider.implement({
         creatable: () => ({ creatables: CREATABLES }),
         async create({ name }) {
@@ -569,7 +635,16 @@ async function setup(t: test.TestContext) {
         },
         status: ({ agent }) => {
           failing("agent.status");
-          return { state: stopped.has(agent) ? ("stopped" as const) : ("running" as const) };
+          // What it holds, as the agent says it: memory keeps itself, a child of its own.
+          const held = [...(mountedOn.get(agent)?.values() ?? [])].flatMap((name) =>
+            name === "memory"
+              ? [{ ...MEMORY_HELD }, { ...TIDY_HELD }]
+              : [{ name, title: name, state: "mounted" as const }],
+          );
+          return {
+            state: stopped.has(agent) ? ("stopped" as const) : ("running" as const),
+            ...(held.length > 0 ? { mounted: held } : {}),
+          };
         },
         start: ({ agent }) => {
           stopped.delete(agent);
@@ -786,6 +861,11 @@ async function setup(t: test.TestContext) {
       export: "provider",
       to: management.actorId,
     });
+  await person.slots.grants.call.expose({
+    provider: agentActor.actorId,
+    export: "capabilities",
+    to: management.actorId,
+  });
 
   const callerActor = hub.state.createActor(PERSON, {
     name: "Caller",
@@ -927,6 +1007,8 @@ async function setup(t: test.TestContext) {
     return person.exposed().find((one) => one.slot === slot)?.call as T;
   };
   return {
+    hubUrl: server.url,
+    mountedOn,
     restart,
     rejoin,
     /** An agent's connection goes, as when its provider stops. */
@@ -1091,6 +1173,7 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
       skills: ["notes"],
       units: 1,
       capabilities: [],
+      mounted: [],
       chat: "chat",
     },
   );
@@ -4346,4 +4429,280 @@ test("the delegating skill's text is among the texts it says it shipped", () => 
     SKILL_SHIPPED.includes(now),
     `append ${now} to SKILL_SHIPPED in packages/manager/src/control.ts, and keep the others`,
   );
+});
+
+type AgentsCalls = Slot<typeof agents>["call"];
+
+/** Another program on the Hub, bound to management's `agents`, and the agent reaching it itself. */
+async function mountCallers(
+  s: Awaited<ReturnType<typeof setup>>,
+  t: test.TestContext,
+  agent: string,
+) {
+  const appActor = s.hub.state.createActor(PERSON, {
+    name: "An app",
+    bindings: [{ slot: "agents", provider: s.management.actorId, export: "agents" }],
+  });
+  const app = await connect({
+    hubUrl: s.hubUrl,
+    actorId: appActor.actorId,
+    credential: appActor.credential as string,
+    slots: { agents },
+  });
+  t.after(() => app.close());
+  await until(() => app.slots.agents.bound);
+  // The agent's own reach to management, bound by hand: making it is a capability's to do.
+  await s.person.slots.grants.call.expose({
+    provider: s.management.actorId,
+    export: "agents",
+    to: agent,
+    as: "agents",
+  });
+  const itself = await s.exposedTo<AgentsCalls>(agent, "agents");
+  return { app: app.slots.agents.call, appActor: appActor.actorId, itself };
+}
+
+test("the person, the agent itself and another program each mount a capability on a running agent and take it off, and get gives all three the same tree", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const { app, appActor, itself } = await mountCallers(s, t, agent);
+  const callers = [
+    { calls: s.calls.agents, by: s.callerActor.actorId },
+    { calls: itself, by: agent },
+    { calls: app, by: appActor },
+  ];
+  const plugins = async () =>
+    (await s.agentChannel(agent).slots.settings.call.get({})).plugins ?? [];
+  for (const { calls, by } of callers) {
+    const heard = s.heard.get(agent) ?? 0;
+    const made = await calls.mount({
+      agent,
+      provider: s.agentActor.actorId,
+      capability: "memory",
+      arguments: {},
+    });
+    assert.ok("mounted" in made, by);
+    assert.deepEqual(s.given.mounted.at(-1), { agent, capability: "memory", arguments: {} });
+    // Its executor holds it from the agent's settings, and was told to read them again.
+    assert.deepEqual(await plugins(), [{ name: "memory", capability: "memory" }]);
+    await until(() => (s.heard.get(agent) ?? 0) > heard);
+    const tree = [
+      {
+        mounted: made.mounted,
+        provider: s.agentActor.actorId,
+        capability: "memory",
+        title: "Memory",
+        arguments: {},
+        by,
+        state: "mounted",
+        children: [TIDY_HELD],
+      },
+    ];
+    for (const one of callers)
+      assert.deepEqual((await one.calls.get({ agent })).mounted, tree, `${by}, read by ${one.by}`);
+
+    await calls.unmount({ agent, mounted: made.mounted });
+    assert.equal(s.given.unmounted.at(-1)?.agent, agent);
+    assert.deepEqual(await plugins(), []);
+    for (const one of callers) assert.deepEqual((await one.calls.get({ agent })).mounted, []);
+  }
+  // Everything else stays the person's: an agent reaches it through its control unit. Being bound
+  // to agents@1 for these three gives it nothing more.
+  const others: [string, () => Promise<unknown>][] = [
+    ["list", () => itself.list({})],
+    ["units", () => itself.units({})],
+    ["templates", () => itself.templates({})],
+    ["create", () => itself.create({ stack: { base: s.base, units: [] }, name: "Kit" } as never)],
+    ["stop", () => itself.stop({ agent })],
+    ["remove", () => itself.remove({ agent })],
+    ["setModel", () => itself.setModel({ agent })],
+    ["expose", () => itself.expose({ agent, skill: "notes" })],
+    [
+      "addUnit",
+      () => itself.addUnit({ agent, unit: { provider: s.management.actorId, unit: "memory" } }),
+    ],
+    ["activity", () => itself.activity({})],
+  ];
+  for (const [method, call] of others) await assert.rejects(call(), refused("forbidden"), method);
+  assert.equal((await s.calls.agents.get({ agent })).status.state, "running");
+});
+
+test("a capability is held once, and one its provider doesn't make isn't kept", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const mount = (capability: string, args: Record<string, string> = {}, on = agent) =>
+    s.calls.agents.mount({
+      agent: on,
+      provider: s.agentActor.actorId,
+      capability,
+      arguments: args,
+    });
+  assert.ok("mounted" in (await mount("memory")));
+  await assert.rejects(mount("memory"), refused("state"));
+  // Nor beside the Memory unit, either way round.
+  const withUnit = await s.makeStack([s.own("memory", {})], "Gil");
+  await assert.rejects(mount("memory", {}, withUnit), refused("state"));
+  assert.match(
+    (
+      await s.calls.agents.check({
+        agent,
+        unit: { provider: s.management.actorId, unit: "memory" },
+      })
+    ).problems
+      .map((one) => one.message)
+      .join(" "),
+    /There is a Memory already/,
+  );
+
+  s.script.mountProblems = [{ path: "/owner", message: "No such owner." }];
+  const before = s.heard.get(agent) ?? 0;
+  assert.deepEqual(await mount("github", { owner: "x", token: "t" }), {
+    problems: [{ path: "/owner", message: "No such owner." }],
+  });
+  delete s.script.mountProblems;
+  const got = await s.calls.agents.get({ agent });
+  assert.deepEqual(
+    got.mounted?.map((one) => one.capability),
+    ["memory"],
+  );
+  assert.deepEqual(
+    (await s.agentChannel(agent).slots.settings.call.get({})).plugins?.map((one) => one.name),
+    ["memory"],
+  );
+  // Kept, then put back: the agent was told both times.
+  await until(() => (s.heard.get(agent) ?? 0) >= before + 2);
+
+  await assert.rejects(
+    s.calls.agents.mount({
+      agent,
+      provider: s.unitsActor.actorId,
+      capability: "memory",
+      arguments: {},
+    }),
+    refused("unknown"),
+  );
+  await assert.rejects(mount("search"), refused("unknown"));
+  await assert.rejects(mount("memory", {}, "act_none"), refused("unknown"));
+});
+
+test("a secret argument goes to the provider and nowhere else, and is said as … where it is echoed", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const token = "tok-5f1c2e";
+  const github = { agent, provider: s.agentActor.actorId, capability: "github" };
+  const made = await s.calls.agents.mount({ ...github, arguments: { owner: "o", token } });
+  assert.ok("mounted" in made);
+  assert.deepEqual(s.given.mounted.at(-1)?.arguments, { owner: "o", token });
+  const [root] = (await s.calls.agents.get({ agent })).mounted ?? [];
+  assert.deepEqual(root?.arguments, { owner: "o" });
+  assert.deepEqual((await s.agentChannel(agent).slots.settings.call.get({})).plugins, [
+    { name: "github", settings: { owner: "o" }, capability: "github" },
+  ]);
+  assert.ok(!readFileSync(join(s.dir, "manager.json"), "utf8").includes(token));
+  await s.calls.agents.unmount({ agent, mounted: made.mounted });
+
+  s.script.fail = "mount";
+  await assert.rejects(
+    s.calls.agents.mount({ ...github, arguments: { owner: "o", token } }),
+    (error: Error) => error.message === "GitHub refused the token ….",
+  );
+  const { entries } = await s.calls.agents.activity({ agent });
+  assert.equal(entries[0]?.tool, "agent_mount");
+  assert.equal(entries[0]?.outcome, "refused");
+  assert.ok(!JSON.stringify(entries).includes(token));
+  assert.deepEqual((await s.calls.agents.get({ agent })).mounted, []);
+});
+
+test("unmounting goes through the provider: one it has lost goes anyway, and one that can't go stays whole", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const mount = async () => {
+    const made = await s.calls.agents.mount({
+      agent,
+      provider: s.agentActor.actorId,
+      capability: "memory",
+      arguments: {},
+    });
+    assert.ok("mounted" in made);
+    return made.mounted;
+  };
+  const lost = await mount();
+  s.mountedOn.get(agent)?.clear();
+  await s.calls.agents.unmount({ agent, mounted: lost });
+  assert.deepEqual((await s.calls.agents.get({ agent })).mounted, []);
+
+  const kept = await mount();
+  s.script.fail = "unmount";
+  await assert.rejects(s.calls.agents.unmount({ agent, mounted: kept }), refused("failed"));
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent })).mounted?.map((one) => one.mounted),
+    [kept],
+  );
+  assert.deepEqual(
+    (await s.agentChannel(agent).slots.settings.call.get({})).plugins?.map((one) => one.name),
+    ["memory"],
+  );
+  delete s.script.fail;
+  await assert.rejects(s.calls.agents.unmount({ agent, mounted: "mnt_none" }), refused("unknown"));
+
+  // Removing the agent takes what was mounted on it off first.
+  const held = [...(s.mountedOn.get(agent)?.keys() ?? [])];
+  assert.equal(held.length, 1);
+  await s.calls.agents.remove({ agent });
+  assert.deepEqual(s.given.unmounted.at(-1), { agent, mounted: held[0] });
+  assert.equal(s.mountedOn.get(agent)?.size, 0);
+});
+
+test("get's tree is the agent's word on each, the list says nothing of it, and the record outlasts a restart", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  const made = await s.calls.agents.mount({
+    agent,
+    provider: s.agentActor.actorId,
+    capability: "memory",
+    arguments: {},
+  });
+  assert.ok("mounted" in made);
+  const { agents: listed } = await s.calls.agents.list({});
+  assert.deepEqual(listed.find((one) => one.agent === agent)?.status, { state: "running" });
+  assert.deepEqual((await s.calls.agents.get({ agent })).status, { state: "running" });
+
+  // With no word from the agent, a root has no state, and nothing is known under it.
+  s.script.fail = "agent.status";
+  const [unknown] = (await s.calls.agents.get({ agent })).mounted ?? [];
+  assert.equal(unknown?.state, undefined);
+  assert.deepEqual(unknown?.children, []);
+  delete s.script.fail;
+
+  await s.restart(() => {});
+  const [root] = (await s.calls.agents.get({ agent })).mounted ?? [];
+  assert.equal(root?.mounted, made.mounted);
+  assert.equal(root?.state, "mounted");
+  const { entries } = await s.calls.agents.activity({ agent });
+  assert.deepEqual(
+    entries.map(({ tool, caller, outcome }) => ({ tool, caller, outcome })).slice(0, 1),
+    [{ tool: "agent_mount", caller: s.callerActor.actorId, outcome: "done" }],
+  );
+});
+
+test("an agent kept before capabilities were mounted reads as one with none mounted, its units and settings as they were", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([s.own("memory", {})]);
+  const before = await s.agentChannel(agent).slots.settings.call.get({});
+  // As a home made before this version keeps it: no `mounted` on the agent.
+  await s.restart((kept) => {
+    delete (kept.agents as unknown as Record<string, { mounted?: unknown }>)[agent]?.mounted;
+  });
+  const read = await s.calls.agents.get({ agent });
+  assert.deepEqual(read.mounted, []);
+  assert.deepEqual(
+    read.units.map((one) => one.unit),
+    ["memory"],
+  );
+  assert.deepEqual(
+    read.capabilities?.map((one) => one.id),
+    ["memory"],
+  );
+  assert.deepEqual(await s.agentChannel(agent).slots.settings.call.get({}), before);
+  assert.deepEqual(before.plugins, [{ name: "memory", capability: "memory" }]);
 });
