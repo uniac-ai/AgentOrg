@@ -8,7 +8,7 @@ import test from "node:test";
 import { Hub, type HubOptions, listen, PERSON } from "@agentorg/hub";
 import { chat, hubActors, hubGrants, kv, llmSession, tools } from "@agentorg/interfaces";
 import { connect } from "@agentorg/sdk/client";
-import { asAsked } from "./as-asked.ts";
+import { asAsked, named, passOn } from "./as-asked.ts";
 import engine, { engines } from "./engine-actor.ts";
 
 type Item = { type: string; callId?: string; output?: string };
@@ -71,13 +71,10 @@ async function cast(t: test.TestContext, options: HubOptions = {}) {
   backing.exports.model.implement({
     models: async () => ({ models: [] }),
     respond: async (request) => {
-      // The main loop is answered at once, with new work; `requests` are the workers'.
+      // A conversation's own loop passes its newest message on to new work at once; `requests` are
+      // the workers'.
       if (request.tools?.some((tool) => tool.name === "route"))
-        return {
-          output: [
-            { type: "function_call", callId: "r", name: "route", arguments: '{"title":"Work"}' },
-          ],
-        };
+        return { output: named([passOn(request.input)], request.input as never) as never };
       requests.push(asAsked(request) as Request);
       await new Promise((resolve) => setTimeout(resolve, delays.shift() ?? 0));
       return {
@@ -257,10 +254,13 @@ test("the agent's own Stop asks an exposed tools slot to end what the stopped tu
   await until(() => s.called.length === 1, "the call");
   await engines.at(-1)?.stop();
   await turning;
-  // Asked at the stop, which ends the call, and again once the call is back.
-  await until(() => s.stopped.length === 2, "the stops");
+  // Asked at the stop, which ends the call, and again once the call is back. The conversation's
+  // own turn, which passed the message on, may still have been ending at the stop: it is asked of
+  // under its own group.
   const { group } = s.called[0] as { group: string };
-  assert.deepEqual(s.stopped, [group, group]);
+  const work = () => s.stopped.filter((one) => one === group);
+  await until(() => work().length === 2, "the stops");
+  assert.deepEqual(work(), [group, group]);
 });
 
 test("a connection that goes down has its tools left out until it is back", async (t) => {
