@@ -9,7 +9,7 @@ import { defineActor } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Store } from "../src/account.ts";
 import type { Fetch } from "../src/oauth.ts";
-import { cacheKeyOf, RETRIES, sleep } from "../src/responses.ts";
+import { cacheKeyOf, POINTER, RETRIES, sleep } from "../src/responses.ts";
 import { serveChatGPT } from "../src/serve.ts";
 import {
   argumentsDelta,
@@ -352,8 +352,10 @@ test("respond streams text and a streamed function's arguments, returns the outp
   for (const field of ["previous_response_id", "temperature", "max_output_tokens", "top_p"])
     assert.equal(field in body, false, field);
   // What it is told goes first in its input, as a developer message, where the prompt cache reads
-  // it; then what was said and done, in order. Top-level instructions are never read from it.
-  assert.equal("instructions" in body, false);
+  // it; then what was said and done, in order. The top level, which the model reads after the
+  // input, nearest its reply, only points back to it: the same few words for every request.
+  assert.equal(body.instructions, POINTER);
+  assert.doesNotMatch(POINTER, /assistant/);
   assert.deepEqual(body.input.slice(0, 3), [
     { type: "message", role: "developer", content: "You are an assistant." },
     { type: "message", role: "user", content: "Show the board." },
