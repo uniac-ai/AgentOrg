@@ -5,12 +5,15 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { join } from "node:path";
 import { startComputerProvider } from "@agentorg/computer-connector";
 import { HubState, PERSON } from "@agentorg/hub";
+import type { CapabilityDefinition } from "@agentorg/interfaces";
 import { type ManagerOptions, startManager } from "@agentorg/manager";
 import { startMcpProvider } from "@agentorg/mcp";
 import { memory } from "@agentorg/memory";
 import type { Log } from "@agentorg/sdk";
+import type { AgentPlugin } from "assistant/plugins";
 import { startAgentProvider } from "assistant/provider";
 import { startChatGPT } from "chatgpt";
+import type { z } from "zod";
 import type { PersonCalls } from "./oauth.js";
 
 export interface ProgramsOptions {
@@ -39,7 +42,23 @@ export interface ProgramsOptions {
    * default: the `agentorg` command turns it on.
    */
   assistant?: boolean;
+  /**
+   * Capabilities the agents' executor carries and offers beside memory, each a plugin with its
+   * definition, whose id is the plugin's name. For tests.
+   */
+  carried?: { plugin: AgentPlugin; offer: z.infer<typeof CapabilityDefinition> }[];
 }
+
+/**
+ * Memory, as the agents' executor offers it through `capability.provider@1`: a person, an agent
+ * or another program mounts it through management. It takes no arguments.
+ */
+export const MEMORY = {
+  id: "memory",
+  title: "Memory",
+  description: "It remembers what you tell it to, across its conversations.",
+  arguments: { type: "object" as const, properties: {}, additionalProperties: false },
+};
 
 export interface Programs {
   /** The Actors running now, by program. */
@@ -204,7 +223,9 @@ export async function startPrograms(
         model: { actor: chatgpt, export: "session" },
         dir: dirOf("agents"),
         // The plugins an agent's capabilities may name: each loaded only in an agent that holds it.
-        plugins: [memory],
+        plugins: [memory, ...(options.carried ?? []).map(({ plugin }) => plugin)],
+        // What it offers to be mounted on its agents: memory, by the plugin's own name.
+        offers: [MEMORY, ...(options.carried ?? []).map(({ offer }) => offer)],
         log: programLog,
       });
       closers.unshift(() => running.close());
@@ -265,12 +286,18 @@ export async function startPrograms(
     return actorId;
   });
 
-  if (management)
+  if (management) {
     for (const provider of [agents, mcp, computer])
       if (provider)
         await attempt("connecting a provider to management", () =>
           call("grants", "expose", { provider, export: "provider", to: management }),
         );
+    // The agents' executor makes capabilities too: management mounts them through it.
+    if (agents)
+      await attempt("connecting the agents' capabilities to management", () =>
+        call("grants", "expose", { provider: agents, export: "capabilities", to: management }),
+      );
+  }
 
   /**
    * The first Assistant, on a home with no agents: once AgentOrg Mac's service answers, its parts
