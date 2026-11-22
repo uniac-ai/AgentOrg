@@ -365,6 +365,8 @@ const DONE = "When you have nothing more to do, end without calling anything.";
  */
 export const ALONE = `${NUMBERED} Answer each one by calling \`send\` with its number: ${ONLY_SENT} You may send while you work, and more than once. ${QUIET} A message you neither answer nor close with \`no_reply_needed\` is shown as not answered when you are done. ${DONE}
 
+Asked what you can do, answer in two sentences. A message you could read more than one way, with nothing said before it here to settle which, gets one short question back before any work.
+
 ${LEFT_OUT}`;
 /**
  * What a worker is told after what its host tells it: which work this is, how to answer, and how
