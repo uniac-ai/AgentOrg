@@ -15,7 +15,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   agentProvider,
-  agentSettings,
+  agentSettings2,
   type CapabilityDefinition,
   capability,
   capabilityProvider,
@@ -39,6 +39,7 @@ import {
   type Without,
 } from "./plugins.js";
 import { head } from "./tools.js";
+import { asSettings } from "./tree.js";
 import { ACTIVITY, WORK_TOOL } from "./work.js";
 
 /** Who an agent made from the template is. How it works and speaks is the looper's frame. */
@@ -260,18 +261,23 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           hubUrl,
           actorId: agent,
           credential: (stored[agent] as z.infer<typeof Stored>).credential,
-          slots: { model: llmSession, settings: agentSettings },
+          slots: { model: llmSession, settings: agentSettings2 },
           exports: { chat, capability, tools },
           log,
           start(ctx) {
             started(ctx);
-            engine = startEngine(ctx, {
-              store,
-              instructions: () => ASSISTANT_INSTRUCTIONS,
-              earlier: EARLIER_INSTRUCTIONS,
-              stopped,
-              plugins: held,
-            });
+            // Its engine reads the tree its settings give as it read them before.
+            const settings = asSettings(ctx.slots.settings, options.actorId);
+            engine = startEngine(
+              { ...ctx, slots: { ...ctx.slots, settings } },
+              {
+                store,
+                instructions: () => ASSISTANT_INSTRUCTIONS,
+                earlier: EARLIER_INSTRUCTIONS,
+                stopped,
+                plugins: held,
+              },
+            );
           },
         }).then(
           (joined) => (channel = joined),

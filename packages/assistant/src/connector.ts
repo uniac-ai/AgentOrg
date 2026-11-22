@@ -6,7 +6,7 @@
  * Neither takes arguments, so no caller can mount one with another agent's identity.
  */
 import type {
-  agentSettings,
+  agentSettings2,
   capability,
   chat,
   Item,
@@ -22,7 +22,7 @@ import type { Capability } from "./substrate.js";
 /** What the agent reaches of the Hub through its channel: its slots, its exports, what is exposed to it. */
 export type AgentHub = Pick<
   HubContext<
-    { model: typeof llmSession; settings: typeof agentSettings },
+    { model: typeof llmSession; settings: typeof agentSettings2 },
     { chat: typeof chat; capability: typeof capability; tools: typeof tools }
   >,
   "slots" | "exports" | "exposed" | "onExposed" | "log"

@@ -8,7 +8,7 @@ import test from "node:test";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   agentProvider,
-  agentSettings,
+  agentSettings2,
   type CapabilityDefinition,
   capabilityProvider,
   chat,
@@ -16,6 +16,7 @@ import {
   hubExports,
   hubGrants,
   llmSession,
+  type SettingsRoot,
   tools,
 } from "@agentorg/interfaces";
 import { NotConnected, Refused } from "@agentorg/sdk";
@@ -27,6 +28,8 @@ import type { AgentPlugin } from "../src/plugins.ts";
 import { startAgentProvider, withoutOf } from "../src/provider.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
 import { saying } from "./saying.ts";
+
+type Root = z.input<typeof SettingsRoot>;
 
 type Request = {
   requestId: string;
@@ -389,7 +392,7 @@ test("a stopped agent whose connection ended is down until it is stopped or star
     hubUrl: s.hubUrl,
     actorId: agent,
     credential,
-    slots: { model: llmSession, settings: agentSettings },
+    slots: { model: llmSession, settings: agentSettings2 },
     exports: { chat },
     start() {},
   });
@@ -436,13 +439,19 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
       hubUrl: s.hubUrl,
       actorId: made.actorId,
       credential: made.credential as string,
-      exports: { settings: agentSettings, tools },
+      exports: { settings: agentSettings2, tools },
     }),
   );
   management.exports.settings.implement({
     get: async () => ({
-      instructions,
-      skills: [{ name: "review", description: "Review a change." }],
+      mounted: [
+        { mounted: "instructions", capability: "instructions", arguments: { text: instructions } },
+        {
+          mounted: "skills",
+          capability: "skills",
+          arguments: { skills: [{ name: "review", description: "Review a change." }] },
+        },
+      ] as Root[],
     }),
     skill: async () => ({ text: "# Review" }),
   });
@@ -475,9 +484,9 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
 });
 
 /**
- * A stand-in for management's settings, bound to `agent` at `slot`: it names the plugins `names`
- * gives when asked, each with the settings `settings` has for it, and `changed` tells the agent
- * they changed.
+ * A stand-in for management's settings, bound to `agent` at `slot`: its tree names the plugins
+ * `names` gives when asked, each as a root of the agent's executor with the arguments `settings`
+ * has for it, and `changed` tells the agent they changed.
  */
 async function settingsOf(
   s: Awaited<ReturnType<typeof setup>>,
@@ -492,18 +501,25 @@ async function settingsOf(
       hubUrl: s.hubUrl,
       actorId: made.actorId,
       credential: made.credential as string,
-      exports: { settings: agentSettings },
+      exports: { settings: agentSettings2 },
     }),
   );
   management.exports.settings.implement({
     get: async () => ({
-      instructions: "You keep the docs.",
-      skills: [],
-      plugins: names().map((name) => ({
-        name,
-        capability: name,
-        ...(settings[name] ? { settings: settings[name] } : {}),
-      })),
+      mounted: [
+        {
+          mounted: "instructions",
+          capability: "instructions",
+          arguments: { text: "You keep the docs." },
+        },
+        { mounted: "skills", capability: "skills", arguments: { skills: [] } },
+        ...names().map((name) => ({
+          mounted: name,
+          capability: name,
+          arguments: settings[name] ?? {},
+          provider: s.made.actorId,
+        })),
+      ] as Root[],
     }),
     skill: async () => {
       throw new Refused("unknown", "No skill is exposed.");
@@ -621,7 +637,7 @@ test("an agent that joins the Hub again unloads the plugins it held before, and 
     hubUrl: s.hubUrl,
     actorId: agent,
     credential,
-    slots: { model: llmSession, settings: agentSettings },
+    slots: { model: llmSession, settings: agentSettings2 },
     exports: { chat },
     start() {},
   });

@@ -5,10 +5,13 @@
  * Management keeps the record, and gates nothing: whoever is bound to `agents@1` mounts and
  * unmounts. What an agent may mount, and when a person is asked, is the controlling capability's.
  *
- * A capability mounted from the agent's own executor is held by that executor through the agent's
- * settings (`pluginsOf`), so it is kept, and the agent told its settings changed, before the
+ * A capability mounted from the agent's own executor is held by that executor through the tree its
+ * settings give (`treeOf`), so it is kept, and the agent told its settings changed, before the
  * provider is asked: a turn that reads the settings meanwhile already holds it. If the provider
  * doesn't make it, the record goes back as it was, and the agent is told again.
+ *
+ * The tree's other roots aren't mounted here, so none is mounted or unmounted through this:
+ * `instructions` and `skills` are management's own, and the rest came with a unit.
  *
  * A `secret` argument goes to the provider's `mount` and nowhere else: it isn't kept, and a refusal
  * or a problem that echoes it says "…" in its place. So a capability with one isn't mounted again
@@ -17,6 +20,8 @@
 import type { capabilityProvider, HeldCapability } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
+import { AGENTS_UNIT } from "./control.js";
+import { CONTROL_ROOT, OWN_ROOTS } from "./settings.js";
 import type { AgentRecord, MountRecord } from "./stack.js";
 
 type Provider = Slot<typeof capabilityProvider>["call"];
@@ -26,6 +31,8 @@ type Held = z.infer<typeof HeldCapability>;
 type Json = Root["arguments"][string];
 
 export interface MountParts {
+  /** Management's own id. */
+  self: string;
   records: { agents: Record<string, TheAgent> };
   save(): void;
   log: Log;
@@ -39,6 +46,8 @@ export interface MountParts {
 }
 
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
+const ownRoot = (name: string) =>
+  new Refused("forbidden", `${name} is management's own: it is never mounted or unmounted.`);
 
 /** The top-level properties the schema marks `secret`. */
 const secretsOf = (schema: Record<string, Json>) => {
@@ -82,7 +91,14 @@ const under = (held: Held[], name: string) => {
 };
 
 export function createMounts(parts: MountParts) {
-  const { save, log, recordOf, serial, changed } = parts;
+  const { self, save, log, recordOf, serial, changed } = parts;
+  /** Whether a root of the agent's tree came with a unit: its control, or a plugin of one. */
+  const fromUnit = (record: TheAgent, mounted: string) =>
+    mounted === CONTROL_ROOT
+      ? record.units.some((unit) => unit.provider === self && unit.unit === AGENTS_UNIT)
+      : record.capabilities.some(({ plugins = [] }) =>
+          plugins.some((plugin) => plugin.name === mounted),
+        );
   const providerOf = (actor: string) => parts.providers().find((one) => one.actor === actor);
   /** Take a root off through its provider; one the provider no longer has is gone already. */
   const takeOff = async (agent: string, root: Root) => {
@@ -109,6 +125,7 @@ export function createMounts(parts: MountParts) {
       serial(input.agent, async () => {
         const { agent, capability } = input;
         const record = recordOf(agent);
+        if (OWN_ROOTS.includes(capability)) throw ownRoot(capability);
         const provider = providerOf(input.provider);
         if (!provider)
           throw new Refused("unknown", `${input.provider} isn't a connected capability provider.`);
@@ -174,7 +191,12 @@ export function createMounts(parts: MountParts) {
         const record = recordOf(agent);
         const at = record.mounted.findIndex((one) => one.mounted === mounted);
         const root = record.mounted[at];
-        if (!root) throw new Refused("unknown", `${agent} has nothing mounted as ${mounted}.`);
+        if (!root) {
+          if (OWN_ROOTS.includes(mounted)) throw ownRoot(mounted);
+          if (fromUnit(record, mounted))
+            throw new Refused("state", "This came with a unit: remove the unit.");
+          throw new Refused("unknown", `${agent} has nothing mounted as ${mounted}.`);
+        }
         record.mounted.splice(at, 1);
         save();
         changed(agent);

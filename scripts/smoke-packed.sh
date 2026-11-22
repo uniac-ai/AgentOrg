@@ -8,11 +8,13 @@
 # - 0.0.5: its old Actors closed, and `agents create` working;
 # - 0.0.6: a connection that must still answer, and an agent whose conversation must be the
 #   person's;
-# - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, bound exactly as it was (to its model
-#   and a connection's tools among others), whose two chats must become one conversation with the
+# - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, bound as it was (to its model and a
+#   connection's tools among others), whose two chats must become one conversation with the
 #   person, the one last written in, which takes a message;
-# - 0.0.10 to 0.0.37: an agent with an AgentOrg control unit that must still run, bound exactly
-#   as it was, whose conversation takes a message, and whose unit's skill is this build's.
+# - 0.0.10 to 0.0.38: an agent with an AgentOrg control unit that must still run, bound as it was,
+#   whose conversation takes a message, and whose unit's skill is this build's.
+# Bound as it was, but that this build reads an agent's settings at their second major, through the
+# same binding, and gives an agent with a control unit management's agents@1 beside its tools.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -102,6 +104,16 @@ agent_bindings() {
       const line = (b) => `${b.slot} ${b.interface} ${b.provider} ${b.export}`;
       console.log(own.map(line).sort().join("\n"));
     ' "$3"
+}
+# What an agent bound as $1 says is bound on this build: its settings binding, the same one, at
+# their second major, and management's agents@1 beside a control unit's tools.
+bound_now() {
+  local management
+  management="$(awk '$1 == "control" { print $3 }' "$1")"
+  {
+    sed 's/^settings agent\.settings@1 /settings agent.settings@2 /' "$1"
+    [ -z "$management" ] || echo "agents agents@1 $management agents"
+  } | LC_ALL=C sort
 }
 # Make a connection to the MCP test fixture with `agentorg` ($1) on a home ($2), once a way to
 # connect is offered there, and print its id; nothing if none is offered in time.
@@ -598,10 +610,11 @@ for v in 0.0.7 0.0.8 0.0.9; do
   # The agent is bound exactly as it was: to its model, its tools, and the rest.
   agent_bindings "$agentorg" "$homev" "$elder" >"$work/bound-$v-now.txt" ||
     { echo "This build didn't say what the $v agent is bound to" >&2; cat "$work/up-$v.log" >&2; exit 1; }
-  diff "$work/bound-$v.txt" "$work/bound-$v-now.txt" ||
+  bound_now "$work/bound-$v.txt" >"$work/bound-$v-want.txt"
+  diff "$work/bound-$v-want.txt" "$work/bound-$v-now.txt" ||
     { echo "The $v agent is not bound on this build as it was" >&2; cat "$work/up-$v.log" >&2; exit 1; }
   echo "$v's agent is bound as it was:"
-  cat "$work/bound-$v.txt"
+  cat "$work/bound-$v-now.txt"
   if grep -E "didn't work|Error" "$work/up-$v.log"; then
     echo "This build reported a problem on the $v home" >&2
     exit 1
@@ -609,7 +622,7 @@ for v in 0.0.7 0.0.8 0.0.9; do
   stop_app
 done
 
-# 0.0.10 to 0.0.37 keep one conversation with each agent where those before them kept chats, and
+# 0.0.10 to 0.0.38 keep one conversation with each agent where those before them kept chats, and
 # take the same commands, so they share this section. Each agent has an AgentOrg control unit,
 # whose skill the version copied into the home: this build brings it up to date at its first
 # start, if it isn't already.
@@ -619,7 +632,7 @@ node --input-type=module -e '
   process.stdout.write(skillFile("SKILL.md"));
 ' "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg/manager/dist/src/control.js" >"$work/delegating-now.md"
 [ -s "$work/delegating-now.md" ] || { echo "This build gave no delegating skill" >&2; exit 1; }
-for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0.0.20 0.0.21 0.0.22 0.0.23 0.0.24 0.0.25 0.0.26 0.0.27 0.0.28 0.0.29 0.0.30 0.0.31 0.0.32 0.0.33 0.0.34 0.0.35 0.0.36 0.0.37; do
+for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0.0.20 0.0.21 0.0.22 0.0.23 0.0.24 0.0.25 0.0.26 0.0.27 0.0.28 0.0.29 0.0.30 0.0.31 0.0.32 0.0.33 0.0.34 0.0.35 0.0.36 0.0.37 0.0.38; do
   step "a home the published $v made: its agent runs, bound as it was, its conversation takes a message, and its unit's skill is this build's"
   oldv="$work/old-$v"
   mkdir "$oldv"
@@ -728,10 +741,11 @@ for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0
     { echo "This build lost something of the $v home" >&2; cat "$work/up-$v.log" >&2; exit 1; }
   agent_bindings "$agentorg" "$homev" "$elder" >"$work/bound-$v-now.txt" ||
     { echo "This build didn't say what the $v agent is bound to" >&2; cat "$work/up-$v.log" >&2; exit 1; }
-  diff "$work/bound-$v.txt" "$work/bound-$v-now.txt" ||
+  bound_now "$work/bound-$v.txt" >"$work/bound-$v-want.txt"
+  diff "$work/bound-$v-want.txt" "$work/bound-$v-now.txt" ||
     { echo "The $v agent is not bound on this build as it was" >&2; cat "$work/up-$v.log" >&2; exit 1; }
   echo "$v's agent is bound as it was:"
-  cat "$work/bound-$v.txt"
+  cat "$work/bound-$v-now.txt"
   if grep -E "didn't work|Error" "$work/up-$v.log"; then
     echo "This build reported a problem on the $v home" >&2
     exit 1

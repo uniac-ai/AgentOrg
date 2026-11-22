@@ -30,6 +30,8 @@ import {
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
 import {
+  AGENTS_EXPORT,
+  AGENTS_REACH,
   AGENTS_SLOT,
   AGENTS_UNIT,
   agentsUnit,
@@ -376,10 +378,9 @@ type AgentBinding = { slot: string; provider: string; export: string };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 /**
- * Every plugin of every capability an agent holds, each with the capability it is of. One mounted
- * from the agent's own executor is held by the executor from here, by its id, with the arguments it
- * was mounted with as its settings: so the executor holds it again at each start, and a turn is
- * never behind what is mounted.
+ * Every plugin of every capability an agent's executor holds, each with the capability it is of:
+ * those of its capabilities, and each mounted from the executor itself, by its id. A capability
+ * that names one of these again is a problem before anything runs.
  */
 export const pluginsOf = (record: TheAgent) => [
   ...record.capabilities.flatMap(({ id, plugins = [] }) =>
@@ -1267,6 +1268,8 @@ export function createStacks(parts: StackParts) {
     } else if (isAgentsUnit(offer)) {
       await parts.exposeConnection(agent, self, AGENTS_SLOT);
       undo.push(() => hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }));
+      await reachManagement(agent);
+      undo.push(() => hub.grants.unexpose({ to: agent, slot: AGENTS_REACH }));
       made = ownRecord(offer, values, worked, [{ slot: AGENTS_SLOT, connection: self }]);
     } else if (offer.unit.capability) {
       // Its own unit that builds a capability, of plugins: no Actor is made and the person is
@@ -1422,9 +1425,10 @@ export function createStacks(parts: StackParts) {
     if (unit.provider === self) {
       // Only the agents unit has a slot, and a reach to other agents, to take with it.
       if (unit.unit === AGENTS_UNIT) {
-        await hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch((error) => {
-          if (!alreadyGone(error)) throw error;
-        });
+        for (const slot of [AGENTS_SLOT, AGENTS_REACH])
+          await hub.grants.unexpose({ to: agent, slot }).catch((error) => {
+            if (!alreadyGone(error)) throw error;
+          });
         await unreach(agent);
       }
       record.skills = record.skills.filter((skill) => !unit.skills.includes(skill));
@@ -1468,6 +1472,23 @@ export function createStacks(parts: StackParts) {
     save();
   };
 
+  /** Expose management's `agents@1` to an agent, at `AGENTS_REACH`: it is there already, or made. */
+  const reachManagement = (agent: string) =>
+    hub.grants.expose({ provider: self, export: AGENTS_EXPORT, to: agent, as: AGENTS_REACH });
+  /**
+   * Have every agent holding the control unit reach management's `agents@1`, or only `actor` if it
+   * is one: one kept before it was given with the unit, too. Nothing changes where it is there.
+   */
+  const reachControl = async (actor?: string) => {
+    for (const [agent, record] of Object.entries(records.agents)) {
+      if (actor !== undefined && agent !== actor) continue;
+      if (!record.units.some((unit) => unit.provider === self && unit.unit === AGENTS_UNIT))
+        continue;
+      await reachManagement(agent).catch((error) => {
+        if (!alreadyGone(error)) log.warn(`Reaching management for control: ${messageOf(error)}`);
+      });
+    }
+  };
   /**
    * Make the person's slots to what agents hold again, where the Hub has dropped one, as it
    * does when an Actor stops offering its export or offers it as another interface. Nothing
@@ -1630,6 +1651,7 @@ export function createStacks(parts: StackParts) {
     serial,
     fromUnit,
     reachHeld,
+    reachControl,
     holdOwns,
     reachAgents,
     refreshSkills,
