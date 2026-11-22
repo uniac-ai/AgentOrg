@@ -59,6 +59,24 @@ export const Creatable = z.object({
 const OnAgent = z.object({ agent: Id });
 
 /**
+ * A capability mounted on an agent, as the agent says it: by its name, unique in the agent, and
+ * its title. `mounted`, it does its part. `down`, it is mounted and says it can't do its part now.
+ * `failed`, it couldn't be mounted, and the agent runs without it. `detail` says why, in whole
+ * sentences. `parent` names the capability that mounted it inside the agent; none for one mounted
+ * on the agent from outside it.
+ */
+export const HeldCapability = z.strictObject({
+  name: CapabilityId,
+  title: Title,
+  state: z.enum(["mounted", "down", "failed"]),
+  detail: z.string().max(2000).optional(),
+  parent: CapabilityId.optional(),
+});
+
+/** The most capabilities an agent says it holds. */
+export const HELD_MAX = 64;
+
+/**
  * How an agent stands now, as what runs it knows: `starting`, `running`, `stopped` by the person,
  * or `down`, which it didn't ask for. `detail` says why it is down; or, though it runs, what is
  * wrong with it: whole sentences, each on a line of its own.
@@ -66,6 +84,14 @@ const OnAgent = z.object({ agent: Id });
 export const AgentStatus = z.object({
   state: z.enum(["starting", "running", "stopped", "down"]),
   detail: z.string().max(2000).optional(),
+});
+/**
+ * The same, as the agent's provider says it, with `mounted`: every capability mounted on the
+ * agent, each with its state, in the order they were mounted. None from a provider that doesn't
+ * say.
+ */
+export const ProvidedStatus = AgentStatus.extend({
+  mounted: z.array(HeldCapability).max(HELD_MAX).optional(),
 });
 /** The models an agent can use, and the one chosen; none chosen means the provider's default. */
 export const AgentModels = z.object({
@@ -102,7 +128,7 @@ export const agentProvider = defineInterface({
       }),
       output: z.object({ agent: Id, settings: Name, chat: Name }),
     }),
-    status: method({ input: OnAgent, output: AgentStatus }),
+    status: method({ input: OnAgent, output: ProvidedStatus }),
     start: method({ input: OnAgent, output: z.object({}) }),
     /**
      * Stop an agent, keeping it: it does nothing until it is started. Its record, bindings and

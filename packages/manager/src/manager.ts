@@ -775,6 +775,13 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           }),
         /** Units and connections go first: if one can't, the agent is still here to be tried again. */
         remove: ({ agent }) => removeWhole(agent),
+        // Not built yet: no capability provider is connected to management.
+        mount: () => {
+          throw new Refused("unimplemented", "Management can't mount a capability yet.");
+        },
+        unmount: () => {
+          throw new Refused("unimplemented", "Management can't unmount a capability yet.");
+        },
       });
 
       personOnly(ctx.exports.connections, "connections").implement({

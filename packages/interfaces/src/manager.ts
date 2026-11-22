@@ -1,6 +1,14 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { AgentModels, AgentStatus, Answers, Creatable, CreatableId } from "./agent-provider.js";
+import {
+  AgentModels,
+  AgentStatus,
+  Answers,
+  Creatable,
+  CreatableId,
+  HELD_MAX,
+  HeldCapability,
+} from "./agent-provider.js";
 import {
   CapabilityPlugin,
   SKILL_FILE_MAX,
@@ -8,6 +16,7 @@ import {
   SkillName,
   SkillPath,
 } from "./agent-settings.js";
+import { Arguments, Mounting } from "./capability-provider.js";
 import {
   ConnectionKind,
   ConnectionParams,
@@ -185,6 +194,26 @@ const ActivityEntry = z.object({
   reason: z.string().max(2000).optional(),
 });
 
+/**
+ * A capability mounted on an agent through management, with what is mounted under it. `mounted` is
+ * management's id for it, which `unmount` takes; `provider` and `capability` say what made it, and
+ * `arguments` what it was made with, never a secret. `by` is who mounted it: `person`, or the Actor
+ * id of the agent or program that did. Its `state` and `detail`, and `children`, every capability
+ * mounted under it at any depth, each naming its `parent`, are the agent's to say: with no `state`,
+ * the agent can't be asked now.
+ */
+export const MountedCapability = z.strictObject({
+  mounted: Id,
+  provider: Id,
+  capability: CapabilityId,
+  title: z.string().min(1).max(128),
+  arguments: Arguments,
+  by: Id,
+  state: HeldCapability.shape.state.optional(),
+  detail: z.string().max(2000).optional(),
+  children: z.array(HeldCapability).max(HELD_MAX),
+});
+
 /** An agent as the list shows it: its status is its provider's. */
 const AgentEntry = z.object({
   agent: Id,
@@ -203,6 +232,12 @@ const AgentEntry = z.object({
 /**
  * `agents@1`: the agents the person has, each made from a creatable a connected agent provider
  * offers. What each agent is doing is read from the agent's own `chat@1`.
+ *
+ * `get`, `mount` and `unmount` answer whoever is bound to this export: the person, an agent, or
+ * any other program on the Hub, on any agent. Being bound is the grant. Which agents a caller may
+ * change, and what it may mount, are decided by the capability that offers an agent these calls,
+ * never by management. The other methods answer the person; an agent reaches them through its
+ * control unit.
  */
 export const agents = defineInterface({
   name: "agents",
@@ -287,8 +322,35 @@ export const agents = defineInterface({
          * nothing such is left.
          */
         capabilities: z.array(AgentCapability).optional(),
+        /**
+         * What was mounted on it through management, in the order it was, each with what is
+         * mounted under it. Absent, as `capabilities` is, only from something written before this.
+         */
+        mounted: z.array(MountedCapability).max(HELD_MAX).optional(),
       }),
     }),
+    /**
+     * Mount a capability a connected capability provider lists on the agent, from `arguments`,
+     * through that provider. Management keeps what was mounted, with its arguments but none its
+     * schema marks `secret`. It takes effect from the agent's next model request. Arguments that
+     * don't fit give each problem, and nothing is mounted. Refused `unknown` for an agent, a
+     * provider or a capability there isn't, and `state` when the agent holds that capability
+     * already.
+     */
+    mount: method({
+      input: z.object({
+        agent: Id,
+        provider: Id,
+        capability: CapabilityId,
+        arguments: Arguments,
+      }),
+      output: Mounting,
+    }),
+    /**
+     * Final: what was mounted is taken off the agent, with all that is mounted under it, through
+     * the provider that made it. Refused `unknown` for one the agent doesn't have.
+     */
+    unmount: method({ input: z.object({ agent: Id, mounted: Id }), output: z.object({}) }),
     start: method({ input: OnAgent, output: z.object({}) }),
     /**
      * Stops the agent: whatever it was doing ends, and it does nothing until started; all else
