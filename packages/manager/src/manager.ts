@@ -678,6 +678,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       });
 
       personOnly(ctx.exports.agents, "agents", ["get", "mount", "unmount"]).implement({
+        // Not built yet: the capability providers' definitions come with the change after.
+        capabilities: () => {
+          throw new Refused("unimplemented", "Management can't list capabilities yet.");
+        },
         creatable: async () => ({
           creatables: (
             await fromEach(agentProviders(), async ({ actor, call }) =>
