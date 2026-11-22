@@ -87,13 +87,6 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
 /** This machine's screen and the person's own browser are never a test's: off, whatever is ready. */
 const NEITHER = { screen: "off", ownBrowser: "none" };
 const refused = (code: string) => (error: unknown) => (error as { code?: string }).code === code;
-/** The number of the newest message a conversation's own loop reads: the work there is comes after. */
-const newestIn = (input: unknown[] = []) => {
-  const said = (input as { role?: string; content?: unknown }[]).findLast(
-    (item) => item.role === "user" && /^\[\d+\]/.test(String(item.content)),
-  );
-  return Number(/^\[(\d+)\]/.exec(String(said?.content ?? ""))?.[1] ?? 0);
-};
 /** The browser Playwright installed for the tests. */
 function headlessShell(): string {
   const root =
@@ -351,12 +344,12 @@ test("an agent is made through agents, and the person reaches its chat, across a
 });
 
 test("an agent given Memory keeps a line it writes, and is told it at its next turn and after the app starts again", async (t) => {
-  // The model, scripted: whose each message is, and each worker request's answer in turn, nothing
-  // once those run out. What each worker request is told and offered is kept.
+  // The model, scripted: each of the agent's requests answered in turn, nothing once those run out,
+  // and a message heard apart asks for no stop. What each of its requests is told and offered is
+  // kept.
   const fake = await fakeOpenAI();
   const worker: { instructions: string; tools: string[] }[] = [];
   const answers: object[][] = [];
-  let routed = 0;
   const s = await open(t, undefined, async (request) => {
     if (!request.url.endsWith("/responses")) return fake.handle(request);
     const body = (await request.clone().json()) as {
@@ -366,9 +359,7 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
     };
     const tools = (body.tools ?? []).map((tool) => tool.name);
     if (tools.includes("route")) {
-      const call = { type: "function_call", call_id: `r${++routed}`, name: "route" };
-      const to = JSON.stringify({ message: newestIn(body.input), title: "Talk" });
-      fake.script({ events: [completed([{ ...call, arguments: to }])] });
+      fake.script({ events: [completed([])] });
       return fake.handle(request);
     }
     worker.push({ instructions: body.instructions, tools });
@@ -479,21 +470,9 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   const fake = await fakeOpenAI();
   const asked: { instructions: string; said: unknown }[] = [];
   let held = false;
-  /** How often a conversation's own loop was asked: it passes the message on to new work. */
-  let routed = 0;
   const s = await open(t, undefined, async (request) => {
     if (!request.url.endsWith("/responses")) return fake.handle(request);
-    const body = (await request.clone().json()) as {
-      instructions: string;
-      input: unknown[];
-      tools?: { name: string }[];
-    };
-    if (body.tools?.some((tool) => tool.name === "route")) {
-      const call = { type: "function_call", call_id: `r${++routed}`, name: "route" };
-      const to = JSON.stringify({ message: newestIn(body.input), title: "Long" });
-      fake.script({ events: [completed([{ ...call, arguments: to }])] });
-      return fake.handle(request);
-    }
+    const body = (await request.clone().json()) as { instructions: string; input: unknown[] };
     asked.push({ instructions: body.instructions, said: body.input.at(-1) });
     return held ? new Promise<Response>(() => {}) : fake.handle(request);
   });
@@ -531,8 +510,6 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   await until(async () => (await texts()).at(-1) === "Went on.", "the turn to go on");
   // The chat has the reply; the line that says it went on is its work's.
   assert.deepEqual(await texts(), ["a long one", "Went on."]);
-  // The message was given to its work before the stop: nobody is asked whose it is again.
-  assert.equal(routed, 1);
   // Told what its settings say, which only management can answer.
   assert.match(String(asked[1]?.instructions), /What you are for: Scouting ahead\./);
   assert.match(JSON.stringify(asked[1]?.said), /cut off by a restart/);
@@ -540,18 +517,18 @@ test("a turn cut off as the app stops goes on when it is started again, with the
     async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
     "the turn to end",
   );
-  // Asked as it went on; its reply answered all it took, so its turn ended there.
-  assert.equal(asked.length, 2);
+  // Asked as it went on, and once more after its reply, which called nothing: its turn ended there.
+  assert.equal(asked.length, 3);
 });
 
-test("a model request being tried again is on the agent's Activity, on the conversation's entry or a piece of work's, gone at the answer and at giving up", async (t) => {
-  // OpenAI's responses on a port of this machine. A request of a conversation's own loop, or of a piece of
-  // work, is dropped while it is cut, as a connection that breaks; else each is answered with the
-  // next of its own answers.
+test("a model request being tried again is on the agent's Activity, on the conversation's entry, gone at the answer and at giving up", async (t) => {
+  // OpenAI's responses on a port of this machine. A request of the conversation's own loop is
+  // dropped while it is cut, as a connection that breaks; else each is answered with the next
+  // answer. A message heard apart asks for no stop.
   const fake = await fakeOpenAI();
-  const cut = { main: false, work: false };
+  const cut = { work: false };
   type Answer = Script | ((number: number) => Script);
-  const answers: { main: Answer[]; work: Answer[] } = { main: [], work: [] };
+  const answers: Answer[] = [];
   /** The number the newest message a request reads starts with, as a loop is shown it. */
   const numberOf = (input: { role?: string; content?: unknown }[]) => {
     const words = (item: { content?: unknown }) =>
@@ -567,12 +544,12 @@ test("a model request being tried again is on the agent's Activity, on the conve
       tools?: { name: string }[];
       input: { role?: string; content?: unknown }[];
     };
-    const whose = (asked.tools ?? []).some((tool) => tool.name === "route") ? "main" : "work";
-    if (cut[whose]) {
+    const heard = (asked.tools ?? []).some((tool) => tool.name === "route");
+    if (!heard && cut.work) {
       request.socket.destroy();
       return;
     }
-    const next = answers[whose].shift() ?? { events: [completed([])] };
+    const next = (heard ? undefined : answers.shift()) ?? { events: [completed([])] };
     fake.script(typeof next === "function" ? next(numberOf(asked.input)) : next);
     const answer = await fake.handle(
       new Request(`https://api.openai.com${request.url}`, {
@@ -687,70 +664,36 @@ test("a model request being tried again is on the agent's Activity, on the conve
 
   // A message: the conversation's own loop's request, cut, is tried again, said on its entry, and
   // goes when it answers once the connection is back.
-  cut.main = true;
-  answers.main.push(sends("Here."));
+  cut.work = true;
+  answers.push(sends("Here."));
   let asked = Date.now();
   await person.call(slot, "send", { text: "Are you there?" });
-  const main = await watch(
+  const first = await watch(
     async () => (await conversation())?.retrying,
     (seen) => (seen.at(-1)?.attempt ?? 0) >= 2,
   );
-  sane(main, asked);
-  cut.main = false;
+  sane(first, asked);
+  cut.work = false;
   await until(async () => (await texts()).at(-1) === "Here.", "the conversation to answer");
   await idle();
   assert.equal((await conversation())?.retrying, undefined);
   assert.equal((await activity()).retrying, undefined);
 
-  // New work: its request, cut, is tried again, said on the piece of work, and goes when it
-  // answers.
-  const route = (to: object) => (number: number) => ({
-    events: [
-      completed([
-        {
-          type: "function_call",
-          call_id: "r1",
-          name: "route",
-          arguments: JSON.stringify({ message: number, ...to }),
-        },
-      ]),
-    ],
-  });
-  answers.main.push(route({ title: "Report" }));
-  answers.work.push(sends("Done."));
-  cut.work = true;
-  asked = Date.now();
-  await person.call(slot, "send", { text: "Write the report." });
-  const piece = async () => (await activity()).works.find((one) => one.title === "Report");
-  const work = await watch(
-    async () => (await piece())?.retrying,
-    (seen) => seen.length === 1,
-  );
-  sane(work, asked);
-  assert.equal((await piece())?.state, "working");
-  assert.equal((await conversation())?.retrying, undefined, "the conversation isn't trying again");
-  cut.work = false;
-  await until(async () => (await texts()).at(-1) === "Done.", "the work to answer");
-  await idle();
-  assert.equal((await piece())?.retrying, undefined);
-
-  // Given up: the conversation passes the next message on to that piece of work. The try after a
-  // retry asks for a wait longer than a minute, so its failure is the answer, and the retry goes
-  // with it.
-  answers.main.push(route({ work: (await piece())?.id }));
-  answers.work.push({ status: 429, code: "rate_limit_exceeded", retryAfterMs: "61000" });
+  // Given up: the try after a retry asks for a wait longer than a minute, so its failure is the
+  // answer, and the retry goes with it.
+  answers.push({ status: 429, code: "rate_limit_exceeded", retryAfterMs: "61000" });
   cut.work = true;
   asked = Date.now();
   await person.call(slot, "send", { text: "Once more." });
   const again = await watch(
-    async () => (await piece())?.retrying,
+    async () => (await conversation())?.retrying,
     (seen) => seen.length === 1,
   );
   sane(again, asked);
   cut.work = false;
-  await until(async () => (await piece())?.failed === true, "the work to fail");
+  await until(async () => (await conversation())?.failed === true, "the conversation to fail");
   await idle();
-  assert.equal((await piece())?.retrying, undefined);
+  assert.equal((await conversation())?.retrying, undefined);
   assert.equal((await activity()).retrying, undefined);
 });
 
@@ -1261,40 +1204,27 @@ function matchesSaved(name: string, text: string) {
   );
 }
 
-test("an agent made from the Assistant template is told the saved words, by its conversation's own loop and in its work", async (t) => {
+test("an agent made from the Assistant template is told the saved words, by its conversation's own loop", async (t) => {
   const root = newFolder("agentorg-told-");
   const data = join(root, "data");
   const workspace = join(root, "work");
   mkdirSync(workspace);
   await startService(t, data);
-  // The model, scripted: whose the message is, then one reply. What each request is told is kept.
+  // The model, scripted: one reply. What each request is told is kept.
   const fake = await fakeOpenAI();
-  const told: { frontDesk: string[]; worker: string[] } = { frontDesk: [], worker: [] };
+  const told: string[] = [];
   const s = await open(
     t,
     { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp", agentsFolder: join(root, "Agents") },
     async (request) => {
       if (!request.url.endsWith("/responses")) return fake.handle(request);
-      const body = (await request.clone().json()) as {
-        instructions: string;
-        input: unknown[];
-        tools?: { name: string }[];
-      };
-      if (body.tools?.some((tool) => tool.name === "route")) {
-        told.frontDesk.push(body.instructions);
-        const call = { type: "function_call", call_id: "r1", name: "route" };
-        const to = JSON.stringify({ message: newestIn(body.input), title: "Say hello" });
-        fake.script({ events: [completed([{ ...call, arguments: to }])] });
-        return fake.handle(request);
-      }
-      told.worker.push(body.instructions);
+      const body = (await request.clone().json()) as { instructions: string };
+      told.push(body.instructions);
       const sent = { type: "function_call", call_id: "s1", name: "send" };
       fake.script({
         events: [
           completed(
-            told.worker.length === 1
-              ? [{ ...sent, arguments: '{"message":1,"text":"Hello."}' }]
-              : [],
+            told.length === 1 ? [{ ...sent, arguments: '{"message":1,"text":"Hello."}' }] : [],
           ),
         ],
       });
@@ -1322,13 +1252,12 @@ test("an agent made from the Assistant template is told the saved words, by its 
     "the chat to be exposed",
   );
   await person.call(slot, "send", { text: "Hi!" });
-  await until(() => told.worker.length >= 1, "the worker to be asked");
+  await until(() => told.length >= 1, "the agent to be asked");
   await until(
     async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
     "the turn to end",
   );
-  matchesSaved("assistant-front-desk.txt", told.frontDesk[0] ?? "");
   // Its workspace is this test's own folder, said as <root>.
-  matchesSaved("assistant-worker.txt", (told.worker[0] ?? "").replaceAll(root, "<root>"));
+  matchesSaved("assistant.txt", (told[0] ?? "").replaceAll(root, "<root>"));
   await person.call("agents", "remove", { agent });
 });

@@ -282,8 +282,9 @@ export function createChats(options: {
         return party === PERSON ? undefined : (party ?? "a party it doesn't know");
       },
       files: filesOf,
-      // Each conversation has the agent's own loop, which every message there reaches first.
-      conversations: "routes",
+      // Each conversation has the agent's own loop, which every message there reaches first: the
+      // agent alone, doing the work itself.
+      conversations: "alone",
       log,
     }),
   );

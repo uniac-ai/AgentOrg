@@ -1,4 +1,4 @@
-import { FRAME, OWN_FUNCTIONS } from "@agentorg/looper";
+import { ALONE, FRAME, FRAME_ALONE, OWN_FUNCTIONS } from "@agentorg/looper";
 
 /**
  * A worker's request as the agent's host made it, without what the looper adds: its frame before
@@ -6,9 +6,14 @@ import { FRAME, OWN_FUNCTIONS } from "@agentorg/looper";
  * number each of the person's messages starts with. What the worker sent is put as the message it
  * said.
  */
-/** What a worker is told without the looper's frame before it. */
-const unframed = (text: string) =>
-  text.startsWith(FRAME) ? text.slice(FRAME.length).replace(/^\n\n/, "") : text;
+/** What a worker, or the agent alone, is told without the looper's frame before it. */
+const unframed = (text: string) => {
+  const frame = [FRAME_ALONE, FRAME].find((one) => text.startsWith(one));
+  return frame ? text.slice(frame.length).replace(/^\n\n/, "") : text;
+};
+/** What the agent alone is told without the looper's lines on answering after the agent's words. */
+const unended = (text: string) =>
+  text.endsWith(ALONE) ? text.slice(0, -ALONE.length).replace(/\n\n$/, "") : text;
 /** The looper's own functions, offered beside the agent's tools. */
 const LOOPERS = OWN_FUNCTIONS;
 
@@ -24,7 +29,7 @@ export function asAsked<
     ...(request.instructions === undefined
       ? {}
       : {
-          instructions: unframed(request.instructions).replace(
+          instructions: unended(unframed(request.instructions)).replace(
             /(\n\n)?This is one piece of work: [\s\S]*$/,
             "",
           ),
@@ -65,25 +70,6 @@ export function asAsked<
 
 type Item = { type: string; [key: string]: unknown };
 const NEWEST = "newest";
-/**
- * A conversation's own loop passing the newest message it holds on (see `named`): to the work it
- * was told of first, in the last item of its request, which is what a follow-up is given to; or
- * with none, to new work.
- */
-export const passOn = (input: readonly unknown[] = [], title = "Work"): Item => {
-  const listed = String((input.at(-1) as { content?: unknown } | undefined)?.content ?? "");
-  // Of the work this conversation has: another conversation's is not where its follow-ups go.
-  const there = listed
-    .split("\n")
-    .find((line) => line.startsWith("- ") && !/; in another conversation\)/.test(line))
-    ?.match(/^- ([^:\s]+): /)?.[1];
-  return {
-    type: "function_call",
-    callId: crypto.randomUUID(),
-    name: "route",
-    arguments: JSON.stringify({ message: NEWEST, ...(there ? { work: there } : { title }) }),
-  };
-};
 /** A worker's reply, sent to the newest message it read and hasn't handed back (see `named`). */
 export const sendOf = (text: string): Item => ({
   type: "function_call",
@@ -93,7 +79,7 @@ export const sendOf = (text: string): Item => ({
 });
 /** `output`'s `send`s and `no_reply_needed`s that name no message, as `sendOf` makes them, made to name the newest one `input` holds that wasn't handed back. */
 export function named(output: Item[], input: Item[]): Item[] {
-  // Handed back, or passed on by a conversation's own loop.
+  // Handed back, or passed on.
   const back = new Set(
     input.flatMap((item) =>
       item.type === "function_call" &&
@@ -128,17 +114,19 @@ export function named(output: Item[], input: Item[]): Item[] {
   });
 }
 /**
- * Whether a request only follows what its worker sent, with nothing said since: a stand-in model
- * answers it with nothing, as a model that has said all it had.
+ * Whether a request only follows what the agent sent, or a message it closed with no reply, with
+ * nothing said since: a stand-in model answers it with nothing, as a model that has said all it
+ * had.
  */
 export const followsSend = (input: Item[]) => {
   const tail = input.at(-1);
   return (
     tail?.type === "function_call_output" &&
-    tail.output === "Sent." &&
     input.some(
       (item) =>
-        item.type === "function_call" && item.name === "send" && item.callId === tail.callId,
+        item.type === "function_call" &&
+        item.callId === tail.callId &&
+        ((item.name === "send" && tail.output === "Sent.") || item.name === "no_reply_needed"),
     )
   );
 };
