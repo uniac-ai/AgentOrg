@@ -504,6 +504,8 @@ export function createLooper(options: {
       waits: (thread) => !hasOwn(thread),
       left: (thread) => kept.get(id)?.left?.includes(thread) === true,
       told,
+      // Alone, it reads what other work said in its conversation too.
+      whole: talk && !routes,
     });
     const key = UNFINISHED + encodeURIComponent(id);
     const held = {

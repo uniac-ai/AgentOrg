@@ -402,18 +402,18 @@ const answeredBy = (entry: Entry) => [
   ...(entry.answers ?? []),
 ];
 /**
- * Such a reply as the model reads one sent now: a `send` to the message at `place`, and what it
- * was told of it, so it never takes it for words of its own that were not said.
+ * Such a reply as the model reads one sent now: a `send` to the message at `place`, or naming
+ * none, and what it was told of it, so it never takes it for words of its own that were not said.
  */
-function sentBefore(entry: Entry, place: number): Item[] {
+function sentBefore(entry: Entry, place?: number): Item[] {
   const callId = `earlier-${entry.id}`;
-  const text = fitted(wordsOf(entry.items), MAX_TEXT - 1024);
+  const text = fitted(sentIn(entry.items) ?? wordsOf(entry.items), MAX_TEXT - 1024);
   return [
     {
       type: "function_call",
       callId,
       name: SEND_NAME,
-      arguments: JSON.stringify({ message: place, text }),
+      arguments: JSON.stringify(place === undefined ? { text } : { message: place, text }),
     },
     { type: "function_call_output", callId, output: SENT },
   ];
@@ -1145,6 +1145,11 @@ export function createRecord(options: {
   left(thread: string): boolean;
   /** A message said in `thread`, as its worker is told it: who it is from, when not the person. */
   told?(thread: string, text: string): string;
+  /**
+   * Whether it reads every message said in its own thread, also those other work holds: the
+   * person's and each reply, never that work's calls. For the agent alone in its conversation.
+   */
+  whole?: boolean;
 }) {
   const { id } = options;
   /** Its hold on a message: its own among those the message names, or the message's own. */
@@ -1331,6 +1336,16 @@ export function createRecord(options: {
    */
   const itemsOf = (thread: string, record: Kept, asked: number): Item[] => {
     const { entry } = record;
+    // Another's: the person's words with no number, as it isn't its to answer, or a reply naming
+    // none.
+    if (others.has(record))
+      return entry.role === "user"
+        ? entry.items.map((item) =>
+            item.type === "message"
+              ? { ...item, content: options.told?.(thread, item.content) ?? item.content }
+              : item,
+          )
+        : sentBefore(entry);
     if (entry.role === "user")
       return entry.items.map((item) =>
         item.type === "message"
@@ -1341,6 +1356,65 @@ export function createRecord(options: {
           : item,
       );
     return earlierReply(entry) ? sentBefore(entry, asked) : entry.items;
+  };
+  /** The messages of other work it reads, each a copy that stands in its order: see `withOthers`. */
+  const others = new WeakSet<Kept>();
+  /**
+   * With `whole`, its own messages and, among them, each message said in its own thread that
+   * other work holds: the person's, or a reply, never that work's calls. Each stands after the
+   * last in its order of its own said before it there, so they keep the order they were said in,
+   * with a place between that one's and the next of its own that later ones don't move: half the
+   * gap, then half what is left. Only what a request reads and what a compaction summarizes take
+   * them.
+   */
+  const withOthers = (held: Map<string, Held>, records: Placed[]): Placed[] => {
+    if (!options.whole) return records;
+    const theirs = (held.get(id)?.records ?? []).filter(
+      (record) =>
+        !mine(id, record) &&
+        !offered(record) &&
+        !record.writing &&
+        (record.entry.role === "user" ||
+          (record.entry.role === "assistant" && !record.entry.unsent)),
+    );
+    if (theirs.length === 0) return records;
+    // Each after the last of its own, in its order, said before it in the thread: with none,
+    // before all of them.
+    const after = new Map<number, Kept[]>();
+    for (const record of theirs) {
+      const at = records.findLastIndex((one) => one.thread === id && one.record.seq < record.seq);
+      after.set(at, [...(after.get(at) ?? []), record]);
+    }
+    const merged: Placed[] = [];
+    const put = (at: number) => {
+      const group = after.get(at) ?? [];
+      const from = at === -1 ? 0 : placeOf((records[at] as Placed).record);
+      const next = records[at + 1];
+      const to = next ? placeOf(next.record) : from + 1;
+      for (const [k, record] of group.entries()) {
+        const {
+          work: _,
+          to: __,
+          place: ___,
+          joined: ____,
+          ahead: _____,
+          main: ______,
+          ...entry
+        } = record.entry;
+        const copy: Kept = {
+          ...record,
+          entry: { ...entry, place: to - (to - from) / 2 ** (k + 1) },
+        };
+        others.add(copy);
+        merged.push({ thread: id, record: copy });
+      }
+    };
+    put(-1);
+    for (const [i, one] of records.entries()) {
+      merged.push(one);
+      put(i);
+    }
+    return merged;
   };
   type Readable = Placed & { asked: number };
   /**
@@ -1355,13 +1429,14 @@ export function createRecord(options: {
     const last = topOf(records);
     const unwritten = records.find(({ record }) => pending(record));
     const read = unwritten ? placeOf(unwritten.record) - 1 : last;
-    const unread = (record: Kept) => record.entry.role === "user" && placeOf(record) > read;
+    const unread = (record: Kept) =>
+      record.entry.role === "user" && placeOf(record) > read && !others.has(record);
     const sent: Readable[] = [];
     /** Said during a turn, and not yet put: what is ahead of them goes first. */
     const late: Placed[] = [];
     let asked = 0;
     const put = (one: Placed) => {
-      if (one.record.entry.role === "user") asked = placeOf(one.record);
+      if (one.record.entry.role === "user" && !others.has(one.record)) asked = placeOf(one.record);
       sent.push({ ...one, asked });
     };
     const putLate = (upTo: number) => {
@@ -1371,7 +1446,9 @@ export function createRecord(options: {
       const { record } = one;
       // Nothing to send: a user message not yet read, or a line with no items.
       if (pending(record) || unread(record) || record.entry.items.length === 0) continue;
+      // Other work's, which stands where it was said: it lets out nothing held back.
       if (joinedOf(record)) late.push(one);
+      else if (others.has(record)) put(one);
       else {
         putLate(record.entry.ahead ?? last);
         put(one);
@@ -1807,7 +1884,7 @@ export function createRecord(options: {
     ): Promise<{ items: Item[]; read: number; thread: string; over: boolean }> {
       const held = await load();
       const records = own(held);
-      const { sent, read, unread, compacted } = readable(records);
+      const { sent, read, unread, compacted } = readable(withOthers(held, records));
       const summary = compacted && summaryItem(compacted);
       const opening = records.find(({ record }) => record.entry.role === "user")?.record;
       const open = compacted && new Set(openOf(held, 0).map(({ record }) => record));
@@ -1855,7 +1932,7 @@ export function createRecord(options: {
     async toCompact(refused = false): Promise<ToCompact | undefined> {
       const held = await load();
       const records = own(held);
-      const { sent, read, compacted: previous } = readable(records);
+      const { sent, read, compacted: previous } = readable(withOthers(held, records));
       const since = sent
         .filter(({ record }) => placeOf(record) > (previous?.upTo ?? 0) && placeOf(record) <= read)
         .sort((a, b) => placeOf(a.record) - placeOf(b.record));

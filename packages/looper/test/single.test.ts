@@ -4,7 +4,19 @@ import type { OutputItem, Tool } from "../src/index.ts";
 import { ALONE, FRAME_ALONE } from "../src/loop.ts";
 import { PLACES } from "../src/looper.ts";
 import { HEARD_ALONE, ROUTE } from "../src/main.ts";
-import { gate, held, idle, looperWith, passes, says, sends, stops, until } from "./support.ts";
+import {
+  gate,
+  handsBack,
+  held,
+  idle,
+  looperWith,
+  newWork,
+  passes,
+  says,
+  sends,
+  stops,
+  until,
+} from "./support.ts";
 
 /** A host's function the agent may call, which keeps what it is given in `kept`. */
 const keeping = () => {
@@ -291,6 +303,82 @@ test("alone, a message that asks for nothing is closed with no reply, with its r
     own?.steps?.map((step) => step.text),
     ["Pick dates", "Book"],
   );
+});
+
+test("alone, in a conversation that routed before, it reads what the work there said, and not that work's calls", async () => {
+  const { tool } = keeping();
+  const before = looperWith({
+    conversations: "routes",
+    tools: [tool],
+    talking: () => passes("The report"),
+  });
+  await before.looper.send("a", "Write the report.");
+  await until(() => before.asked.length === 1, "the work's turn");
+  before.answer("Write the report.", call("notes__keep", { text: "draft" }));
+  await until(() => before.asked.length === 2, "the work's next request");
+  before.answer("Write the report.", sends("Report done: revenue up 4%."));
+  await before.looper.settled();
+  await before.looper.close();
+  const after = looperWith({ values: before.values, conversations: "alone", tools: [tool] });
+  await after.looper.send("a", "What did the report say?");
+  await until(() => after.asked.length === 1, "its request");
+  const input = after.inputs[0] ?? [];
+  // The person's message, its own call that passed it on, the work's reply, the new message.
+  assert.deepEqual(
+    input.filter((line) => !line.startsWith("output ")),
+    ["Write the report.", "call route", "Report done: revenue up 4%.", "What did the report say?"],
+  );
+  assert.ok(!input.some((line) => line.includes("notes__keep") || line.includes("Kept.")));
+  after.answer("What did the report say?", sends("Revenue is up 4%."));
+  await after.looper.settled();
+});
+
+test("alone, in a conversation from before conversations had loops, it reads each message and reply other work held there, and not that work's calls", async () => {
+  const { tool } = keeping();
+  const before = looperWith({
+    tools: [tool],
+    routing: (text) => (text === "Book a flight." ? newWork("Flight") : undefined),
+  });
+  // The thread's first work takes its name, and is the conversation's loop after. It hands the
+  // next message back, which starts other work.
+  await before.looper.send("a", "Write the report.");
+  await until(() => before.asked.length === 1, "the first work's turn");
+  before.answer("Write the report.", sends("Report done."));
+  await before.looper.settled();
+  await before.looper.send("a", "Book a flight.");
+  await until(() => before.asked.length === 2, "the first work's next turn");
+  before.answer("Book a flight.", handsBack(3));
+  await until(() => before.asked.length === 3, "the other work's turn");
+  before.answer("Book a flight.", call("notes__keep", { text: "Friday" }));
+  await until(() => before.asked.length === 4, "its next request");
+  before.answer("Book a flight.", sends("Booked: Friday 9:40."));
+  await before.looper.settled();
+  // A follow-up the other work takes, as the work last active there.
+  await before.looper.send("a", "Make it a window seat.");
+  await until(() => before.asked.length === 5, "the other work's next turn");
+  before.answer("Make it a window seat.", sends("Window seat it is."));
+  await before.looper.settled();
+  await before.looper.close();
+  const after = looperWith({ values: before.values, conversations: "alone", tools: [tool] });
+  await after.looper.send("a", "And the hotel?");
+  await until(() => after.asked.length === 1, "its request");
+  // Its own, by number, with the call that handed a message back; what the other work said is
+  // read in its order, a message it held with no number, as it isn't the agent's to answer; that
+  // work's call is not read.
+  assert.deepEqual(after.numbered[0], [
+    "[1] Write the report.",
+    "Report done.",
+    "[3] Book a flight.",
+    "call hand_back",
+    "output Handed back.",
+    "Booked: Friday 9:40.",
+    "Make it a window seat.",
+    "Window seat it is.",
+    "[5] And the hotel?",
+  ]);
+  after.answer("And the hotel?", sends("Looking."));
+  await after.looper.settled();
+  assert.ok(after.said.includes("a: assistant: Looking."));
 });
 
 test("alone, work a routing conversation passed a message to, cut off by a restart, goes on once and answers; the conversation's next message is its own loop's", async () => {
