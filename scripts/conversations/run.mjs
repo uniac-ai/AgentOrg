@@ -4,7 +4,7 @@
 // another run. It never runs in CI: a run spends ChatGPT plan usage, and runs only when asked.
 //
 //   node scripts/conversations/run.mjs sign-in --dir DIR
-//   node scripts/conversations/run.mjs run --dir DIR --out FILE [--core | --only 1,4,9]
+//   node scripts/conversations/run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long]
 //                                      [--max-requests N] [--dry] [--open]
 //
 // `--dir` is the runner's own folder: the app's home is DIR/home, the AgentComputer service's data
@@ -18,6 +18,11 @@
 // can be gone over after the computer is removed. `--dry` plays the set against a stand-in model
 // that answers every message in one line, to check the runner itself: it makes no request to
 // OpenAI, and needs no sign-in. It works in a folder of its own, never one a real sign-in is in.
+//
+// `--long` plays one long conversation in place of the set: thirty turns with an Assistant that
+// holds nothing but its base, memory mounted on it through management before the sixteenth, and
+// for each turn what each of its requests sent and how much of that the provider read from its
+// cache, as `long` in the result.
 //
 // `--open` opens the app's page in the person's browser, signed in, once the app is up and before
 // the first conversation, so the person can watch it played; the address carries a one-time code
@@ -49,6 +54,44 @@ import { CHECKS, CORE, FIXTURE, GROUPS } from "./set.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CAP = 150;
 /**
+ * The long conversation's thirty messages, plain talk that needs nothing but the model: memory is
+ * mounted before the sixteenth, which is the first to ask the agent to keep something.
+ */
+const LONG = [
+  "Hi! I'm planning a small vegetable garden this spring.",
+  "It's about four metres by two, in a sunny corner.",
+  "What would you grow first in a space like that?",
+  "Tomatoes sound good. How far apart should they go?",
+  "And what goes well next to tomatoes?",
+  "I've heard marigolds help. Is that true?",
+  "How often should I water in the first weeks?",
+  "Is morning or evening watering better?",
+  "What about mulch: straw or wood chips?",
+  "Should I start seeds indoors or buy seedlings?",
+  "When is it safe to plant out where nights are still cool?",
+  "How do I harden seedlings off?",
+  "What's an easy herb to add?",
+  "Basil it is. Does it need much sun?",
+  "Can I grow lettuce in the shade of the tomatoes later?",
+  "Please remember that my garden gets sun only until about two in the afternoon.",
+  "Given that, which of what we discussed would you move?",
+  "What about peppers in that light?",
+  "Should I worry about slugs, and what's a gentle way to deal with them?",
+  "How do I know when tomatoes are ready to pick?",
+  "Can I save seeds from them for next year?",
+  "What should I do with the bed over winter?",
+  "Is a cover crop worth it for a bed this small?",
+  "Which cover crop would you pick?",
+  "When do I turn it in?",
+  "What do you remember about my garden's light?",
+  "Thanks. Could you sum up the plan in three lines?",
+  "One more: is compost from the shop good enough?",
+  "How much should I add each year?",
+  "Great, that's all for now. Thank you!",
+];
+/** Before which message, counted from 0, memory is mounted. */
+const MOUNT_BEFORE = 15;
+/**
  * The functions of the looper's own, the front desk's and each worker's: how the agent speaks and
  * keeps its work, never a tool it uses, so never counted as one. Named here rather than read from
  * the looper, so runs of builds that offer different ones are counted alike. A run refuses to
@@ -69,6 +112,7 @@ const { values: flags, positionals } = parseArgs({
     out: { type: "string" },
     only: { type: "string" },
     core: { type: "boolean" },
+    long: { type: "boolean" },
     "max-requests": { type: "string" },
     dry: { type: "boolean" },
     open: { type: "boolean" },
@@ -80,7 +124,7 @@ const [command] = positionals;
 const usage = (problem) => {
   if (problem) console.error(problem);
   console.error(
-    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9] [--max-requests N] [--dry] [--open]",
+    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long] [--max-requests N] [--dry] [--open]",
   );
   process.exit(2);
 };
@@ -747,10 +791,12 @@ try {
     if (opened) console.log("Its page is open in the browser, signed in.");
   }
   holding = false;
-  for (const [at, group] of groups.entries()) {
-    if (stoppedWhy) break;
-    run.conversations.push(...(await playGroup(group, at, service)));
-  }
+  if (flags.long) run.long = await playLong();
+  else
+    for (const [at, group] of groups.entries()) {
+      if (stoppedWhy) break;
+      run.conversations.push(...(await playGroup(group, at, service)));
+    }
 } catch (error) {
   exitCode = 1;
   run.error = error instanceof Error ? error.message : String(error);
@@ -810,6 +856,81 @@ async function measuredAgent(name) {
     name,
   });
   return agent;
+}
+
+/**
+ * The long conversation on an Assistant of its own: each turn's requests, each with what it sent
+ * and what of it the provider read from its cache. Memory is mounted through management, as a
+ * person would, partway through.
+ */
+async function playLong() {
+  const { bases } = await person.call("agents", "units");
+  const base = bases.find((one) => one.id === "assistant");
+  const { agent } = await person.call("agents", "create", {
+    stack: { base: { provider: base.provider, creatable: base.id }, units: [] },
+    name: "Runner long",
+  });
+  const turns = [];
+  try {
+    await until(
+      "the long conversation's agent running",
+      async () =>
+        (await person.call("agents", "list")).agents.find((one) => one.agent === agent)?.status
+          ?.state === "running",
+      READY_MS,
+    );
+    const slot = await until(
+      "the long conversation's chat",
+      async () =>
+        (await person.call("bindings", "list", { actor: "person" })).bindings.find(
+          (b) => b.provider === agent && b.export === "chat",
+        )?.slot,
+      60_000,
+    );
+    for (const [at, text] of LONG.entries()) {
+      if (stoppedWhy) break;
+      if (at === MOUNT_BEFORE) {
+        const made = await person.call("agents", "mount", {
+          agent,
+          provider: base.provider,
+          capability: "memory",
+          arguments: {},
+        });
+        if (!made.mounted) throw new Error(`Memory wasn't mounted: ${JSON.stringify(made)}`);
+      }
+      const from = requests.length;
+      await person.call(slot, "send", { text });
+      await until(
+        `turn ${at + 1} to end`,
+        async () =>
+          requests.length > from &&
+          requests.slice(from).every((r) => r.input > 0) &&
+          (await person.call(slot, "state")).state === "idle",
+        TURN_MS,
+      );
+      turns.push({
+        n: at + 1,
+        said: text,
+        memory: at >= MOUNT_BEFORE,
+        requests: requests.slice(from).map(({ input, cached }) => ({
+          input,
+          cached,
+          share: input ? round((100 * cached) / input) : 0,
+        })),
+      });
+      console.log(
+        `turn ${at + 1}${at >= MOUNT_BEFORE ? " (memory)" : ""}: ${turns
+          .at(-1)
+          .requests.map((r) => `${r.cached}/${r.input}`)
+          .join(", ")}`,
+      );
+    }
+    return turns;
+  } finally {
+    await person
+      .call("agents", "remove", { agent })
+      .catch((error) => note(`Removing the long conversation's agent: ${error}`));
+  }
 }
 
 /** One group on an agent of its own: made, played, measured and removed. */

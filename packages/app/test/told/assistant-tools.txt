@@ -1,0 +1,370 @@
+[
+  {
+    "type": "function",
+    "name": "settings__skill",
+    "description": "Read a skill: its SKILL.md, or with path a file in its folder.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The skill's name, as your instructions list it."
+        },
+        "path": {
+          "type": "string",
+          "description": "A file in the skill's folder, relative to it."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__about",
+    "description": "What this computer is, in the words a person looking at it reads: where it is, its folder, what it reaches, how it is isolated and how loaded it is. Takes nothing. Answers JSON text: {\"rows\": [{\"label\": \"Where\", \"value\": \"...\"}]}, with \"path\": true on a value that is a path and \"caution\": true on one to be read as a caution.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__exec_command",
+    "description": "Runs a command in a shell. Answers when it ends, or after yield_time_ms with a session_id while it keeps running; use write_stdin to check on it or type into it. Every answer gives exit_code, seconds, session_id and text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "cmd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The command, run by a login shell."
+        },
+        "workdir": {
+          "description": "Where to run it; the workspace by default.",
+          "type": "string"
+        },
+        "yield_time_ms": {
+          "description": "How long to wait: 250 to 30000, by default 10000.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_output_tokens": {
+          "description": "About how much output to return.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "cmd"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__write_stdin",
+    "description": "Types into a running command and returns what it wrote since. With no chars, waits and returns what it has written. A Ctrl-C character (\\u0003) interrupts it; Ctrl-D (\\u0004) ends its input. It also reaches a shell a person opened, by its id from list_sessions: there these are keys, what you type joins anything already typed, and Ctrl-D at its prompt closes it. Once an answer has given a session's exit code, that session is refused.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "From exec_command's answer, or list_sessions."
+        },
+        "chars": {
+          "description": "What to type; include \\n to press Enter.",
+          "type": "string"
+        },
+        "yield_time_ms": {
+          "description": "How long to wait: with chars 250 to 30000, by default 250; with none 5000 to 30000.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_output_tokens": {
+          "description": "About how much output to return.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__list_sessions",
+    "description": "Lists the sessions here, running or lately ended: each command exec_command started, and each shell a person opened. Gives each one's session_id for write_stdin, who started it, since when, its exit code and the start of its command.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__read",
+    "description": "Reads a text file as numbered lines, or shows a PNG, JPEG, GIF or WebP of up to 3 MiB as an image; offset and limit are for text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative to the workspace, or absolute, anywhere on the machine; ~ is the home folder."
+        },
+        "offset": {
+          "description": "The first line, from 1.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limit": {
+          "description": "How many lines; 2000 by default.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__list",
+    "description": "Lists a folder: folders end in /, and files give their size in bytes.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the workspace, or absolute, anywhere on the machine; ~ is the home folder. The workspace by default.",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__search",
+    "description": "Searches text files under a folder, as path:line:text, the path from the workspace, or whole for a file outside it. Skips what .gitignore ignores, .git and node_modules.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact text, or a regular expression with regex."
+        },
+        "path": {
+          "description": "A folder or file. Relative to the workspace, or absolute, anywhere on the machine; ~ is the home folder. The workspace by default.",
+          "type": "string"
+        },
+        "regex": {
+          "type": "boolean"
+        },
+        "ignore_case": {
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Most matches; 200 by default.",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "computer__edit",
+    "description": "Replaces exact text in a file and answers with a unified diff. old_text must appear exactly once unless replace_all. An empty old_text creates a new file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative to the workspace, or absolute, anywhere on the machine; ~ is the home folder."
+        },
+        "old_text": {
+          "type": "string",
+          "description": "The exact text to replace, whitespace included."
+        },
+        "new_text": {
+          "type": "string",
+          "description": "What to put in its place."
+        },
+        "replace_all": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "old_text",
+        "new_text"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "send",
+    "description": "Says something to whoever said a message, in reply to it, in the conversation it was said in: the only way anything reaches them. It answers that message. You may send more than once, and go on working after.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "number",
+          "description": "The number the message starts with."
+        },
+        "text": {
+          "type": "string",
+          "description": "What to say, as they will read it."
+        },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "detail": {
+                    "type": "string",
+                    "description": "A line under it, under 120 characters."
+                  }
+                },
+                "required": [
+                  "label"
+                ]
+              }
+            ]
+          },
+          "description": "Only when your last message of a turn leaves them a decision: one to four short choices, each under 48 characters, shown as a card they answer with a tap. Their pick comes back as their next message. The card is the offer, so don't also write \"want me to…?\"."
+        },
+        "confirm": {
+          "type": "boolean",
+          "description": "They pick, then confirm: for what can't be undone."
+        },
+        "many": {
+          "type": "boolean",
+          "description": "They may pick several."
+        }
+      },
+      "required": [
+        "message",
+        "text"
+      ]
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "status",
+    "description": "Keeps this work's steps, a short checklist. Set the list with `steps`, then move through it with `advance`, or with `done` and `start` by number. It answers with the list as it now stands. The steps are kept when the conversation is shortened; the person doesn't see them, so progress they should know of still goes in a message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "description": "The whole list, in place of any before: at most eight, at most one in progress.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "What the step is, like \"Compare prices\"."
+              },
+              "active": {
+                "type": "string",
+                "description": "Its words while in progress, like \"Comparing prices\"."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ],
+                "description": "Pending unless given."
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        },
+        "advance": {
+          "type": "boolean",
+          "description": "Completes the step in progress and starts the next pending one."
+        },
+        "done": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Steps to mark completed, by number from 1."
+        },
+        "start": {
+          "type": "number",
+          "description": "The step to start, by number, after any `done`."
+        }
+      }
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "no_reply_needed",
+    "description": "Says a message needs no reply: it is closed with nothing said to anyone. For a message that asks for nothing, such as thanks or an acknowledgement. Give a reaction with it, so they see it was read.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "number",
+          "description": "The number the message starts with."
+        },
+        "reaction": {
+          "type": "string",
+          "description": "One emoji, such as 👍 to a thanks: it shows on their message and notifies no one."
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "strict": false
+  }
+]
