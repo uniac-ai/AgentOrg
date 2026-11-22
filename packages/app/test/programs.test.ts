@@ -87,6 +87,11 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
 /** This machine's screen and the person's own browser are never a test's: off, whatever is ready. */
 const NEITHER = { screen: "off", ownBrowser: "none" };
 const refused = (code: string) => (error: unknown) => (error as { code?: string }).code === code;
+/** What a request was told: its developer message first in the input, or its top-level instructions. */
+const toldOf = (body: { instructions?: string; input?: unknown[] }) => {
+  const first = body.input?.[0] as { role?: string; content?: unknown } | undefined;
+  return first?.role === "developer" ? String(first.content) : (body.instructions ?? "");
+};
 /** The browser Playwright installed for the tests. */
 function headlessShell(): string {
   const root =
@@ -362,7 +367,7 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
       fake.script({ events: [completed([])] });
       return fake.handle(request);
     }
-    worker.push({ instructions: body.instructions, tools });
+    worker.push({ instructions: toldOf(body), tools });
     fake.script({ events: [completed((answers.shift() ?? []) as never)] });
     return fake.handle(request);
   });
@@ -472,8 +477,8 @@ test("a turn cut off as the app stops goes on when it is started again, with the
   let held = false;
   const s = await open(t, undefined, async (request) => {
     if (!request.url.endsWith("/responses")) return fake.handle(request);
-    const body = (await request.clone().json()) as { instructions: string; input: unknown[] };
-    asked.push({ instructions: body.instructions, said: body.input.at(-1) });
+    const body = (await request.clone().json()) as { instructions?: string; input: unknown[] };
+    asked.push({ instructions: toldOf(body), said: body.input.at(-1) });
     return held ? new Promise<Response>(() => {}) : fake.handle(request);
   });
   let { person } = await s.start();
@@ -1218,8 +1223,8 @@ test("an agent made from the Assistant template is told the saved words, by its 
     { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp", agentsFolder: join(root, "Agents") },
     async (request) => {
       if (!request.url.endsWith("/responses")) return fake.handle(request);
-      const body = (await request.clone().json()) as { instructions: string };
-      told.push(body.instructions);
+      const body = (await request.clone().json()) as { instructions?: string; input?: unknown[] };
+      told.push(toldOf(body));
       const sent = { type: "function_call", call_id: "s1", name: "send" };
       fake.script({
         events: [

@@ -254,6 +254,17 @@ const partsOf = (text: string, images: z.output<typeof Pictures> | undefined) =>
       ]
     : text;
 
+/**
+ * The instructions a request is told, as the first item of its input: a developer message, which
+ * OpenAI keeps in the cached part of a request ("Prompt caching" and "Using GPT-6.2", read
+ * 2026-11-21).
+ */
+const developerOf = (instructions: string) => ({
+  type: "message",
+  role: "developer",
+  content: instructions,
+});
+
 const toApi = (item: z.output<typeof Item>) => {
   switch (item.type) {
     case "message":
@@ -592,8 +603,12 @@ export function createSession(options: {
     if (signal.aborted) throw cancelled();
     const body = JSON.stringify({
       model,
-      instructions: input.instructions,
-      input: items,
+      // The caller's instructions go as a developer message first in the input, where the prompt
+      // cache reads them: from GPT-6.2 on, top-level `instructions` are placed after the input
+      // and never read from the cache. A request with none is sent as it always was.
+      ...(input.instructions
+        ? { input: [developerOf(input.instructions), ...items] }
+        : { instructions: input.instructions, input: items }),
       // Nothing is stored at OpenAI, so reasoning comes back sealed, to be sent with its calls.
       include: ["reasoning.encrypted_content"],
       ...(input.tools?.length
