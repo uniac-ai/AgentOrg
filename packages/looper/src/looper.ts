@@ -38,10 +38,14 @@
  * that ends, fails or is stopped leaves no mark; a thread the main loop answered, couldn't place,
  * or was stopped over, waits for its next message, and the main loop is put what it holds.
  *
- * With `conversations`, a thread's own work is its conversation's loop (see conversation.ts), in
- * place of the main loop and of intake in code: every message said there is given to it, also
- * while work runs there, and it passes a message on, starts work with it, or stops work, with
- * `route`. What every piece of work it was given to hands back is that loop's again.
+ * With `conversations`, a thread's own work is its conversation's loop, in place of the main loop
+ * and of intake in code: every message said there is given to it, also while work runs there.
+ * With `"routes"` (see conversation.ts), it passes a message on, starts work with it, or stops
+ * work, with `route`, and what every piece of work it was given to hands back is that loop's
+ * again. With `"alone"`, it is the agent alone: asked as a worker is, it does the work itself and
+ * passes nothing on. A message said while one of its calls is in flight is heard apart: one that
+ * asks to stop ends what that response called, and the agent reads and answers it at its next
+ * request.
  */
 
 import { z } from "zod";
@@ -53,7 +57,7 @@ import {
   hostedParts,
 } from "./conversation.js";
 import { createLoop, type Place } from "./loop.js";
-import { createMain, type Listed, listing, stopWord, TOLD, titled } from "./main.js";
+import { createMain, HEARD_ALONE, type Listed, listing, stopWord, TOLD, titled } from "./main.js";
 import { createRecord, createThread, messageOf, READS, type Thread, userEntry } from "./record.js";
 import { MOST_STEPS, Step } from "./steps.js";
 import type { Part } from "./told.js";
@@ -218,9 +222,9 @@ export function createLooper(options: {
    * `frontDesk` are functions the main loop is offered beside its own when it decides on a
    * message, not when it hears of one that joined a turn: each it calls runs once the reply is in,
    * before the decision is acted on, with the request's id as its group, and what it gives goes to
-   * no model. None by default. With `conversations`, a conversation's own loop is told `voice` and
-   * `blocks` as the main loop is, and offered `frontDesk`, whose results it reads back; workers
-   * are told and offered as before.
+   * no model. None by default. With `conversations: "routes"`, a conversation's own loop is told
+   * `voice` and `blocks` as the main loop is, and offered `frontDesk`, whose results it reads back;
+   * workers are told and offered as before. Alone, it is told and offered what a worker is.
    */
   request(): Promise<{
     instructions: string | readonly Part[];
@@ -252,9 +256,16 @@ export function createLooper(options: {
   /**
    * Whether each thread has a loop of its own, which every message said there reaches first (see
    * conversation.ts), in place of the main loop and of a message given to work in code. It is the
-   * thread's own work, whose id is the thread's name; work it starts has an id of its own.
+   * thread's own work, whose id is the thread's name. `"alone"`: it is the agent alone, which does
+   * the work itself. It is told and offered what a worker is, but for being a piece of work and
+   * handing a message back, takes a place as work does, and passes nothing on. Its turn ends
+   * only with a response that calls nothing, not with one that only sends. A message said
+   * while one of its calls is in flight is heard apart: if it asks to stop, what that response
+   * called is ended, and the turn goes on to read it and answer. Work there was before goes on
+   * with what it held, and is given nothing new. `"routes"`: it answers what needs no work, and
+   * passes the rest on to work, which has an id of its own; it takes no place.
    */
-  conversations?: boolean;
+  conversations?: "alone" | "routes";
   log: Log;
 }) {
   /** A message said in `thread`, as a worker or the main loop is told it: who it is from. */
@@ -268,7 +279,7 @@ export function createLooper(options: {
    * which began in the thread of its name. Work it passes messages to began elsewhere.
    */
   const isConversation = (id: string) =>
-    options.conversations === true && (kept.get(id)?.follows[0] ?? id) === id;
+    options.conversations !== undefined && (kept.get(id)?.follows[0] ?? id) === id;
   /** The place a conversation's turn takes: none of those that turns of work share. */
   const FREE: Place = { entered: Promise.resolve(), leave() {} };
   type Work = ReturnType<typeof open>;
@@ -484,6 +495,8 @@ export function createLooper(options: {
 
   const open = (id: string) => {
     const talk = isConversation(id);
+    /** Whether it is a conversation's loop that routes: alone, it is the agent doing the work. */
+    const routes = talk && options.conversations === "routes";
     const record = createRecord({
       id,
       // A conversation's own loop follows its own thread alone, whatever its work followed before.
@@ -492,6 +505,8 @@ export function createLooper(options: {
       waits: (thread) => !hasOwn(thread),
       left: (thread) => kept.get(id)?.left?.includes(thread) === true,
       told,
+      // Alone, it reads what other work said in its conversation too.
+      whole: talk && !routes,
     });
     const key = UNFINISHED + encodeURIComponent(id);
     const held = {
@@ -522,11 +537,12 @@ export function createLooper(options: {
           );
       },
       loop: createLoop({
-        request: talk ? conversationRequest : options.request,
+        // Alone, it is asked as a worker is, and takes a place as work does.
+        request: routes ? conversationRequest : options.request,
         model: options.model,
-        enter: talk ? () => FREE : enter,
+        enter: routes ? () => FREE : enter,
         record,
-        ...(talk
+        ...(routes
           ? {
               conversation: {
                 first: CONVERSATION_INSTRUCTIONS,
@@ -536,7 +552,9 @@ export function createLooper(options: {
                 stop: (work: string) => stopping(id, work),
               },
             }
-          : {}),
+          : talk
+            ? { alone: true }
+            : {}),
         title: () => titleOf(id),
         others: () => othersOf(id),
         back: (handed) => returned(id, handed),
@@ -1263,13 +1281,31 @@ export function createLooper(options: {
    * turn has ended. A message a work takes with a thread, said before it followed that thread,
    * is not told of, nor is one with no words, which can ask nothing. It is not kept: one cut off
    * by a stop, a close or a restart is not heard, and the workers have the message all the same.
+   * A conversation's loop that routes hears every message itself, and isn't heard of. Alone, it is
+   * heard of with `HEARD_ALONE`, and only while one of its calls is in flight, which a stop then
+   * ends: it reads the message at its next request, and answers it itself.
    */
   const hear = (thread: string, joined: { work: string; turn: number }[], text: string) => {
-    // A conversation's own loop hears every message itself.
-    if (options.conversations) return;
+    if (options.conversations === "routes") return;
+    const alone = options.conversations === "alone";
     if (stopped || closed || joined.length === 0 || !/\S/.test(text)) return;
+    // Alone, the response whose call is in flight, which a stop may end: with none, the agent reads
+    // the message at its next request.
+    const inFlight = alone
+      ? joined.flatMap(({ work }) => {
+          const at = of(work).loop.inFlight();
+          return at ? [{ work, at }] : [];
+        })
+      : [];
+    if (alone && inFlight.length === 0) return;
     const at = cuts;
     const cut = () => at !== cuts;
+    /** Alone, whether one of those responses still has a call in flight: else nothing is heard. */
+    const running = () =>
+      inFlight.some(({ work, at }) => {
+        const now = of(work).loop.inFlight();
+        return now?.turn === at.turn && now.asked === at.asked;
+      });
     const still = () => joined.filter(({ work, turn }) => of(work).loop.turn() === turn);
     decided = decided
       .then(async () => {
@@ -1281,10 +1317,17 @@ export function createLooper(options: {
           title: titles.get(work) ?? "",
           turn,
         }));
-        if (cut() || heardOf.length === 0) return;
-        const heard = await main.hear(told(thread, text), heardOf);
+        if (cut() || heardOf.length === 0 || (alone && !running())) return;
+        const heard = await main.hear(told(thread, text), heardOf, alone ? HEARD_ALONE : undefined);
         if (!heard || cut()) return;
         const { say, stop } = heard;
+        // Alone, what that response called ends, unless the agent was asked again since, and
+        // nothing is said: the agent reads the message and answers it.
+        if (alone) {
+          for (const { work, at } of inFlight)
+            if (stop?.work === work && stop.turn === at.turn) of(work).loop.interrupt(at);
+          return;
+        }
         // A line the store refuses is the thread's to be told of: the turn is cut all the same.
         await (stop
           ? of(stop.work).loop.cancel(stop.turn, { text: say, thread })

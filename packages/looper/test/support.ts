@@ -47,8 +47,11 @@ export function looperWith(
     voice?: string;
     /** What the main loop answers when put `text`: by default, new work. */
     routing?: (text: string) => OutputItem[] | Promise<OutputItem[]> | undefined;
-    /** Whether each thread has a loop of its own, which every message reaches first. */
-    conversations?: boolean;
+    /**
+     * Whether each thread has a loop of its own, which every message reaches first: the agent
+     * alone, asked as a worker is, or one that routes.
+     */
+    conversations?: "alone" | "routes";
     /**
      * What a conversation's own loop answers, given the last thing said to it and its request
      * whole: by default, it passes its newest message on to new work. A call naming
@@ -577,12 +580,15 @@ export async function idle() {
   for (let i = 0; i < 50; i++) await new Promise((soon) => setImmediate(soon));
 }
 
-/** A tool that runs until the test lets it end. `groups` is the group of each call, in order. */
-export function held() {
+/**
+ * A tool, `hold` unless named otherwise, that runs until the test lets it end. `groups` is the
+ * group of each call, in order.
+ */
+export function held(name = "hold") {
   const { shut, open: finish } = gate();
   const groups: string[] = [];
   const tool: Tool = {
-    name: "hold",
+    name,
     parameters: {},
     run: async (_input, group) => {
       groups.push(group);
@@ -590,15 +596,13 @@ export function held() {
       return { output: "held", ok: true };
     },
   };
-  const called: OutputItem[] = [
-    { type: "function_call", callId: "c1", name: "hold", arguments: "{}" },
-  ];
+  const called: OutputItem[] = [{ type: "function_call", callId: "c1", name, arguments: "{}" }];
   /** A model's answer that calls it `count` times. */
   const calls = (count: number): OutputItem[] =>
     Array.from({ length: count }, () => ({
       type: "function_call",
       callId: `c-${crypto.randomUUID()}`,
-      name: "hold",
+      name,
       arguments: "{}",
     }));
   return { tool, called, calls, groups, finish };

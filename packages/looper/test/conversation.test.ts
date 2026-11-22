@@ -39,7 +39,7 @@ const worksIn = (values: Map<string, unknown>) =>
 
 test("a message goes to its conversation's own loop, told the front desk's words in a loop's terms and offered send, no_reply_needed and route; what it sends is the reply", async () => {
   const { looper, said, asked, talks, mains } = looperWith({
-    conversations: true,
+    conversations: "routes",
     voice: "You are Scout.",
     talking: () => sends("Hello. What can I do?"),
   });
@@ -62,7 +62,7 @@ test("a message goes to its conversation's own loop, told the front desk's words
 
 test("a message passed on to new work starts it under its title, and its worker answers; the conversation's loop asks nothing more", async () => {
   const { looper, values, said, asked, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () => passes("The report"),
   });
   await looper.send("a", "Write the report.");
@@ -78,7 +78,7 @@ test("a message passed on to new work starts it under its title, and its worker 
 
 test("a receipt given with new work is said first and answers nothing: the work takes the message, shows it taken, and answers it", async () => {
   const { looper, said, asked, talks, progress, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () => passes("The report", undefined, undefined, "On it."),
   });
   await looper.send("a", "Write the report.");
@@ -100,7 +100,7 @@ test("a receipt given with new work is said first and answers nothing: the work 
 test("a message said while work runs in the conversation goes to its own loop, told that work is in a turn; passed on to it, that turn takes it", async () => {
   let work = "";
   const { looper, values, asked, inputs, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: (text) => (text === "Write the report." ? passes("The report") : passes("", work)),
   });
   await looper.send("a", "Write the report.");
@@ -121,7 +121,7 @@ test("a message said while work runs in the conversation goes to its own loop, t
 test("a stop is the conversation's: route with stop cuts that work's turn, and its loop reads what came of it before it answers", async () => {
   let work = "";
   const { looper, values, said, asked, talks } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: (text, { input }) =>
       text === "Write the report."
         ? passes("The report")
@@ -143,7 +143,7 @@ test("a stop is the conversation's: route with stop cuts that work's turn, and i
 
 test("a message the work hands back comes back to the conversation's loop, after a line saying which work did and why", async () => {
   const { looper, values, said, asked, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: (text) =>
       talks.length <= 1 && text === "Write the report."
         ? passes("The report")
@@ -165,7 +165,7 @@ test("a message the work hands back comes back to the conversation's loop, after
 
 test("a message that asks for nothing is closed by the conversation's loop with no reply, with its reaction", async () => {
   const { looper, said, progress, reactions } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () => closes("👍"),
   });
   await looper.send("a", "Thanks!");
@@ -178,7 +178,7 @@ test("a message that asks for nothing is closed by the conversation's loop with 
 
 test("a conversation's loop takes none of the places turns of work share: with all held, it still answers", async () => {
   const { looper, said, asked, fill } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: (text) => (text === "Hi." ? sends("Hello.") : passes(text)),
   });
   await fill(["w", "x", "y", "z", "v"].slice(0, PLACES));
@@ -191,7 +191,7 @@ test("a conversation's loop takes none of the places turns of work share: with a
 test("a host's function the conversation's loop calls runs, and what it gives is read back before it answers", async () => {
   const { tool, kept } = keeping();
   const { looper, said, talks } = looperWith({
-    conversations: true,
+    conversations: "routes",
     frontDesk: [tool],
     talking: () =>
       talks.length === 1
@@ -223,7 +223,7 @@ test("a host's function the conversation's loop calls runs, and what it gives is
 
 test("a route naming no message of its own, or work there isn't, is refused, and the loop is told why", async () => {
   const { looper, said, talks } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () =>
       talks.length === 1
         ? [...passes("", "nobody"), ...passes("The report", undefined, 9)]
@@ -240,7 +240,7 @@ test("a route naming no message of its own, or work there isn't, is refused, and
 test("a conversation's own loop is listed among the work there is as this conversation, from its first turn, with its calls", async () => {
   const answering = gate();
   const { looper, asked, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () => answering.shut.then(() => passes("Work")),
   });
   await looper.send("a", "Write the report.");
@@ -275,7 +275,7 @@ test("what a looper without conversations kept is read by the conversation's loo
   // After: the same store, with conversations.
   const after = looperWith({
     values: before.values,
-    conversations: true,
+    conversations: "routes",
     talking: () => sends("It said the report is done."),
   });
   await after.looper.send("a", "What did it say?");
@@ -314,7 +314,7 @@ test("a message a looper without conversations left waiting for its main loop is
   // After: the same store, with conversations, goes on with what waited.
   const after = looperWith({
     values: before.values,
-    conversations: true,
+    conversations: "routes",
     talking: () => sends("Hello."),
   });
   await after.looper.resume();
@@ -327,7 +327,7 @@ test("a message a looper without conversations left waiting for its main loop is
 
 test("a function a conversation's loop isn't offered is refused: it hands nothing back and keeps no steps", async () => {
   const { looper, said, talks } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () =>
       talks.length === 1
         ? [
@@ -352,7 +352,7 @@ test("a function a conversation's loop isn't offered is refused: it hands nothin
 test("passing a message to work that handed it back is refused, and nothing changes for it", async () => {
   let work = "";
   const { looper, values, said, asked, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () =>
       talks.length === 1
         ? passes("The report")
@@ -376,7 +376,7 @@ test("passing a message to work that handed it back is refused, and nothing chan
 test("two messages passed on in one response are each taken by their work", async () => {
   const answering = gate();
   const { looper, asked, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () =>
       talks.length === 1
         ? answering.shut.then(() => [
@@ -399,7 +399,7 @@ test("two messages passed on in one response are each taken by their work", asyn
 
 test("a conversation's loop is told which work is another conversation's", async () => {
   const { looper, asked, talks, answer } = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: (text) => (text === "Write the report." ? passes("The report") : sends("Hello.")),
   });
   await looper.send("a", "Write the report.");
@@ -418,7 +418,7 @@ test("a conversation's turn cut off by its looper closing goes on, once, when th
   // Before: its request never answers, and the looper closes under it.
   const answering = gate();
   const before = looperWith({
-    conversations: true,
+    conversations: "routes",
     talking: () => answering.shut.then(() => sends("Late.")),
   });
   await before.looper.send("a", "Hi.");
@@ -429,7 +429,7 @@ test("a conversation's turn cut off by its looper closing goes on, once, when th
   // After: the same store goes on with it, and it answers.
   const after = looperWith({
     values: before.values,
-    conversations: true,
+    conversations: "routes",
     talking: () => sends("Hello."),
   });
   await after.looper.resume();

@@ -283,7 +283,7 @@ export function createChats(options: {
       },
       files: filesOf,
       // Each conversation has the agent's own loop, which every message there reaches first.
-      conversations: true,
+      conversations: "routes",
       log,
     }),
   );

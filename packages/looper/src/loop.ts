@@ -58,7 +58,18 @@ import {
   type Tool,
   type ToolSpec,
 } from "./types.js";
-import { BUBBLES, CHECK, CORE, JUDGMENT, MESSAGES, PLAIN, SEEN, TRUST, TURN } from "./words.js";
+import {
+  BUBBLES,
+  CHECK,
+  CORE,
+  JUDGMENT,
+  MESSAGES,
+  PLAIN,
+  SEEN,
+  TRUST,
+  TURN,
+  TURN_ALONE,
+} from "./words.js";
 
 /** What a message's thread is told when its work's turn ended without a reply to it. */
 const NOT_ANSWERED = { code: "not_answered", message: "Not answered" };
@@ -318,17 +329,45 @@ export const ROUTE_ON: ToolSpec = {
 const OWN = [SEND, HAND_BACK, STATUS, NO_REPLY];
 /** A conversation's own loop's functions, beside its host's. */
 const TALK = [SEND, NO_REPLY, ROUTE_ON];
+/** The agent's own functions when it is alone in a conversation: a worker's, but for handing back. */
+const ALONE_OWN = OWN.filter((one) => one !== HAND_BACK);
 /** Their names: a request carries these beside the tools its host gives. */
 export const OWN_FUNCTIONS: readonly string[] = OWN.map(({ name }) => name);
+/** The frame with these words on how a turn goes: the rest is the same for whoever is told it. */
+const frameWith = (turn: string) =>
+  [JUDGMENT, SEEN, turn, CORE, MESSAGES, PLAIN, BUBBLES, TRUST, CHECK].join("\n\n");
 /**
  * What a worker is told first, before what its host tells it: how it works and speaks, whatever
  * the work and whoever the agent is.
  */
-export const FRAME = [JUDGMENT, SEEN, TURN, CORE, MESSAGES, PLAIN, BUBBLES, TRUST, CHECK].join(
-  "\n\n",
-);
+export const FRAME = frameWith(TURN);
+/**
+ * What the agent alone in a conversation is told first: a worker's frame, with no front desk
+ * having spoken before it.
+ */
+export const FRAME_ALONE = frameWith(TURN_ALONE);
 /** What stands for what no longer fits a request, as every loop is told it. */
 export const LEFT_OUT = `A message that begins "(Left out:" or "${SUMMARY_BEGINS}" is not from the person and needs no answer. It stands for earlier messages, and what was done for them, that no longer fit: all of it was said and done, so do not do it again. A call whose arguments or output say they were left out did run.`;
+/** The lines on answering that a worker and the agent alone are both told, word for word. */
+const NUMBERED =
+  "Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them.";
+const ONLY_SENT =
+  "only what you send reaches whoever said it. What you write without sending is not a reply: it shows only in your Activity, if they open it.";
+/** A worker's only: the agent alone's turn ends only with a response that calls nothing. */
+const ENDS =
+  "A response that calls only `send` and leaves no message unanswered ends your turn: to keep working after a progress line, make your next call in the same response.";
+const QUIET =
+  "A message that asks for nothing, like thanks or an acknowledgement, needs no reply: call `no_reply_needed` with its number instead of sending.";
+const DONE = "When you have nothing more to do, end without calling anything.";
+/**
+ * What the agent alone in a conversation is told after its host's words: how it answers there, as
+ * a worker is told but for being one piece of work and handing a message back.
+ */
+export const ALONE = `${NUMBERED} Answer each one by calling \`send\` with its number: ${ONLY_SENT} You may send while you work, and more than once. ${QUIET} A message you neither answer nor close with \`no_reply_needed\` is shown as not answered when you are done. ${DONE}
+
+Asked what you can do, answer in two sentences. A message you could read more than one way, with nothing said before it here to settle which, gets one short question back before any work.
+
+${LEFT_OUT}`;
 /**
  * What a worker is told after what its host tells it: which work this is, how to answer, and how
  * to hand a message back.
@@ -338,11 +377,11 @@ export const workInstructions = (
   others: string[] = [],
 ) => `This is one piece of work: ${title}. Other pieces of work may be going on beside it, each with a worker of its own, and a message may reach several of them at once.
 
-Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them. Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: only what you send reaches whoever said it. What you write without sending is not a reply: it shows only in your Activity, if they open it. You may send while the work goes on, and more than once. A response that calls only \`send\` and leaves no message unanswered ends your turn: to keep working after a progress line, make your next call in the same response. If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
+${NUMBERED} Decide each one once. If it asks for something that belongs to this work, do it and answer it by calling \`send\` with its number: ${ONLY_SENT} You may send while the work goes on, and more than once. ${ENDS} If it asks for something that does not belong to this work, call \`hand_back\` with its number and one sentence why, and send nothing about it: it is then given to other work, or starts new work.${
   others.length > 0
     ? ` The other work in its conversations, in the order it began: ${others.map((one) => JSON.stringify(one)).join(", ")}. A message about what one of them did or decided is not this work's, though it says "you": call \`hand_back\` for it, naming the one it is about, rather than answering that this work didn't do it.`
     : ""
-} A message that asks for nothing, like thanks or an acknowledgement, needs no reply: call \`no_reply_needed\` with its number instead of sending. A message you neither answer nor hand back is shown as not answered when you are done. When you have nothing more to do, end without calling anything.
+} ${QUIET} A message you neither answer nor hand back is shown as not answered when you are done. ${DONE}
 
 ${LEFT_OUT} Message [1] is what this work was asked.`;
 
@@ -439,6 +478,13 @@ interface Turn {
   took: Set<string>;
   /** The word its calls are made under, which a stop of it names. */
   group: string;
+  /** How many requests it has made of the model: the calls it runs are of the latest's response. */
+  asked: number;
+  /**
+   * Set to `asked` when what that response called was ended before the model read what was said:
+   * its calls not yet run don't start.
+   */
+  interrupted?: number;
   /** Its calls whose pictures are kept, oldest first, each with what its pictures carry. */
   pictured: { id: string; size: number }[];
   /** Set once summarizing its work's earlier steps failed: it cuts them for the rest of it. */
@@ -519,6 +565,13 @@ export function createLoop(options: {
     }): Promise<string>;
     stop(work: string): Promise<string>;
   };
+  /**
+   * The agent alone in a conversation, in place of a piece of work: told `FRAME_ALONE` before its
+   * host's words and `ALONE` after them, and offered a worker's own functions but `hand_back`.
+   * Every turn of it counts as one at something of its own, as a conversation's does, and ends
+   * only with a response that calls nothing.
+   */
+  alone?: boolean;
   /** The work's steps, as `status` last kept them. */
   steps(): readonly Step[];
   /** Keep the work's steps: it rejects when they can't be kept, and they are as they were. */
@@ -890,6 +943,7 @@ export function createLoop(options: {
   ) => {
     const requestId = crypto.randomUUID();
     current.requestId = requestId;
+    current.asked++;
     try {
       return (await model.respond({ requestId, ...request })).output;
     } finally {
@@ -964,11 +1018,15 @@ export function createLoop(options: {
     // worker that didn't know of that work could answer a message that is its.
     const { instructions, tools: theirs, model: chosen } = await options.request();
     const talk = options.conversation;
-    const tools = [...theirs, talk ? routeOn : handBack];
+    const alone = options.alone === true;
+    const tools = [...theirs, ...(talk ? [routeOn] : alone ? [] : [handBack])];
     const parts = partsOf(instructions);
     const title = await options.title();
-    const specs = [...theirs.map(({ run: _, ...tool }) => tool), ...(talk ? TALK : OWN)];
-    if (talk) current.acted = true;
+    const specs = [
+      ...theirs.map(({ run: _, ...tool }) => tool),
+      ...(talk ? TALK : alone ? ALONE_OWN : OWN),
+    ];
+    if (talk || alone) current.acted = true;
     // A change of tools since the turn before is said once, where its model reads it before its
     // first request, and kept as a line in its Activity.
     const names = theirs.map(({ name }) => name);
@@ -988,11 +1046,11 @@ export function createLoop(options: {
     let reported = false;
     for (;;) {
       const told = build([
-        { owner: "looper", text: talk ? talk.first : FRAME },
+        { owner: "looper", text: talk ? talk.first : alone ? FRAME_ALONE : FRAME },
         ...parts,
         {
           owner: "looper",
-          text: talk ? talk.after : workInstructions(title, await options.others()),
+          text: talk ? talk.after : alone ? ALONE : workInstructions(title, await options.others()),
         },
       ]);
       if (!reported)
@@ -1116,6 +1174,11 @@ export function createLoop(options: {
           await skipped(called.slice(i), "cancelled", thread);
           break;
         }
+        // Ended while the model hadn't read what was said: what it called after doesn't start.
+        if (current.interrupted === current.asked) {
+          await skipped(called.slice(i), "stopped", thread);
+          break;
+        }
         const id = crypto.randomUUID();
         // Sending is the looper's own: what was sent is kept as said, with its call. One that
         // can't be sent is kept for the model, and shown to nobody.
@@ -1212,8 +1275,16 @@ export function createLoop(options: {
         return;
       // So does one that only sent, each reply sent, or closed messages with no reply, perhaps
       // with its steps, once nothing it took is left unanswered: the next request would read only
-      // what it sent. A message said meanwhile is answered first.
-      if (sentAll && sentAny && !(await record.unanswered(current.from ?? 0)) && (await ends()))
+      // what it sent. A message said meanwhile is answered first. Not for the agent alone, whose
+      // turn ends only with a response that calls nothing: its first reply is often a line on what
+      // it is about to do.
+      if (
+        !options.alone &&
+        sentAll &&
+        sentAny &&
+        !(await record.unanswered(current.from ?? 0)) &&
+        (await ends())
+      )
         return;
       status(current, { state: "thinking" });
     }
@@ -1276,6 +1347,7 @@ export function createLoop(options: {
       closed,
       took: new Set(),
       group: crypto.randomUUID(),
+      asked: 0,
       pictured: [],
     };
     if (!cancelled) turn = current;
@@ -1441,6 +1513,23 @@ export function createLoop(options: {
     stopped: () => stoppedLast,
     /** The number of the turn running or waiting for its place, if one is. */
     turn: () => turn?.id,
+    /**
+     * While one of its calls is in flight: the turn, and the request whose response it is of, for
+     * `interrupt`.
+     */
+    inFlight: () => (turn && calling ? { turn: turn.id, asked: turn.asked } : undefined),
+    /**
+     * End what the response `at` names called, if the turn has asked the model nothing since: what
+     * its calls started and left running is asked to end, as a stop asks, and the calls after them
+     * don't start. The turn goes on, and its next request reads what each call gave and what was
+     * said meanwhile.
+     */
+    interrupt(at: { turn: number; asked: number }) {
+      const current = turn;
+      if (current?.id !== at.turn || current.asked !== at.asked) return;
+      current.interrupted = at.asked;
+      void options.stopGroup?.(current.group).catch(() => {});
+    },
     /**
      * Stop the turn now, or with `only`, the turn of that number if it is still the one: its
      * model request is cancelled and no further call starts. A call already running finishes,

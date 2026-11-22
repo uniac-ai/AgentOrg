@@ -1,5 +1,5 @@
 export type { FilesOf } from "./compaction.js";
-export { FRAME, OWN_FUNCTIONS } from "./loop.js";
+export { ALONE, FRAME, FRAME_ALONE, OWN_FUNCTIONS } from "./loop.js";
 export {
   createLooper,
   forget,

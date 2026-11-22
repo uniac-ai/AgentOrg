@@ -47,6 +47,13 @@ export const VOICE =
 export const HEARD_INSTRUCTIONS = `You are the front desk. You are given the pieces of work that are in a turn, each by its id and title, and then a message that was just said in a conversation those pieces of work follow. Their workers have the message and will read it: you don't answer it, and you give it to nobody.
 
 Act only if the message asks to stop work. If exactly one of those pieces of work fits, call \`route\` with only \`stop\`, set to its id, and say in a few words that you stopped it. If it asks to stop and more than one fits, call nothing and say which are in a turn, so whoever said it can say which: that is said to them. Otherwise call nothing and write nothing.`;
+/**
+ * What it is told of a message said while the agent, alone in a conversation, is running a call
+ * there: the agent reads and answers the message itself; it may only end what is running.
+ */
+export const HEARD_ALONE = `You are given the agent's work in a conversation, by its id, and then a message that was just said there while the agent is running something. The agent has the message and will read and answer it once that is done: you don't answer it.
+
+Act only if the message asks the agent to stop what it is doing. Then call \`route\` with only \`stop\`, set to that id: what it is running ends now, and the agent reads the message next. Otherwise call nothing. Write nothing either way.`;
 /** What the main loop is told of a message no work in a turn took, before the id of the work last active. */
 export const LAST_ACTIVE =
   "None of the work that follows this conversation is in a turn. The one last active here: ";
@@ -420,18 +427,15 @@ export function createMain(options: {
      * stop one of those turns, and is not told who it speaks as. It gives the turn to stop, with
      * what to say where the message was said; or, when several were listed and it stops none,
      * what it wrote, which says which are in a turn; or none, when it does neither or the
-     * request is dropped. A request the model refuses rejects, as it refused.
+     * request is dropped. A request the model refuses rejects, as it refused. It is told `words`,
+     * by default `HEARD_INSTRUCTIONS`.
      */
     async hear(
       text: string,
       works: Listed[],
+      words = HEARD_INSTRUCTIONS,
     ): Promise<{ say: string; stop?: { work: string; turn: number } } | undefined> {
-      const asked = await ask(
-        HEARD_INSTRUCTIONS,
-        false,
-        put([{ role: "user", text }], works),
-        () => {},
-      );
+      const asked = await ask(words, false, put([{ role: "user", text }], works), () => {});
       if (!asked) return undefined;
       const work = works.find(({ id }) => id === asked.routed?.stop);
       if (work?.turn !== undefined)
