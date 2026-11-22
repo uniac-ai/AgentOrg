@@ -78,6 +78,28 @@ test("alone, it does the work itself: what a call gives is read back before it a
   assert.deepEqual(said, ["a: user: Call me Sam.", "a: assistant: Noted, Sam."]);
 });
 
+test("alone, a response that only sends doesn't end its turn: it is asked again, and goes on to what it said it would do; one that calls nothing ends it", async () => {
+  const { tool, kept } = keeping();
+  const { looper, said, asked, inputs, answer } = looperWith({
+    conversations: "alone",
+    tools: [tool],
+    askAfterSend: true,
+  });
+  await looper.send("a", "Call me Sam.");
+  await until(() => asked.length === 1, "its request");
+  answer("Call me Sam.", sends("Got it, Sam."));
+  await until(() => asked.length === 2, "its next request");
+  // It reads what it sent, and goes on.
+  assert.deepEqual(inputs[1], ["Call me Sam.", "Got it, Sam."]);
+  answer("Call me Sam.", call("notes__keep", { text: "Sam" }));
+  await until(() => asked.length === 3, "its request after the call");
+  answer("Call me Sam.", []);
+  await looper.settled();
+  assert.deepEqual(kept, [{ text: "Sam" }]);
+  assert.deepEqual(said, ["a: user: Call me Sam.", "a: assistant: Got it, Sam."]);
+  assert.equal(looper.state("a").state, "idle");
+});
+
 test("alone, a conversation's loop takes a place as work does: past the places, a conversation waits its turn, its message already said", async () => {
   const { looper, said, asked, answer } = looperWith({ conversations: "alone" });
   const names = Array.from({ length: PLACES + 1 }, (_, i) => `t${i}`);
@@ -285,11 +307,14 @@ test("alone, a message that asks for nothing is closed with no reply, with its r
   await looper.send("a", "Thanks!");
   await until(() => asked.length === 1, "its request");
   answer("Thanks!", call("no_reply_needed", { message: 1, reaction: "👍" }));
+  // Asked once more, it calls nothing, and its turn ends.
+  await until(() => asked.length === 2, "its next request");
+  answer("Thanks!", []);
   await looper.settled();
   assert.deepEqual(said, ["a: user: Thanks!"]);
   assert.match(String(reactions[0]), / 👍$/);
   await looper.send("a", "Plan the trip.");
-  await until(() => asked.length === 2, "its request");
+  await until(() => asked.length === 3, "its request");
   answer("Plan the trip.", [
     ...call("status", { steps: [{ text: "Pick dates" }, { text: "Book" }] }),
     ...sends("Started on it."),

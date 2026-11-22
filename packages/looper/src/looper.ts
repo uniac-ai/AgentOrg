@@ -258,7 +258,8 @@ export function createLooper(options: {
    * conversation.ts), in place of the main loop and of a message given to work in code. It is the
    * thread's own work, whose id is the thread's name. `"alone"`: it is the agent alone, which does
    * the work itself. It is told and offered what a worker is, but for being a piece of work and
-   * handing a message back, takes a place as work does, and passes nothing on. A message said
+   * handing a message back, takes a place as work does, and passes nothing on. Its turn ends
+   * only with a response that calls nothing, not with one that only sends. A message said
    * while one of its calls is in flight is heard apart: if it asks to stop, what that response
    * called is ended, and the turn goes on to read it and answer. Work there was before goes on
    * with what it held, and is given nothing new. `"routes"`: it answers what needs no work, and

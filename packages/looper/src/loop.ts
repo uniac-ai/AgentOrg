@@ -353,6 +353,7 @@ const NUMBERED =
   "Each message starts with its number in brackets, like [12]. One from anyone other than the person then says who it is from, like [12] (from <who>): what you send in reply reaches them.";
 const ONLY_SENT =
   "only what you send reaches whoever said it. What you write without sending is not a reply: it shows only in your Activity, if they open it.";
+/** A worker's only: the agent alone's turn ends only with a response that calls nothing. */
 const ENDS =
   "A response that calls only `send` and leaves no message unanswered ends your turn: to keep working after a progress line, make your next call in the same response.";
 const QUIET =
@@ -362,7 +363,7 @@ const DONE = "When you have nothing more to do, end without calling anything.";
  * What the agent alone in a conversation is told after its host's words: how it answers there, as
  * a worker is told but for being one piece of work and handing a message back.
  */
-export const ALONE = `${NUMBERED} Answer each one by calling \`send\` with its number: ${ONLY_SENT} You may send while you work, and more than once. ${ENDS} ${QUIET} A message you neither answer nor close with \`no_reply_needed\` is shown as not answered when you are done. ${DONE}
+export const ALONE = `${NUMBERED} Answer each one by calling \`send\` with its number: ${ONLY_SENT} You may send while you work, and more than once. ${QUIET} A message you neither answer nor close with \`no_reply_needed\` is shown as not answered when you are done. ${DONE}
 
 ${LEFT_OUT}`;
 /**
@@ -565,7 +566,8 @@ export function createLoop(options: {
   /**
    * The agent alone in a conversation, in place of a piece of work: told `FRAME_ALONE` before its
    * host's words and `ALONE` after them, and offered a worker's own functions but `hand_back`.
-   * Every turn of it counts as one at something of its own, as a conversation's does.
+   * Every turn of it counts as one at something of its own, as a conversation's does, and ends
+   * only with a response that calls nothing.
    */
   alone?: boolean;
   /** The work's steps, as `status` last kept them. */
@@ -1271,8 +1273,16 @@ export function createLoop(options: {
         return;
       // So does one that only sent, each reply sent, or closed messages with no reply, perhaps
       // with its steps, once nothing it took is left unanswered: the next request would read only
-      // what it sent. A message said meanwhile is answered first.
-      if (sentAll && sentAny && !(await record.unanswered(current.from ?? 0)) && (await ends()))
+      // what it sent. A message said meanwhile is answered first. Not for the agent alone, whose
+      // turn ends only with a response that calls nothing: its first reply is often a line on what
+      // it is about to do.
+      if (
+        !options.alone &&
+        sentAll &&
+        sentAny &&
+        !(await record.unanswered(current.from ?? 0)) &&
+        (await ends())
+      )
         return;
       status(current, { state: "thinking" });
     }
