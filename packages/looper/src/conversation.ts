@@ -1,10 +1,11 @@
 /**
- * A conversation's own loop: the agent in one conversation, which hears every message said there
- * first. It is a work loop with a record of its own and results read back, told the front desk's
- * words in a loop's terms and offered `send`, `no_reply_needed` and `route` (loop.ts `ROUTE_ON`)
- * beside the host's `frontDesk` functions. With `route` it passes a message on to a piece of work,
- * which answers it there, starts new work with it, or stops a piece of work. It takes none of the
- * places turns of work share.
+ * A conversation's own loop that routes (the looper's `conversations: "routes"`): the agent in one
+ * conversation, which hears every message said there first. It is a work loop with a record of
+ * its own and results read back, told the front desk's words in a loop's terms and offered `send`,
+ * `no_reply_needed` and `route` (loop.ts `ROUTE_ON`) beside the host's `frontDesk` functions. With
+ * `route` it passes a message on to a piece of work, which answers it there, starts new work with
+ * it, or stops a piece of work. It takes none of the places turns of work share. The agent alone
+ * (`"alone"`) is told and offered as a worker is instead: loop.ts `FRAME_ALONE` and `ALONE`.
  */
 import { LEFT_OUT } from "./loop.js";
 import { TOLD, VOICE } from "./main.js";
