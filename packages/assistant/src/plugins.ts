@@ -1,228 +1,49 @@
 /**
- * The agent's own plugins: one Cordis root for the executor, and for each agent a context of its
- * own, into which each plugin the agent holds is loaded with that agent's settings. The agent's
- * context has four services, and a plugin names in its `inject` those it uses:
- * - `tools`: functions it gives the model, offered as `<plugin>__<name>`;
- * - `prompt`: sections it adds to what the model is told, each named and ordered;
- * - `store`: its own keys in the agent's durable store;
- * - `agent`: the agent's id.
- * The host says the agent's life to its plugins as Cordis events (`AGENT_EVENTS`), which a plugin
- * hears with `ctx.on`: no plugin can say them through a service.
- * Each service knows which plugin calls it: in a service's method, Cordis gives `this.ctx` as the
- * caller's context, and its fiber is the plugin. What a plugin registers is its own, that agent's
- * alone, and goes when the plugin unloads. Its failures are logged, never the agent's.
+ * The agent's own capabilities: one Cordis root for the executor, and for each agent a context of
+ * its own, with the three primitives (`capabilities`, `context`, `record`; see `substrate.ts`) and
+ * the bundled capabilities on them (`agent`, `store`, `tools`, `prompt`; see `bundled.ts`). Into it
+ * each capability the agent's settings name is mounted, of those the host carries, with its
+ * settings; a capability may mount others as its children.
+ * The host says the agent's life through `record` as Cordis events (`AGENT_EVENTS`), which a
+ * capability hears with `ctx.on`: none can say them itself. A capability's failures are logged,
+ * never the agent's.
  */
-import type { kv } from "@agentorg/interfaces";
 import type { Part } from "@agentorg/looper";
-import type { Log, Slot } from "@agentorg/sdk";
-import { Context, type Fiber, type FiberState, Service } from "cordis";
+import type { Log } from "@agentorg/sdk";
+import { Context, type Fiber, type FiberState } from "cordis";
+import { bundled, type KvStore } from "./bundled.js";
+import {
+  AGENT_EVENTS,
+  AgentRecord,
+  Capabilities,
+  type Capability,
+  type Heard,
+  type Held,
+  type Host,
+  type Life,
+  type Pass,
+  Passes,
+  type Request,
+} from "./substrate.js";
 import type { Candidate } from "./tools.js";
 
-type KvStore = Slot<typeof kv>["call"];
+export { Agent, type Section } from "./bundled.js";
+export {
+  AGENT_EVENTS,
+  type Capability,
+  type Heard,
+  type Held,
+  type Life,
+  type Loop,
+  type Pass,
+  type Request,
+} from "./substrate.js";
+
 /** Cordis's `FiberState.ACTIVE`: a const enum it declares, which this build can't name. */
 const ACTIVE = 2 as FiberState;
 
-/**
- * What a plugin hears of the agent's life: one of its pieces of work's turns starting and ending,
- * that work's record before and after it is summarized, the agent going idle with nothing at work,
- * and the agent being stopped, said last, after its turns were cut. `compacted` is said only of a
- * summary that was kept: one that fails or is stopped leaves `compacting` without it.
- */
-export type Life = "turnStarted" | "turnEnded" | "compacting" | "compacted" | "idle" | "stopped";
-
-/** What is said with an event of the agent's life: one object, so more can be said later. */
-export interface Heard {
-  work?: string;
-}
-
-/** Each event of the agent's life, by the name a plugin listens for with `ctx.on`. */
-export const AGENT_EVENTS = {
-  turnStarted: "agent/turn-started",
-  turnEnded: "agent/turn-ended",
-  compacting: "agent/compacting",
-  compacted: "agent/compacted",
-  idle: "agent/idle",
-  stopped: "agent/stopped",
-} as const satisfies Record<Life, string>;
-
-/** A section of what the model is told, as a plugin adds it. */
-export interface Section {
-  /** Its name, unique among the plugin's sections. */
-  name: string;
-  /** Read for each request; one that gives nothing adds nothing. Reading it only reads. */
-  text: () => string | undefined;
-  /** Where it goes among all sections, lowest first; then by plugin and name. 0 if none. */
-  order?: number;
-  /** The most characters of it kept. */
-  max?: number;
-}
-
-declare module "cordis" {
-  interface Context {
-    tools: Tools;
-    prompt: Prompt;
-    store: Store;
-    agent: Agent;
-  }
-  interface Events {
-    "agent/turn-started"(heard: Heard): void;
-    "agent/turn-ended"(heard: Heard): void;
-    "agent/compacting"(heard: Heard): void;
-    "agent/compacted"(heard: Heard): void;
-    "agent/idle"(heard: Heard): void;
-    "agent/stopped"(heard: Heard): void;
-  }
-}
-
-/** What the host keeps of one agent's plugins, which its services fill. */
-interface Kept {
-  agent: string;
-  kv: KvStore;
-  tools: Map<symbol, Candidate>;
-  sections: Map<string, Section & { plugin: string }>;
-  /** Each plugin this agent holds, by the fiber it was loaded as, with its name. */
-  plugins: Map<Fiber, string>;
-  /** The agent's own `agent` service: the sender its life is said with. */
-  said?: Agent;
-}
-
-/** Where Cordis keeps, on a service as a plugin reaches it, the context it was reached from. */
-const CALLER = Symbol.for("cordis.caller");
-/**
- * The plugin a service is called by, and the context to tie what it registers to: the one the
- * agent holds that the caller is part of. A plugin's own inner components, and a service a plugin
- * provides, calling it, are that plugin's. Called on the service, as `ctx.store.get(…)`.
- */
-function callerOf(kept: Kept, service: object): { name: string; ctx: Context } {
-  const reached = service as { [CALLER]?: Context; ctx: Context };
-  const ctx = reached[CALLER] ?? reached.ctx;
-  for (let fiber = ctx.fiber; ; fiber = fiber.parent.fiber) {
-    const name = kept.plugins.get(fiber);
-    if (name !== undefined) return { name, ctx };
-    if (fiber === fiber.parent.fiber) break;
-  }
-  throw new Error("Only a plugin the agent holds may use its services.");
-}
-
-/** Functions plugins give the model, each offered as `<plugin>__<name>`. */
-export class Tools extends Service {
-  private kept: Kept;
-  constructor(ctx: Context, kept: Kept) {
-    super(ctx, "tools");
-    this.kept = kept;
-  }
-  /**
-   * Give the model a function until the plugin unloads, or until the function it gives is called.
-   * A turn keeps the functions it was offered: a call that comes after is answered that the
-   * function is no longer held, and nothing of the plugin runs.
-   */
-  register(tool: Omit<Candidate, "slot">): () => void {
-    const { name: slot, ctx } = callerOf(this.kept, this);
-    let held = true;
-    const run: Candidate["run"] = async (input, group) =>
-      held
-        ? tool.run(input, group)
-        : { output: `The function ${slot}__${tool.name} is no longer held.`, ok: false };
-    const gone = ctx.effect(() => {
-      const key = Symbol(tool.name);
-      this.kept.tools.set(key, { ...tool, slot, run });
-      return () => {
-        held = false;
-        this.kept.tools.delete(key);
-      };
-    });
-    return () => void gone();
-  }
-}
-
-/** What plugins add to what the model is told. */
-export class Prompt extends Service {
-  private kept: Kept;
-  constructor(ctx: Context, kept: Kept) {
-    super(ctx, "prompt");
-    this.kept = kept;
-  }
-  /**
-   * Add a section to every request until the plugin unloads, or until the function it gives is
-   * called. A worker is told sections after the agent's own words and its skills; the front desk,
-   * after who it speaks as. A second of the same name from the same plugin is refused.
-   */
-  section(section: Section): () => void {
-    const { name: plugin, ctx } = callerOf(this.kept, this);
-    const key = `${plugin}/${section.name}`;
-    if (this.kept.sections.has(key))
-      throw new Error(`The plugin ${plugin} has a section named ${section.name} already.`);
-    const gone = ctx.effect(() => {
-      this.kept.sections.set(key, { ...section, plugin });
-      return () => void this.kept.sections.delete(key);
-    });
-    return () => void gone();
-  }
-}
-
-/** Where a plugin's own keys live in the agent's store. */
-const STORE = "plugin";
-/**
- * Durable keeping: each plugin's own keys in the agent's store, under `plugin/<name>/`. A plugin
- * unloading leaves them.
- * Each method is called on the service, as `ctx.store.get(…)`: that is how Cordis names its caller.
- */
-export class Store extends Service implements KvStore {
-  private kept: Kept;
-  constructor(ctx: Context, kept: Kept) {
-    super(ctx, "store");
-    this.kept = kept;
-  }
-  // Methods, not arrow functions: Cordis gives each call `this.ctx` as the calling plugin's.
-  private prefix() {
-    return `${STORE}/${callerOf(this.kept, this).name}/`;
-  }
-  get({ key }: Parameters<KvStore["get"]>[0]) {
-    return this.kept.kv.get({ key: `${this.prefix()}${key}` });
-  }
-  set({ key, value }: Parameters<KvStore["set"]>[0]) {
-    return this.kept.kv.set({ key: `${this.prefix()}${key}`, value });
-  }
-  delete({ key }: Parameters<KvStore["delete"]>[0]) {
-    return this.kept.kv.delete({ key: `${this.prefix()}${key}` });
-  }
-  async list({ prefix: under = "", after, limit }: Parameters<KvStore["list"]>[0]) {
-    const prefix = this.prefix();
-    const { keys, next } = await this.kept.kv.list({
-      prefix: `${prefix}${under}`,
-      ...(after === undefined ? {} : { after: `${prefix}${after}` }),
-      ...(limit === undefined ? {} : { limit }),
-    });
-    const mine = (key: string) => key.slice(prefix.length);
-    return { keys: keys.map(mine), next: next === null ? null : mine(next) };
-  }
-}
-
-/** The agent itself, as its plugins reach it: its id. */
-export class Agent extends Service {
-  private kept: Kept;
-  constructor(ctx: Context, kept: Kept) {
-    super(ctx, "agent");
-    this.kept = kept;
-    kept.said = this;
-  }
-  /** The agent's id. */
-  get id() {
-    return this.kept.agent;
-  }
-}
-
-/**
- * A plugin's part inside an agent: a Cordis component that names in `inject` the services it uses,
- * and may use services the same agent's other plugins provide. What it provides, named in
- * `provide`, is that agent's alone: another agent holding the same plugin has its own.
- */
-export interface AgentPlugin<C = unknown> {
-  name: string;
-  inject: string[];
-  provide?: string | string[];
-  apply(ctx: Context, config: C): unknown;
-}
+/** A plugin, as an agent's settings name it: a capability its executor carries. */
+export type AgentPlugin<C = unknown> = Capability<C>;
 
 /** A plugin an agent holds, as its settings name it: one the host carries, with its settings. */
 export interface Named {
@@ -272,6 +93,14 @@ export interface AgentPlugins {
   close(): Promise<void>;
 }
 
+/** An agent's own context, as its executor holds it: what its engine reads, and more. */
+export interface AgentContext extends AgentPlugins {
+  /** What the agent holds now, in the order it was mounted, each with its state. */
+  list(): Held[];
+  /** Pass a request through every capability's passes, in the order they were mounted. */
+  pass(request: Request): Request;
+}
+
 /** An agent with no plugins: nothing given, nothing heard. */
 export const NO_PLUGINS: AgentPlugins = {
   tools: () => [],
@@ -281,145 +110,322 @@ export const NO_PLUGINS: AgentPlugins = {
   close: async () => {},
 };
 
-/**
- * A plugin as an agent holds it: what Cordis gave when it was asked to load, the settings it was
- * asked with, and the fiber it runs as, once it has begun to.
- */
-interface Loaded {
+/** One capability as the agent holds it, from when it is asked to mount until it goes. */
+interface Entry {
+  capability: Capability;
+  title: string;
+  /** Mounted by the host for every agent, from the agent's settings, or by another capability. */
+  kind: "bundled" | "named" | "child";
+  parent?: string;
+  /** Its settings as named, to tell a change. */
+  key: string;
   loading: Fiber & PromiseLike<Fiber>;
-  settings: string;
   fiber?: Fiber;
+  ctx?: Context;
+  controller: AbortController;
+  /** What it says of itself now, once it has. */
+  said?: { state: "mounted" | "down"; detail?: string };
 }
 
-/** The services every agent's context has, by the names they are provided under. */
-const SERVICES = { tools: Tools, prompt: Prompt, store: Store, agent: Agent };
-/** By order, then plugin, then name: the same at every start. */
-const inOrder = (a: Section & { plugin: string }, b: Section & { plugin: string }) =>
-  (a.order ?? 0) - (b.order ?? 0) ||
-  a.plugin.localeCompare(b.plugin) ||
-  a.name.localeCompare(b.name);
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * The executor's plugin host: one Cordis root, the plugins it carries, by name, and a context of
- * its own for each agent.
+ * The executor's capability host: one Cordis root, the plugins it carries, by name, and a context
+ * of its own for each agent.
  */
 // biome-ignore lint/suspicious/noExplicitAny: each plugin's settings are its own.
 export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
   const root = new Context();
   const byName = new Map(carried.map((plugin) => [plugin.name, plugin]));
-  // What an agent's context keeps to itself: its four services, and every service a plugin it may
-  // come to hold provides, each isolated under a label of its own (Cordis keeps a service by its
-  // label), so its plugins share them and no other agent sees them.
-  const provided = new Set([
-    ...Object.keys(SERVICES),
-    ...carried.flatMap((plugin) => [plugin.provide ?? []].flat()),
-  ]);
   return {
-    /** Give `agent` a context of its own, with its four services: it holds no plugin until told. */
-    async open(agent: string, options: { store: KvStore }): Promise<AgentPlugins> {
-      const kept: Kept = {
-        agent,
-        kv: options.store,
-        tools: new Map(),
-        sections: new Map(),
-        plugins: new Map(),
-      };
-      // Each plugin as the host loads it: what it is, and the fiber it runs as, named as the agent
-      // holds it, so its services know it, and its own components, as that plugin.
-      const asHeld = (plugin: AgentPlugin, one: Loaded) => ({
-        name: plugin.name,
-        inject: plugin.inject,
-        ...(plugin.provide === undefined ? {} : { provide: plugin.provide }),
-        apply(ctx: Context, config: unknown) {
-          one.fiber = ctx.fiber;
-          kept.plugins.set(ctx.fiber, plugin.name);
-          return plugin.apply(ctx, config);
+    /** Give `agent` a context of its own, with the primitives and the bundled capabilities. */
+    async open(agent: string, options: { store: KvStore }): Promise<AgentContext> {
+      const fibers: Host["fibers"] = new Map();
+      /** Each capability by name, in the order they were mounted. */
+      const entries = new Map<string, Entry>();
+      /** Each that couldn't be mounted, and why, until it is tried again. */
+      const failed = new Map<string, Held & { kind: Entry["kind"] }>();
+      const passes: { owner: string; pass: Pass }[] = [];
+      const made = bundled({ agent, kv: options.store, fibers, log });
+
+      /** Everything under `name`, deepest first. */
+      const under = (name: string): string[] =>
+        [...entries.values()]
+          .filter((one) => one.parent === name)
+          .flatMap((one) => [...under(one.capability.name), one.capability.name]);
+      /**
+       * A capability as Cordis loads it: named as the agent holds it, with its own signal. Cordis
+       * applies it again when a service it needs comes back, having disposed what it mounted: each
+       * apply has a signal of its own, and mounts its children afresh.
+       */
+      const asHeld = (capability: Capability, entry: Entry) => ({
+        name: capability.name,
+        inject: capability.inject,
+        ...(capability.provide === undefined ? {} : { provide: capability.provide }),
+        apply(ctx: Context, args: unknown) {
+          for (const one of under(capability.name)) {
+            const held = entries.get(one);
+            entries.delete(one);
+            if (held?.fiber) fibers.delete(held.fiber);
+          }
+          if (entry.fiber) fibers.delete(entry.fiber);
+          entry.fiber = ctx.fiber;
+          entry.ctx = ctx;
+          fibers.set(ctx.fiber, capability.name);
+          const controller = new AbortController();
+          entry.controller = controller;
+          ctx.effect(() => () => controller.abort());
+          return capability.apply(ctx, args);
         },
       });
-      let own: Context = root;
-      for (const name of provided) own = own.isolate(name);
-      const services: Fiber[] = [];
-      for (const service of Object.values(SERVICES)) {
-        const fiber = own.use(service, kept);
-        services.push(fiber);
-        await fiber;
-      }
-      /** Each plugin it holds, by name. */
-      const held = new Map<string, Loaded>();
-      const unload = async (name: string) => {
-        const one = held.get(name);
-        if (!one) return;
-        held.delete(name);
-        await one.loading.dispose();
-        if (one.fiber) kept.plugins.delete(one.fiber);
+      const start = (
+        at: Context,
+        capability: Capability,
+        args: unknown,
+        kind: Entry["kind"],
+        parent?: string,
+      ) => {
+        const entry = {
+          capability,
+          title: capability.title ?? capability.name,
+          kind,
+          ...(parent === undefined ? {} : { parent }),
+          key: JSON.stringify(args ?? {}),
+          controller: new AbortController(),
+        } as Entry;
+        entry.loading = at.use(asHeld(capability, entry), args);
+        failed.delete(capability.name);
+        entries.set(capability.name, entry);
+        return entry;
+      };
+      /**
+       * Take one off, with all it mounted: with `taken`, each one's `unmount` first, deepest first;
+       * not when the agent closes.
+       */
+      const drop = async (name: string, taken: boolean) => {
+        const entry = entries.get(name);
+        if (!entry) return;
+        const all = [...under(name), name];
+        if (taken)
+          for (const one of all) {
+            const held = entries.get(one);
+            if (!held?.ctx || !held.capability.unmount) continue;
+            try {
+              await held.capability.unmount(held.ctx);
+            } catch (error) {
+              log.warn("A capability failed as it was taken off.", {
+                agent,
+                capability: one,
+                error: messageOf(error),
+              });
+            }
+          }
+        await entry.loading.dispose();
+        for (const one of all) {
+          const held = entries.get(one);
+          entries.delete(one);
+          if (held?.fiber) fibers.delete(held.fiber);
+          for (const [key, value] of failed) if (value.parent === one) failed.delete(key);
+        }
       };
       // None is judged until all have settled: one that waits for another's service loads once
-      // that one has, whatever the order they were named in, and loads again when that one is
-      // loaded again.
+      // that one has, whatever the order they were asked in, and loads again when that one is.
       const settle = async () => {
         for (let moving = true; moving; ) {
           moving = false;
-          for (const { loading } of held.values()) {
+          for (const { loading } of entries.values()) {
             if (!loading.inertia) continue;
             moving = true;
             await loading.inertia.catch(() => {});
           }
         }
       };
+      /** Why it isn't mounted, if it isn't: what it said, or that a service it needs isn't there. */
+      const fault = async (entry: Entry) => {
+        const said = await entry.loading.then(
+          () => undefined,
+          (error: unknown) => messageOf(error),
+        );
+        if (said !== undefined) return { why: "didn't load" as const, said };
+        if (entry.loading.state !== ACTIVE) return { why: "needs a service" as const };
+        return undefined;
+      };
+      const failing = (entry: Entry, detail: string) =>
+        failed.set(entry.capability.name, {
+          name: entry.capability.name,
+          title: entry.title,
+          state: "failed",
+          detail,
+          kind: entry.kind,
+          ...(entry.parent === undefined ? {} : { parent: entry.parent }),
+        });
+      const NEEDS = "It needs a service none of the agent's capabilities provides.";
+
+      // What an agent's context keeps to itself: the primitives, the bundled capabilities, and
+      // every service a plugin it may come to hold provides, each isolated under a label of its own
+      // (Cordis keeps a service by its label), so its capabilities share them and no other agent
+      // sees them. A child a capability mounts provides only among these.
+      const kept = new Set([
+        "capabilities",
+        "context",
+        "record",
+        ...made.provides,
+        ...carried.flatMap((plugin) => [plugin.provide ?? []].flat()),
+      ]);
+      let own: Context = root;
+      for (const name of kept) own = own.isolate(name);
+
+      const host: Host = {
+        fibers,
+        /**
+         * A child is judged once it has settled. One that waits for a service while its parent is
+         * still mounting may be waiting for what its parent offers, which is there once the
+         * parent's mount ends: it is judged then, with the rest, and the list says how it went.
+         */
+        async mount(parent, ctx, capability, args) {
+          const { name } = capability;
+          if (entries.has(name)) throw new Error(`The agent holds ${name} already.`);
+          const alone = [capability.provide ?? []].flat().find((one) => !kept.has(one));
+          if (alone)
+            throw new Error(`${name} provides ${alone}, which its agent can't keep to itself.`);
+          const entry = start(ctx, capability, args, "child", parent);
+          while (entry.loading.inertia) await entry.loading.inertia.catch(() => {});
+          const why = await fault(entry);
+          if (!why) return;
+          if (why.why === "needs a service" && entries.get(parent)?.loading.state !== ACTIVE)
+            return;
+          await drop(name, false);
+          const detail = why.why === "didn't load" ? why.said : NEEDS;
+          failing(entry, detail);
+          throw new Error(detail);
+        },
+        unmount: (name) => drop(name, true),
+        list: () => [
+          ...[...entries.values()]
+            .filter((one) => one.loading.state === ACTIVE)
+            .map(({ capability, title, parent, said }) => ({
+              name: capability.name,
+              title,
+              state: said?.state ?? ("mounted" as const),
+              ...(said?.detail ? { detail: said.detail } : {}),
+              ...(parent === undefined ? {} : { parent }),
+            })),
+          ...[...failed.values()].map(({ kind: _, ...held }) => held),
+        ],
+        signal(name) {
+          const entry = entries.get(name);
+          if (!entry) throw new Error(`The agent holds no ${name}.`);
+          return entry.controller.signal;
+        },
+        say(name, state, detail) {
+          const entry = entries.get(name);
+          if (entry) entry.said = { state, ...(detail ? { detail } : {}) };
+        },
+        pass(owner, ctx, pass) {
+          const one = { owner, pass };
+          const gone = ctx.effect(() => {
+            passes.push(one);
+            return () => void passes.splice(passes.indexOf(one), 1);
+          });
+          return () => void gone();
+        },
+      };
+
+      const services: Fiber[] = [];
+      const record = own.use(AgentRecord);
+      for (const fiber of [own.use(Capabilities, host), own.use(Passes, host), record]) {
+        services.push(fiber);
+        await fiber;
+      }
+      /** The agent's own `record` service: the sender its life is said with. */
+      let said: AgentRecord | undefined = own.get("record") as AgentRecord;
+
+      for (const capability of made.capabilities) start(own, capability, undefined, "bundled");
+      await settle();
+      for (const entry of entries.values()) {
+        const why = await fault(entry);
+        if (why) throw new Error(`The agent's ${entry.capability.name} didn't mount.`);
+      }
+
+      /** Each request through every pass, in the order their capabilities were mounted. */
+      const run = (request: Request): Request => {
+        const order = [...entries.keys()];
+        const ordered = [...passes].sort((a, b) => order.indexOf(a.owner) - order.indexOf(b.owner));
+        for (const { owner, pass } of ordered)
+          try {
+            pass(request);
+          } catch (error) {
+            log.warn("A capability's pass failed; the request goes on without what it did.", {
+              agent,
+              capability: owner,
+              error: messageOf(error),
+            });
+          }
+        return request;
+      };
+      const fresh = (): Request => ({ instructions: [], functions: [], input: [] });
+      const tools = () => run(fresh()).functions;
+      const blocks = () => run(fresh()).instructions;
+
       /** What it couldn't hold of `named`, each with why; it holds all the rest. */
       const hold = async (named: Named[]): Promise<Without[]> => {
         const without = new Map<string, Without>();
+        for (const [name, held] of failed) if (held.kind === "named") failed.delete(name);
         for (const { name } of named)
-          if (!byName.has(name)) without.set(name, { name, why: "not carried" });
+          if (!byName.has(name)) {
+            without.set(name, { name, why: "not carried" });
+            failed.set(name, {
+              name,
+              title: name,
+              state: "failed",
+              detail: "Its executor doesn't carry it.",
+              kind: "named",
+            });
+          }
         const wanted = new Map(
           named
             .filter(({ name }) => byName.has(name))
             .map(({ name, settings }) => [name, { key: JSON.stringify(settings ?? {}), settings }]),
         );
-        for (const [name, { settings }] of [...held])
-          if (wanted.get(name)?.key !== settings) await unload(name);
-        for (const [name, { key, settings }] of wanted) {
-          if (held.has(name)) continue;
-          const one = { settings: key } as Loaded;
-          one.loading = own.use(asHeld(byName.get(name) as AgentPlugin, one), settings);
-          held.set(name, one);
+        for (const entry of [...entries.values()])
+          if (entry.kind === "named" && wanted.get(entry.capability.name)?.key !== entry.key)
+            await drop(entry.capability.name, true);
+        for (const [name, { settings }] of wanted) {
+          if (entries.has(name)) continue;
+          start(own, byName.get(name) as AgentPlugin, settings, "named");
         }
         await settle();
         // One that failed is unloaded; then one left waiting for a service, which may be one that
         // failed, never loads, and is unloaded too.
-        for (const [name, { loading }] of [...held]) {
-          const failed = await loading.then(
-            () => undefined,
-            (error: unknown) => (error instanceof Error ? error.message : String(error)),
-          );
-          if (failed === undefined) continue;
-          without.set(name, { name, why: "didn't load", said: failed });
-          await unload(name);
+        for (const entry of [...entries.values()]) {
+          if (entry.kind !== "named") continue;
+          const why = await fault(entry);
+          if (why?.why !== "didn't load") continue;
+          without.set(entry.capability.name, { name: entry.capability.name, ...why });
+          await drop(entry.capability.name, false);
+          failing(entry, why.said);
         }
         await settle();
-        for (const [name, { loading }] of [...held]) {
-          if (loading.state === ACTIVE) continue;
-          without.set(name, { name, why: "needs a service" });
-          await unload(name);
+        for (const entry of [...entries.values()]) {
+          if (entry.kind !== "named" || entry.loading.state === ACTIVE) continue;
+          without.set(entry.capability.name, {
+            name: entry.capability.name,
+            why: "needs a service",
+          });
+          await drop(entry.capability.name, false);
+          failing(entry, NEEDS);
+        }
+        // A child mounted in its parent's mount, judged now that its parent's mount has ended.
+        for (const entry of [...entries.values()]) {
+          if (entry.kind !== "child" || !entries.has(entry.capability.name)) continue;
+          const why = await fault(entry);
+          if (!why) continue;
+          await drop(entry.capability.name, false);
+          failing(entry, why.why === "didn't load" ? why.said : NEEDS);
         }
         return named.flatMap(({ name }) => without.get(name) ?? []);
       };
-      const tools = () => [...kept.tools.values()];
-      const blocks = () =>
-        [...kept.sections.values()].sort(inOrder).flatMap(({ plugin, name, text, max }) => {
-          const owner = `plugin:${plugin}/${name}`;
-          let words: string | undefined;
-          try {
-            words = text();
-          } catch (error) {
-            log.warn("A plugin's section couldn't be read; the request goes without it.", {
-              agent,
-              owner,
-              error: String(error),
-            });
-          }
-          return words ? [{ owner, text: words, ...(max === undefined ? {} : { max }) }] : [];
-        });
+
       /** One change at a time, in the order they were asked; none once it is closed. */
       let closed = false;
       let changing: Promise<unknown> = Promise.resolve();
@@ -431,22 +437,24 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
       return {
         tools,
         blocks,
-        // The host says the agent's life, with the agent's own `agent` service as the sender, so
-        // only the plugins in its context hear it. Each listener is called and none is awaited;
-        // each that fails is logged. They are given one object, which none can change under the
-        // next.
+        list: host.list,
+        pass: run,
+        // The host says the agent's life, with the agent's own `record` service as the sender, so
+        // only the capabilities in its context hear it. Each listener is called and none is
+        // awaited; each that fails is logged. They are given one object, which none can change
+        // under the next.
         life(event, heard = {}) {
-          if (!kept.said) return;
-          const failed = (error: unknown) =>
+          if (!said) return;
+          const failedOn = (error: unknown) =>
             log.warn("A plugin failed on the agent's life.", {
               agent,
               event,
               error: String(error),
             });
           own
-            .parallel(kept.said, AGENT_EVENTS[event], Object.freeze({ ...heard }))
+            .parallel(said, AGENT_EVENTS[event], Object.freeze({ ...heard }))
             .catch((error: unknown) =>
-              error instanceof AggregateError ? error.errors.forEach(failed) : failed(error),
+              error instanceof AggregateError ? error.errors.forEach(failedOn) : failedOn(error),
             );
         },
         hold: (named) =>
@@ -457,12 +465,13 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         close: () =>
           inTurn(async () => {
             closed = true;
-            for (const name of [...held.keys()].reverse()) await unload(name);
+            for (const name of [...entries.keys()].reverse())
+              if (!entries.get(name)?.parent) await drop(name, false);
             await Promise.all(services.reverse().map((fiber) => fiber.dispose()));
-            kept.tools.clear();
-            kept.sections.clear();
-            kept.plugins.clear();
-            delete kept.said;
+            entries.clear();
+            failed.clear();
+            fibers.clear();
+            said = undefined;
           }),
       };
     },
