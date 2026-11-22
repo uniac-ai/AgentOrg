@@ -300,36 +300,21 @@ test("alone, a hearing that waited behind another conversation's isn't asked onc
   await looper.settled();
 });
 
-test("alone, a response that closes a message beside any other call goes on: the agent is asked again", async () => {
-  const { looper, asked, answer } = looperWith({ conversations: "alone" });
-  await looper.send("a", "Thanks! Now plan the trip.");
-  await until(() => asked.length === 1, "its request");
-  answer("Thanks! Now plan the trip.", [
-    ...call("no_reply_needed", { message: 1 }),
-    ...call("status", { steps: [{ text: "Pick dates" }] }),
-  ]);
-  await until(() => asked.length === 2, "its next request");
-  answer("Thanks! Now plan the trip.", []);
-  await looper.settled();
-  assert.equal(looper.state("a").state, "idle");
-});
-
-test("alone, a message that asks for nothing is closed with no reply, with its reaction, in a response that ends its turn; and steps are kept with status", async () => {
+test("alone, a message that asks for nothing is closed with no reply, with its reaction, and steps are kept with status", async () => {
   const { looper, said, asked, reactions, talks, answer } = looperWith({
     conversations: "alone",
   });
   await looper.send("a", "Thanks!");
   await until(() => asked.length === 1, "its request");
   answer("Thanks!", call("no_reply_needed", { message: 1, reaction: "👍" }));
-  // A response that only closes, with nothing left unanswered, ends its turn: nothing more is
-  // asked.
+  // Asked once more, it calls nothing, and its turn ends.
+  await until(() => asked.length === 2, "its next request");
+  answer("Thanks!", []);
   await looper.settled();
-  assert.equal(asked.length, 1);
-  assert.equal(looper.state("a").state, "idle");
   assert.deepEqual(said, ["a: user: Thanks!"]);
   assert.match(String(reactions[0]), / 👍$/);
   await looper.send("a", "Plan the trip.");
-  await until(() => asked.length === 2, "its request");
+  await until(() => asked.length === 3, "its request");
   answer("Plan the trip.", [
     ...call("status", { steps: [{ text: "Pick dates" }, { text: "Book" }] }),
     ...sends("Started on it."),
