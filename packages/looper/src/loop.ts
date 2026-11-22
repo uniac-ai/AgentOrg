@@ -569,7 +569,8 @@ export function createLoop(options: {
    * The agent alone in a conversation, in place of a piece of work: told `FRAME_ALONE` before its
    * host's words and `ALONE` after them, and offered a worker's own functions but `hand_back`.
    * Every turn of it counts as one at something of its own, as a conversation's does, and ends
-   * only with a response that calls nothing.
+   * only with a response that calls nothing, or one that only closes messages with no reply once
+   * nothing it took is left unanswered.
    */
   alone?: boolean;
   /** The work's steps, as `status` last kept them. */
@@ -1169,6 +1170,8 @@ export function createLoop(options: {
        */
       let sentAll = true;
       let sentAny = false;
+      /** Whether every call of this request closed a message with no reply. */
+      const closesOnly = called.every((call) => call.name === NO_REPLY.name);
       for (const [i, call] of called.entries()) {
         if (current.cancelled) {
           await skipped(called.slice(i), "cancelled", thread);
@@ -1275,11 +1278,11 @@ export function createLoop(options: {
         return;
       // So does one that only sent, each reply sent, or closed messages with no reply, perhaps
       // with its steps, once nothing it took is left unanswered: the next request would read only
-      // what it sent. A message said meanwhile is answered first. Not for the agent alone, whose
-      // turn ends only with a response that calls nothing: its first reply is often a line on what
-      // it is about to do.
+      // what it sent. A message said meanwhile is answered first. For the agent alone, only one
+      // that closed messages and did nothing else: its first reply is often a line on what it is
+      // about to do, and its turn ends otherwise with a response that calls nothing.
       if (
-        !options.alone &&
+        (!options.alone || closesOnly) &&
         sentAll &&
         sentAny &&
         !(await record.unanswered(current.from ?? 0)) &&
