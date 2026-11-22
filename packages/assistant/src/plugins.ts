@@ -91,14 +91,20 @@ export interface AgentPlugins {
   hold(named: Named[]): Promise<Given>;
   /** Unload them all: what each registered goes with it. */
   close(): Promise<void>;
+  /** Pass a request through every capability's passes, in the order they were mounted. */
+  pass(request: Request): Request;
 }
 
 /** An agent's own context, as its executor holds it: what its engine reads, and more. */
 export interface AgentContext extends AgentPlugins {
   /** What the agent holds now, in the order it was mounted, each with its state. */
   list(): Held[];
-  /** Pass a request through every capability's passes, in the order they were mounted. */
-  pass(request: Request): Request;
+  /**
+   * Mount a capability of the executor's own, as the bundled ones are: no settings name it, and
+   * holding what they name leaves it. It settles once it is mounted, or rejects with why, and the
+   * agent runs without it.
+   */
+  mount(capability: Capability, args?: unknown): Promise<void>;
 }
 
 /** An agent with no plugins: nothing given, nothing heard. */
@@ -108,6 +114,7 @@ export const NO_PLUGINS: AgentPlugins = {
   life: () => {},
   hold: async () => ({ tools: [], blocks: [], without: [] }),
   close: async () => {},
+  pass: (request) => request,
 };
 
 /** One capability as the agent holds it, from when it is asked to mount until it goes. */
@@ -138,8 +145,15 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
   const root = new Context();
   const byName = new Map(carried.map((plugin) => [plugin.name, plugin]));
   return {
-    /** Give `agent` a context of its own, with the primitives and the bundled capabilities. */
-    async open(agent: string, options: { store: KvStore }): Promise<AgentContext> {
+    /**
+     * Give `agent` a context of its own, with the primitives and the bundled capabilities.
+     * `provides` names the services the executor's own capabilities may provide, which the
+     * agent's context keeps to itself as it does the bundled ones'.
+     */
+    async open(
+      agent: string,
+      options: { store: KvStore; provides?: string[] },
+    ): Promise<AgentContext> {
       const fibers: Host["fibers"] = new Map();
       /** Each capability by name, in the order they were mounted. */
       const entries = new Map<string, Entry>();
@@ -270,6 +284,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         "context",
         "record",
         ...made.provides,
+        ...(options.provides ?? []),
         ...carried.flatMap((plugin) => [plugin.provide ?? []].flat()),
       ]);
       let own: Context = root;
@@ -439,6 +454,20 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         blocks,
         list: host.list,
         pass: run,
+        mount: (capability, args) =>
+          inTurn(async () => {
+            const { name } = capability;
+            if (closed) throw new Error("The agent is closed.");
+            if (entries.has(name)) throw new Error(`The agent holds ${name} already.`);
+            const entry = start(own, capability, args, "bundled");
+            await settle();
+            const why = await fault(entry);
+            if (!why) return;
+            await drop(name, false);
+            const detail = why.why === "didn't load" ? why.said : NEEDS;
+            failing(entry, detail);
+            throw new Error(detail);
+          }),
         // The host says the agent's life, with the agent's own `record` service as the sender, so
         // only the capabilities in its context hear it. Each listener is called and none is
         // awaited; each that fails is logged. They are given one object, which none can change

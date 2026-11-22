@@ -65,8 +65,10 @@ import {
   type Call,
   type Card,
   type CardAnswer,
+  type Conversed,
   codeOf,
   head,
+  type Item,
   type Json,
   type Log,
   type Model,
@@ -226,7 +228,7 @@ export function createLooper(options: {
    * `voice` and `blocks` as the main loop is, and offered `frontDesk`, whose results it reads back;
    * workers are told and offered as before. Alone, it is told and offered what a worker is.
    */
-  request(): Promise<{
+  request(conversation?: Conversed): Promise<{
     instructions: string | readonly Part[];
     tools: Tool[];
     model?: string | undefined;
@@ -234,6 +236,12 @@ export function createLooper(options: {
     blocks?: readonly Part[] | undefined;
     frontDesk?: readonly Tool[] | undefined;
   }>;
+  /**
+   * Run at each model request a loop makes, with what it is about to send as its input: what it
+   * gives is sent in its place, and the record is unchanged. A conversation's own loop says which
+   * conversation, as its `request` does. None by default.
+   */
+  pass?(input: Item[], conversation?: Conversed): Item[];
   out: LooperOut;
   /** Whether it starts stopped: no turn starts until `start`. */
   stopped?: boolean;
@@ -537,8 +545,19 @@ export function createLooper(options: {
           );
       },
       loop: createLoop({
-        // Alone, it is asked as a worker is, and takes a place as work does.
-        request: routes ? conversationRequest : options.request,
+        // Alone, it is asked as a worker is, and takes a place as work does. A conversation's own
+        // loop is read for its conversation: whose it is.
+        request: routes
+          ? conversationRequest
+          : talk
+            ? () => options.request(conversationOf(id))
+            : () => options.request(),
+        ...(options.pass
+          ? {
+              pass: (input: Item[]) =>
+                options.pass?.(input, talk ? conversationOf(id) : undefined) ?? input,
+            }
+          : {}),
         model: options.model,
         enter: routes ? () => FREE : enter,
         record,
@@ -740,6 +759,11 @@ export function createLooper(options: {
     return taken;
   };
 
+  /** A conversation's own loop, as its request and passes are told it: whose conversation it is. */
+  const conversationOf = (id: string): Conversed => ({
+    id,
+    with: options.speaker?.(id) ?? "person",
+  });
   const main = createMain({
     model: options.model,
     request: options.request,

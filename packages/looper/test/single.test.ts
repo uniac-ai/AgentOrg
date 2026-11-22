@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OutputItem, Tool } from "../src/index.ts";
+import {
+  type Conversed,
+  type Item,
+  type OutputItem,
+  REQUEST_BUDGET,
+  type Tool,
+} from "../src/index.ts";
 import { ALONE, FRAME_ALONE } from "../src/loop.ts";
 import { PLACES } from "../src/looper.ts";
 import { HEARD_ALONE, ROUTE } from "../src/main.ts";
@@ -431,4 +437,74 @@ test("alone, work a routing conversation passed a message to, cut off by a resta
   await after.looper.settled();
   assert.ok(after.said.includes("a: assistant: Report done."));
   assert.ok(after.said.includes("a: assistant: Adding it."));
+});
+
+test("alone, a conversation's loop is read told whose conversation it is, and each of its requests is passed: what the pass gives is sent, and the record keeps what it did", async () => {
+  const read: (Conversed | undefined)[] = [];
+  const passed: (Conversed | undefined)[] = [];
+  const note: Item = { type: "message", role: "assistant", content: "(noted)" };
+  const { looper, inputs, answer } = looperWith({
+    conversations: "alone",
+    speaker: (thread) => (thread === "b" ? "act_b" : undefined),
+    requested: (conversation) => void read.push(conversation),
+    pass: (input, conversation) => {
+      passed.push(conversation);
+      return [...input, note];
+    },
+  });
+  await looper.send("a", "Hi.");
+  await until(() => inputs.length === 1, "its first request");
+  assert.deepEqual(read, [{ id: "a", with: "person" }]);
+  // Run to measure what it adds, then on what is sent: each time told the same conversation.
+  assert.ok(passed.length > 0);
+  for (const one of passed) assert.deepEqual(one, { id: "a", with: "person" });
+  assert.deepEqual(inputs[0], ["Hi.", "(noted)"]);
+  // It only sent, so it is asked again in the same turn: the pass's note is sent once more, at the
+  // end, and the record never kept it.
+  answer("Hi.", sends("Hello."));
+  await until(() => inputs.length === 2, "its second request");
+  assert.deepEqual(
+    inputs[1]?.filter((line) => line === "(noted)"),
+    ["(noted)"],
+  );
+  assert.equal(inputs[1]?.at(-1), "(noted)");
+  answer("Hi.", says("Done."));
+  await looper.settled();
+  // Another party's conversation is said as theirs.
+  await looper.send("b", "Hello?");
+  await until(() => inputs.length === 3, "the other party's request");
+  assert.deepEqual(read.at(-1), { id: "b", with: "act_b" });
+  assert.deepEqual(passed.at(-1), { id: "b", with: "act_b" });
+});
+
+test("alone, what a pass adds to the input is held back from the record's room: a record past it is summarized, and the request stays within its budget", async () => {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  const added: Item = { type: "message", role: "assistant", content: "n".repeat(500_000) };
+  const { looper, raw, told, answer, summaries } = looperWith({
+    conversations: "alone",
+    pass: (input) => [added, ...input],
+  });
+  // Four long messages, each answered: by the fourth, the record and what the pass adds are over
+  // the budget together, though the record alone is not. (The record always keeps at least
+  // INPUT_BUDGET for its words, so this holds a record past that.)
+  for (let n = 1; n <= 4; n++) {
+    const text = `${n} ${"w".repeat(150_000)}`;
+    await looper.send("a", text);
+    await until(() => raw.length >= n, `request ${n}`);
+    if (n < 4) {
+      answer(text, says("Noted."));
+      await looper.settled();
+    }
+  }
+  // Its fourth request is made only once the record has been summarized to fit beside the pass.
+  await until(
+    () => raw.length === 4 && summaries.length > 0,
+    `a summary before the fourth request: ${summaries.length} summaries, ${raw.length} requests`,
+  );
+  const sent = raw.at(-1) as Item[];
+  assert.equal(bytes(sent[0]), bytes(added), "the pass's item is sent first");
+  assert.ok(
+    bytes(sent) + bytes(told.at(-1)?.instructions) < REQUEST_BUDGET,
+    `${bytes(sent) + bytes(told.at(-1)?.instructions)} bytes`,
+  );
 });

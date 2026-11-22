@@ -13,9 +13,11 @@ import {
 } from "@agentorg/interfaces";
 import {
   type Call,
+  type Conversed,
   createLooper,
   Entry,
   forget,
+  type Item,
   type Store as LooperStore,
   type Model,
   type Part,
@@ -163,13 +165,19 @@ export function createChats(options: {
    * `voice` is the agent's own instructions, which each conversation's own loop speaks as.
    */
   model: Model;
-  request(): Promise<{
+  /** Read once a turn; a conversation's own loop says which conversation. */
+  request(conversation?: Conversed): Promise<{
     instructions: string | readonly Part[];
     tools: Tool[];
     model?: string | undefined;
     voice?: string | undefined;
     blocks?: readonly Part[] | undefined;
   }>;
+  /**
+   * Run at each model request its loops make, with what it is about to send as its input: what
+   * it gives is sent. A conversation's own loop says which conversation.
+   */
+  pass?(input: Item[], conversation?: Conversed): Item[];
   /** Whether the agent is stopped when its conversations are first held. */
   stopped: boolean;
   /** A stopped turn: end what its calls left running (see the looper's `stopGroup`). */
@@ -229,6 +237,7 @@ export function createChats(options: {
       store: afterLoad(forLooper(store)),
       model: options.model,
       request: options.request,
+      ...(options.pass ? { pass: options.pass } : {}),
       out: {
         message(thread, message) {
           const held = byThread.get(thread);

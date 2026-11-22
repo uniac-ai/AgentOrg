@@ -4,7 +4,7 @@
  * Its host says where the records are kept and what the agent is told when no `settings` is bound.
  */
 import type { agentSettings, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
-import type { Model } from "@agentorg/looper";
+import type { Conversed, Model } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import { agentTools } from "./agents.js";
 import { createChats } from "./chats.js";
@@ -89,14 +89,21 @@ export function startEngine(
    * What a turn says and offers, and to which model, read afresh for each: none of it outlives it.
    * `leftOut` is what it couldn't offer, and why.
    */
-  const request = async () => {
+  const request = async (conversation?: Conversed) => {
     const settings = ctx.slots.settings.bound ? await ctx.slots.settings.call.get({}) : undefined;
     // It holds the plugins its settings name and reads what they give in one step, which no
     // other change comes between: a turn is never behind its settings, whether or not it heard
     // them change.
-    const given = settings
+    const held = settings
       ? await plugins.hold(settings.plugins ?? [])
       : { tools: plugins.tools(), blocks: plugins.blocks(), without: [] };
+    // For a conversation's own loop, what its capabilities add is passed with the conversation,
+    // so a pass can tell whose it is.
+    const given = conversation
+      ? (({ instructions, functions }) => ({ tools: functions, blocks: instructions }))(
+          plugins.pass({ loop: conversation, instructions: [], functions: [], input: [] }),
+        )
+      : held;
     // The agent's own instructions: who its main loop speaks as, with nothing of its skills.
     const voice = settings ? current(settings.instructions) : options.instructions();
     const skills = settings?.skills ?? [];
@@ -144,7 +151,16 @@ export function startEngine(
     store,
     stopped: options.stopped ?? false,
     model,
-    request: () => relayed(request()),
+    request: (conversation) => relayed(request(conversation)),
+    // Each request its loops make, passed through every capability's passes: what they change of
+    // its input is sent.
+    pass: (input, conversation) =>
+      plugins.pass({
+        ...(conversation ? { loop: conversation } : {}),
+        instructions: [],
+        functions: [],
+        input: [...input],
+      }).input,
     // Asked of every tools slot: one that ran nothing of the group ends nothing. A provider
     // whose tools@1 has no `stop` isn't asked.
     stopGroup: (group) =>
@@ -228,11 +244,12 @@ export function startEngine(
    * say they changed, with no turn to wait for: a plugin may have work of its own between turns.
    * One it can't hold it runs without, as its host says, and it is tried again at the next hold.
    */
+  const holdNamed = async () => {
+    if (!ctx.slots.settings.bound) return;
+    await plugins.hold((await ctx.slots.settings.call.get({})).plugins ?? []);
+  };
   const hold = () =>
-    void (async () => {
-      if (!ctx.slots.settings.bound) return;
-      await plugins.hold((await ctx.slots.settings.call.get({})).plugins ?? []);
-    })().catch((error: unknown) =>
+    void holdNamed().catch((error: unknown) =>
       ctx.log.warn("Its settings couldn't be read for its plugins.", {
         error: String(error),
       }),
@@ -251,6 +268,13 @@ export function startEngine(
     list: (input, { caller }) => chats.list(input, caller),
   });
   return {
+    /**
+     * Hold the plugins its settings name now, and settle once it does: what a caller that has just
+     * changed them waits for. Its settings unbound, it holds what it holds.
+     */
+    hold: holdNamed,
+    /** The model chosen for it, if one is: the provider's default if none. */
+    chosen,
     /** The models the agent can use, and the one chosen for it. */
     async models() {
       const [{ models }, current] = await Promise.all([ctx.slots.model.call.models({}), chosen()]);

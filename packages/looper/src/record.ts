@@ -1888,9 +1888,11 @@ export function createRecord(options: {
      * what it covers is sent as its summary, after the opening message and the messages it covers
      * that are still to answer, which are sent as they are, so the model can still answer them by
      * number. `over` says whether the exchanges were over that room before they were fitted.
+     * `reserve` is room held back beside it, in bytes: what a pass adds to the input.
      */
     async input(
       besides: unknown = {},
+      reserve = 0,
     ): Promise<{ items: Item[]; read: number; thread: string; over: boolean }> {
       const held = await load();
       const records = own(held);
@@ -1918,7 +1920,7 @@ export function createRecord(options: {
         exchanges.at(-1)?.push(...itemsOf(thread, record, asked));
       }
       putSummary();
-      const room = REQUEST_BUDGET - size(besides);
+      const room = REQUEST_BUDGET - size(besides) - reserve;
       const fitted = fit(exchanges, wordsBudget(exchanges, room), summary);
       return {
         items: withPictures(

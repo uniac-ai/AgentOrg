@@ -12,7 +12,7 @@
  * Nothing here gates: a capability mounts what it is given. What an agent may mount, and when a
  * person is asked, is the policy of the capability that offers it.
  */
-import type { Item, Part } from "@agentorg/looper";
+import type { Conversed, Item, Part } from "@agentorg/looper";
 import { type Context, type Fiber, Service } from "cordis";
 import type { Candidate } from "./tools.js";
 
@@ -53,12 +53,9 @@ export interface Held {
 
 /**
  * Which conversation's loop a request is for: its id, and whose conversation it is, `person` or
- * an Actor's id. Said once the looper tells it.
+ * an Actor's id. A request no conversation makes says none.
  */
-export interface Loop {
-  id: string;
-  with: string;
-}
+export type Loop = Conversed;
 
 /**
  * A request as a pass is given it: all of it may be changed, at every request. Keeping what the
