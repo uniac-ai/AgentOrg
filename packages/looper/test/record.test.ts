@@ -66,6 +66,55 @@ const user = (content: string) => ({
   items: [{ type: "message" as const, role: "user" as const, content }],
 });
 
+test("a message passed on is handed back and given to its new work in one write: while that write is stored, it never stands as handed back by all", async () => {
+  const s = store();
+  // The write that marks it passed on waits, as a slow store's would.
+  let release = () => {};
+  let holding = false;
+  const calls = {
+    ...s.calls,
+    set: async (input: { key: string; value: unknown }) => {
+      const to = (input.value as { to?: { back?: string }[] } | undefined)?.to;
+      if (!holding && to?.some((one) => one.back !== undefined)) {
+        holding = true;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return s.calls.set(input);
+    },
+  };
+  const thread = createThread(calls as never, log);
+  const record = createRecord({
+    id: "t",
+    follows: () => ["t"],
+    thread: () => thread,
+    waits: () => true,
+    left: () => false,
+  });
+  await record.append(user("Write the report."), { thread: "t" });
+  const passing = record.back(
+    1,
+    "Passed on.",
+    async () => {},
+    () => ({ work: "w", title: "The report" }),
+  );
+  for (let i = 0; i < 100 && !holding; i++) await new Promise((soon) => setImmediate(soon));
+  assert.ok(holding, "the write is held");
+  // While it is being stored, the new work holds it too: routing the thread now gives it nobody.
+  assert.deepEqual(await thread.returned(), []);
+  release();
+  const done = await passing;
+  assert.equal(done?.all, false);
+  const kept = [...s.values.values()].find(
+    (value) => (value as { role?: string }).role === "user",
+  ) as { to?: unknown };
+  assert.deepEqual(kept.to, [
+    { work: "t", place: 1, back: "Passed on." },
+    { work: "w", title: "The report" },
+  ]);
+});
+
 test("past the cap, the oldest calls are deleted and then the oldest pictures, never what was said", async () => {
   const s = store();
   const record = single(s.calls as never, { keep: 5, keepBytes: 1_000_000 });
