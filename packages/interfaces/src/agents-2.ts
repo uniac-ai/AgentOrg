@@ -3,12 +3,19 @@ import { z } from "zod";
 import { AgentStatus, HELD_MAX, HeldCapability } from "./agent-provider.js";
 import { Arguments, CapabilityDefinition, Mounting } from "./capability-provider.js";
 import { Id } from "./hub.js";
-import { ActorName, MountedCapability, Purpose } from "./manager.js";
+import {
+  ActorName,
+  agents,
+  MountedCapability,
+  ProviderName,
+  Purpose,
+  TemplateId,
+} from "./manager.js";
 import { CapabilityId } from "./units.js";
 
 const OnAgent = z.object({ agent: Id });
 
-/** An agent as the list shows it: its status is its provider's. */
+/** An agent as the list shows it, as in `agents@1`, but for the base and template it was built from. */
 const AgentEntry = z.object({
   agent: Id,
   name: ActorName,
@@ -28,15 +35,45 @@ const AgentEntry = z.object({
 export const MountedCapability2 = MountedCapability.extend({ parent: Id.optional() });
 
 /**
+ * A template: capabilities to mount together, each by its provider's name, its capability and the
+ * arguments it is mounted with, never a secret, which management refuses to keep. `from` is the
+ * template it was made from, for display only.
+ */
+export const Template2 = z.strictObject({
+  id: TemplateId,
+  title: z.string().min(1).max(128),
+  description: z.string().max(2000),
+  from: TemplateId.optional(),
+  capabilities: z
+    .array(
+      z.strictObject({ provider: ProviderName, capability: CapabilityId, arguments: Arguments }),
+    )
+    .max(64),
+});
+/**
+ * A template as the listing gives it. `shipped` is on one that came with the app: it can't be
+ * removed. A template saved under its id is listed in its place, and removing that one brings it
+ * back.
+ */
+export const ListedTemplate2 = Template2.extend({ shipped: z.literal(true).optional() });
+
+/** What `agents@1` gives of an agent, but its base, its template and its units. */
+const Detail = agents.methods.get.output.omit({ creatable: true, template: true, units: true });
+
+/**
  * `agents@2`: what management offers a person, an agent and any program on the Hub alike, each
  * answered the same, with no gating of its own: an agent is made empty, and is what is mounted on
- * it.
+ * it. Everything a page calls is here, so it reads nothing of `agents@1`, which is served beside
+ * this until nothing reads it.
  *
  * Management offers capabilities of its own, its templates, beside every provider's: `capabilities`
- * names management as their provider. Mounting a template mounts each capability it lists, with its
- * arguments, as its own, each naming the template's mount as `parent`; unmounting the template
- * takes them off. A template saved through `agents@1` is one from then on. `agents@1` is served
- * beside this until nothing reads it.
+ * names management as their provider. Mounting a template mounts each capability it lists, with
+ * its arguments, as its own, each naming the template's mount as `parent`; unmounting the template
+ * takes them off. Saving a template defines one.
+ *
+ * Calls carried over from `agents@1` as they are: `start`, `stop`, `activity`, `live`, `models`,
+ * `setModel`, `expose` and `unexpose`. Gone: `creatable`, `providers`, `units`, `check`, `addUnit`
+ * and `removeUnit`, which are mounts now.
  */
 export const agents2 = defineInterface({
   name: "agents",
@@ -55,12 +92,14 @@ export const agents2 = defineInterface({
     remove: method({ input: OnAgent, output: z.object({}) }),
     list: method({ input: z.object({}), output: z.object({ agents: z.array(AgentEntry) }) }),
     /**
-     * The agent, what was mounted on it through management, in the order it was, and, as
-     * `composition`, everything it is made of, as the agent says it, while it can be asked.
+     * What the agent is made of, in one read: what `agents@1` gives of it, but its base, its
+     * template and its units; what was mounted on it through management, in the order it was; and,
+     * as `composition`, everything it is made of, as the agent says it, while it can be asked.
+     * `capabilities` are those whose views a page draws, filled from what each mount made.
      */
     get: method({
       input: OnAgent,
-      output: AgentEntry.extend({
+      output: Detail.extend({
         mounted: z.array(MountedCapability2).max(HELD_MAX),
         composition: z.array(HeldCapability).max(HELD_MAX).optional(),
       }),
@@ -88,5 +127,22 @@ export const agents2 = defineInterface({
     }),
     /** Final: what was mounted is taken off, with all that came with it, through its provider. */
     unmount: method({ input: z.object({ agent: Id, mounted: Id }), output: z.object({}) }),
+    /** The templates, those that came with the app and those saved. */
+    templates: method({
+      input: z.object({}),
+      output: z.object({ templates: z.array(ListedTemplate2) }),
+    }),
+    /** Save a template under its id, replacing one there; refused with a secret among its arguments. */
+    saveTemplate: method({ input: Template2, output: z.object({}) }),
+    /** Remove a saved template; one that came with the app can't be. */
+    removeTemplate: method({ input: z.object({ id: TemplateId }), output: z.object({}) }),
+    start: agents.methods.start,
+    stop: agents.methods.stop,
+    activity: agents.methods.activity,
+    live: agents.methods.live,
+    models: agents.methods.models,
+    setModel: agents.methods.setModel,
+    expose: agents.methods.expose,
+    unexpose: agents.methods.unexpose,
   },
 });

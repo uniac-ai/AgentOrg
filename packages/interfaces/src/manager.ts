@@ -79,7 +79,7 @@ export const Stack = z.strictObject({
   template: TemplateId.optional(),
 });
 /** A provider in a template: by its Actor's name, so a template works on another home. */
-const ProviderName = z.string().min(1).max(128);
+export const ProviderName = z.string().min(1).max(128);
 /**
  * A saved stack of prefills: nothing in it is locked, and no secret is in it; management refuses a
  * value for a secret field. A required field with no value must still be filled at creation.

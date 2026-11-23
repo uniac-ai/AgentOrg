@@ -1191,25 +1191,52 @@ test("a provider's mount says what it made for management to wire: connections, 
   assert.equal(compiled(agents)["mount.output"]?.({ mounted: "mnt_1", made }), false);
 });
 
-test("agents@2 makes an agent empty and is what is mounted on it: no stack, units, check or template calls", () => {
+test("agents@2 makes an agent empty and is what is mounted on it, and carries every call a page makes beside units", () => {
   const a = compiled(agents2);
   assert.deepEqual(Object.keys(agents2.methods).sort(), [
+    "activity",
     "capabilities",
     "create",
+    "expose",
     "get",
     "list",
+    "live",
+    "models",
     "mount",
     "remove",
+    "removeTemplate",
+    "saveTemplate",
+    "setModel",
+    "start",
+    "stop",
+    "templates",
+    "unexpose",
     "unmount",
   ]);
+  // The calls carried over are agents@1's, as they are.
+  for (const name of [
+    "start",
+    "stop",
+    "activity",
+    "live",
+    "models",
+    "setModel",
+    "expose",
+    "unexpose",
+  ])
+    assert.equal(
+      agents2.methods[name as keyof typeof agents2.methods],
+      agents.methods[name as keyof typeof agents.methods],
+      name,
+    );
   assert.ok(a["create.input"]?.({ name: "Pat" }));
   assert.ok(a["create.input"]?.({ name: "Pat", purpose: "Keeps the docs." }));
-  const entry = {
-    agent: "act_1",
-    name: "Pat",
-    status: { state: "running" },
-    provider: "act_2",
-  };
+  // A stack or a template isn't how an agent is made.
+  assert.equal(
+    a["create.input"]?.({ stack: { base: { provider: "act_2", creatable: "assistant" } } }),
+    false,
+  );
+  const entry = { agent: "act_1", name: "Pat", status: { state: "running" }, provider: "act_2" };
   assert.ok(a["list.output"]?.({ agents: [entry] }));
   const template = {
     mounted: "mnt_t",
@@ -1225,20 +1252,40 @@ test("agents@2 makes an agent empty and is what is mounted on it: no stack, unit
     provider: "act_c",
     capability: "computer",
     title: "Computer",
-    arguments: { place: "this" },
+    arguments: { kind: "this" },
     by: "person",
     children: [],
     parent: "mnt_t",
   };
   const part = { name: "memory", title: "Memory", state: "mounted" };
-  assert.ok(a["get.output"]?.({ ...entry, mounted: [template, computer], composition: [part] }));
-  assert.ok(a["get.output"]?.({ ...entry, mounted: [] }));
-  assert.equal(a["get.output"]?.({ ...entry }), false, "what was mounted is always said");
-  // A stack or a template isn't how an agent is made.
+  // What the page reads of an agent, but its base, its template and its units.
+  const detail = {
+    ...entry,
+    instructions: "Be plain.",
+    skills: [{ name: "notes", description: "Notes." }],
+    mcp: [],
+    capabilities: [],
+  };
+  assert.ok(a["get.output"]?.({ ...detail, mounted: [template, computer], composition: [part] }));
+  assert.ok(a["get.output"]?.({ ...detail, mounted: [] }));
+  assert.equal(a["get.output"]?.({ ...detail }), false, "what was mounted is always said");
+  // A template is capabilities with their arguments; a shipped one says so.
+  const saved = {
+    id: "keeper",
+    title: "Keeper",
+    description: "Keeps things.",
+    capabilities: [
+      { provider: "Computers", capability: "computer", arguments: { kind: "this" } },
+      { provider: "Agents", capability: "memory", arguments: {} },
+    ],
+  };
+  assert.ok(a["saveTemplate.input"]?.(saved));
+  assert.ok(a["templates.output"]?.({ templates: [{ ...saved, shipped: true }] }));
   assert.equal(
-    a["create.input"]?.({ stack: { base: { provider: "act_2", creatable: "assistant" } } }),
+    a["saveTemplate.input"]?.({ ...saved, units: [{ provider: "Units", unit: "files" }] }),
     false,
   );
+  assert.ok(a["removeTemplate.input"]?.({ id: "keeper" }));
   assert.ok(a["mount.output"]?.({ mounted: "mnt_1" }));
   assert.ok(a["capabilities.output"]?.({ capabilities: [] }));
 });
