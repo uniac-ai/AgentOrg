@@ -293,6 +293,13 @@ export async function startPrograms(
       ["skills", "skills"],
     ] as const)
       await personSlot(slot, actorId, exported);
+    // Its agents@2, exposed to the person beside agents@1 until the page moves to it.
+    await call("grants", "expose", {
+      provider: actorId,
+      export: "agents2",
+      to: "person",
+      as: "agents2",
+    });
     return actorId;
   });
 
@@ -302,11 +309,13 @@ export async function startPrograms(
         await attempt("connecting a provider to management", () =>
           call("grants", "expose", { provider, export: "provider", to: management }),
         );
-    // The agents' executor makes capabilities too: management mounts them through it.
-    if (agents)
-      await attempt("connecting the agents' capabilities to management", () =>
-        call("grants", "expose", { provider: agents, export: "capabilities", to: management }),
-      );
+    // The agents' executor and the computer connector make capabilities too: management mounts
+    // them through each.
+    for (const provider of [agents, computer])
+      if (provider)
+        await attempt("connecting a provider's capabilities to management", () =>
+          call("grants", "expose", { provider, export: "capabilities", to: management }),
+        );
   }
 
   /**

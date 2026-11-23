@@ -4,6 +4,7 @@ import {
   agentProvider,
   agentSettings2,
   agents,
+  agents2,
   type ConnectionOrigin,
   type ConnectionStatus,
   capabilityProvider,
@@ -221,7 +222,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors, grants: hubGrants, bindings: hubBindings },
-    exports: { agents, connections, skills, settings: agentSettings2, tools },
+    exports: { agents, agents2, connections, skills, settings: agentSettings2, tools },
     log,
     start(ctx) {
       const hub = {
@@ -412,6 +413,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         serial: stacks.serial,
         providers: capabilityProviders,
         changed,
+        wire: (agent, record, root, made, skillOf) =>
+          stacks.wireMade(agent, record, root, made, skillOf),
+        unwire: (agent, record, root) => stacks.unwireMade(agent, record, root),
         reachControl: async (agent, reach) => {
           if (reach) await stacks.reachManagement(agent);
           else await stacks.unreachManagement(agent);
@@ -732,12 +736,19 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         removeUnit: (input) => stacks.serial(input.agent, () => stacks.removeUnit(input)),
         activity: (input) => activity.read(input),
         async live({ agent, instance, surface, mode }) {
-          const unit = recordOf(agent).units.find((one) => one.instance === instance);
-          if (!unit || unit.provider === options.actorId)
+          const record = recordOf(agent);
+          const unit = record.units.find((one) => one.instance === instance);
+          // A capability mounted through management, by its mount: what its provider made is
+          // opened through the provider's `live`, under the id it gave the mount, as a unit's is.
+          const mount = record.mounted.find((one) => one.mounted === instance && one.made);
+          const made = unit
+            ? { provider: unit.provider, instance: unit.providerInstance }
+            : mount && { provider: mount.provider, instance: mount.providerMounted };
+          if (!made || made.provider === options.actorId)
             throw new Refused("unknown", `${agent} has nothing like that to open live.`);
-          const provider = unitProviders().find((one) => one.actor === unit.provider);
+          const provider = unitProviders().find((one) => one.actor === made.provider);
           if (!provider) throw new Refused("not_connected", "Its provider can't be reached now.");
-          return provider.call.live({ instance: unit.providerInstance, surface, mode });
+          return provider.call.live({ instance: made.instance, surface, mode });
         },
 
         async list() {
@@ -847,6 +858,84 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         remove: ({ agent }) => removeWhole(agent),
         mount: (input, { caller }) => mounts.mount(input, caller),
         unmount: (input) => mounts.unmount(input),
+      });
+
+      /**
+       * `agents@2`: an agent made empty and what is mounted on it, each call answered the same,
+       * whoever calls. What it carries over from `agents@1` is answered by the same handlers.
+       */
+      const first = personHandlers.agents as Record<
+        string,
+        (input: unknown, info: { caller: string }) => Promise<unknown>
+      >;
+      /** The `agents@1` handler of a method, which `agents@2` answers the same. */
+      const handlerOf = (method: string) => {
+        const handler = first[method];
+        if (!handler) throw new Refused("unimplemented", `agents@1 has no ${method}.`);
+        return handler;
+      };
+      const carried = (method: string) => (input: unknown, info: { caller: string }) =>
+        handlerOf(method)(input, info) as never;
+      ctx.exports.agents2.implement({
+        async create({ name, purpose }, { caller }) {
+          // On the agents' executor: what every agent holds, and nothing mounted.
+          const [base] = (
+            (await handlerOf("creatable")({}, { caller })) as {
+              creatables: { provider: string; id: string }[];
+            }
+          ).creatables;
+          if (!base) throw new Refused("not_connected", "No agent provider is connected.");
+          return stacks.create(
+            {
+              stack: { base: { provider: base.provider, creatable: base.id }, units: [] },
+              name,
+              ...(purpose ? { purpose } : {}),
+            } as never,
+            caller,
+          );
+        },
+        remove: ({ agent }) => removeWhole(agent),
+        async list(input, info) {
+          const { agents: listed } = (await handlerOf("list")(input, info)) as {
+            agents: Record<string, unknown>[];
+          };
+          return {
+            agents: listed.map(({ creatable: _, template: __, ...one }) => one) as never,
+          };
+        },
+        async get(input, info) {
+          const {
+            creatable: _,
+            template: __,
+            units: ___,
+            mounted = [],
+            ...rest
+          } = (await handlerOf("get")(input, info)) as Record<string, unknown> & {
+            mounted?: unknown[];
+          };
+          return { ...rest, mounted } as never;
+        },
+        capabilities: carried("capabilities"),
+        mount: (input, { caller }) => mounts.mount(input, caller),
+        unmount: (input) => mounts.unmount(input),
+        // Templates as capabilities come in the change after this.
+        templates: () => {
+          throw new Refused("unimplemented", "Management can't list templates on agents@2 yet.");
+        },
+        saveTemplate: () => {
+          throw new Refused("unimplemented", "Management can't save templates on agents@2 yet.");
+        },
+        removeTemplate: () => {
+          throw new Refused("unimplemented", "Management can't remove templates on agents@2 yet.");
+        },
+        start: carried("start"),
+        stop: carried("stop"),
+        activity: carried("activity"),
+        live: carried("live"),
+        models: carried("models"),
+        setModel: carried("setModel"),
+        expose: carried("expose"),
+        unexpose: carried("unexpose"),
       });
 
       personOnly(ctx.exports.connections, "connections").implement({
