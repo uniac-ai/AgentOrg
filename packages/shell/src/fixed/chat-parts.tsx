@@ -21,7 +21,7 @@ import {
   sortableKeyboardCoordinates,
   useSortable,
 } from "@dnd-kit/sortable";
-import { CircleAlertIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, MoreHorizontalIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button.tsx";
@@ -31,6 +31,13 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "../ui/context-menu.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { type ListedChat, useAllChats } from "./all-chats.tsx";
 import { useChats } from "./chats.tsx";
 import { useEvery } from "./data.ts";
@@ -60,28 +67,45 @@ export function timeOf(at: string, now = new Date()): string {
 export const CHAT_ROWS = "flex flex-col gap-1";
 
 /**
+ * While a row's buttons are shown, in a list that gives its rows buttons (`RowActs`): the row is
+ * pointed at, the keyboard is on it or on one of them, or the menu its "⋯" opens is open.
+ */
+const ACTS_SHOWN = {
+  /** The row's tint stays while the pointer is on its buttons, which lie over it. */
+  tint: "group-hover/chat:bg-[var(--hover)]",
+  /** The time goes as the buttons come in over its place. */
+  time: "transition-opacity duration-100 group-hover/chat:opacity-0 group-has-focus-visible/chat:opacity-0 group-data-menu/chat:opacity-0 motion-reduce:transition-none",
+  /** The buttons come in from the right; unshown, a press where they are is the row's. */
+  buttons:
+    "pointer-events-none translate-x-1.5 opacity-0 transition-[opacity,translate] duration-100 ease-out group-hover/chat:pointer-events-auto group-hover/chat:translate-x-0 group-hover/chat:opacity-100 group-has-focus-visible/chat:pointer-events-auto group-has-focus-visible/chat:translate-x-0 group-has-focus-visible/chat:opacity-100 group-data-menu/chat:pointer-events-auto group-data-menu/chat:translate-x-0 group-data-menu/chat:opacity-100 motion-reduce:translate-x-0 motion-reduce:transition-none",
+};
+
+/**
  * One conversation in a list: the agent, and its latest message or its problem. One between two
  * agents is shown by the agent it is with, where the other's page lists it. The one open beside the
- * list is marked.
+ * list is marked. `handle` is what a list that drags its rows picks this one up by.
  */
 export function ChatRow({
   chat,
   agent = chat.agent,
   current = false,
   onOpen,
+  handle,
 }: {
   chat: ListedChat;
   agent?: ListedChat["agent"];
   current?: boolean;
   onOpen(): void;
+  handle?: React.ComponentProps<"button">;
 }) {
   const fresh = chat.unread;
   return (
     <button
+      {...handle}
       type="button"
       aria-current={current ? "true" : undefined}
       onClick={onOpen}
-      className={`flex h-16 w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
+      className={`flex h-16 w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : `hover:bg-[var(--hover)] ${ACTS_SHOWN.tint}`}`}
     >
       <Face agent={agent} size={40} plain />
       <span className="min-w-0 flex-1">
@@ -97,8 +121,12 @@ export function ChatRow({
           )}
         </span>
       </span>
-      <span className="flex shrink-0 flex-col items-end gap-1.5 self-start pt-3">
-        <time dateTime={chat.at} className="text-xs whitespace-nowrap text-muted-foreground">
+      {/* At least as wide as a row's two buttons, which are shown in the time's place. */}
+      <span className="flex min-w-12.5 shrink-0 flex-col items-end gap-1.5 self-start pt-3">
+        <time
+          dateTime={chat.at}
+          className={`text-xs whitespace-nowrap text-muted-foreground ${ACTS_SHOWN.time}`}
+        >
           {timeOf(chat.at)}
         </time>
         <span
@@ -160,26 +188,100 @@ function ChatTile({
   );
 }
 
-/** A conversation's menu, on its tile or its row: Pin, or Unpin. */
-function PinMenu({
-  pinned,
-  onPin,
-  children,
-}: {
-  pinned: boolean;
-  onPin(): void;
-  children: React.ReactElement;
-}) {
+/** Something to do with a conversation, as a menu's item says it. */
+interface Act {
+  name: string;
+  icon: React.ReactNode;
+  run(): void;
+}
+
+/**
+ * What can be done with a conversation. `pin` pins it, or unpins a pinned one. `menu` is what its
+ * menus list, the one a right-click opens and the one its row's "⋯" opens: an act put in it is in
+ * both.
+ */
+function actsOf(pinned: boolean, onPin: () => void) {
+  const pin: Act = pinned
+    ? { name: "Unpin", icon: <PinOffIcon />, run: onPin }
+    : { name: "Pin", icon: <PinIcon />, run: onPin };
+  return { pin, menu: [pin] };
+}
+
+/** Acts as a menu's items, in either kind of menu. */
+const itemsOf = (acts: Act[], Item: typeof ContextMenuItem | typeof DropdownMenuItem) =>
+  acts.map(({ name, icon, run }) => (
+    <Item key={name} onSelect={run}>
+      {icon}
+      {name}
+    </Item>
+  ));
+
+/** A conversation's menu, on its tile or its row. */
+function ChatMenu({ acts, children }: { acts: Act[]; children: React.ReactElement }) {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={onPin}>
-          {pinned ? <PinOffIcon /> : <PinIcon />}
-          {pinned ? "Unpin" : "Pin"}
-        </ContextMenuItem>
-      </ContextMenuContent>
+      <ContextMenuContent>{itemsOf(acts, ContextMenuItem)}</ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/**
+ * A row's buttons, over its time: one that pins the conversation, and "⋯", which opens the menu a
+ * right-click on the row opens. They are shown as `ACTS_SHOWN` says, and without motion for a
+ * person who asks for less of it. Shown or not, the keyboard reaches them after the row. Pointed at
+ * for a second, each says what it is.
+ */
+function RowActs({
+  name,
+  pin,
+  menu,
+  open,
+  setOpen,
+}: {
+  /** The agent's name, which each button's own name ends with. */
+  name: string;
+  pin: Act;
+  menu: Act[];
+  open: boolean;
+  setOpen(open: boolean): void;
+}) {
+  const BUTTON = "rounded-full text-muted-foreground";
+  return (
+    <span className={`absolute top-2 right-2.5 flex gap-0.5 ${ACTS_SHOWN.buttons}`}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`${pin.name} ${name}`}
+            className={BUTTON}
+            onClick={pin.run}
+          >
+            {pin.icon}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{pin.name}</TooltipContent>
+      </Tooltip>
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`More for ${name}`}
+                className={BUTTON}
+              >
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>More</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end">{itemsOf(menu, DropdownMenuItem)}</DropdownMenuContent>
+      </DropdownMenu>
+    </span>
   );
 }
 
@@ -210,7 +312,7 @@ function PinnedTile({ chat, current, onOpen, onPin }: Listed) {
     isDragging,
   } = useSortable({ id: chat.agent.id });
   return (
-    <PinMenu pinned onPin={onPin}>
+    <ChatMenu acts={actsOf(true, onPin).menu}>
       <li
         ref={setNodeRef}
         data-chat={chat.agent.id}
@@ -228,24 +330,33 @@ function PinnedTile({ chat, current, onOpen, onPin }: Listed) {
           handle={{ ...attributes, ref: setActivatorNodeRef }}
         />
       </li>
-    </PinMenu>
+    </ChatMenu>
   );
 }
 
-/** A conversation's row, which is dragged up onto the tiles. */
+/**
+ * A conversation's row, which is dragged up onto the tiles, with its buttons. It is picked up by
+ * the row itself: a press on a button is the button's alone.
+ */
 function ListedRow({ chat, current, onOpen, onPin }: Listed) {
   const { listeners, setNodeRef, isDragging } = useDraggable({ id: chat.agent.id });
+  const { pin, menu } = actsOf(false, onPin);
+  /** Whether the menu its "⋯" opens is open. */
+  const [open, setOpen] = useState(false);
   return (
-    <PinMenu pinned={false} onPin={onPin}>
+    <ChatMenu acts={menu}>
       <li
         ref={setNodeRef}
         data-chat={chat.agent.id}
-        className={isDragging ? SLOT : ""}
-        {...listeners}
+        data-menu={open ? "" : undefined}
+        className={`group/chat relative ${isDragging ? SLOT : ""}`}
       >
-        <ChatRow chat={chat} current={current} onOpen={onOpen} />
+        <ChatRow chat={chat} current={current} onOpen={onOpen} handle={{ ...listeners }} />
+        {!isDragging && (
+          <RowActs name={chat.agent.name} pin={pin} menu={menu} open={open} setOpen={setOpen} />
+        )}
       </li>
-    </PinMenu>
+    </ChatMenu>
   );
 }
 
@@ -303,7 +414,8 @@ const underPointer: Modifier = ({ activatorEvent, draggingNodeRect, transform })
  * Your conversations. The pinned ones come first, a tile each in a grid, in the order they were
  * put in; the rest follow, newest first, a row each. `current` is the agent of the one open beside
  * them. A right-click on one, a long press, or Shift+F10 while it has the keyboard, opens its menu:
- * Pin, or Unpin.
+ * Pin, or Unpin. A row pointed at, or with the keyboard on it, shows two buttons at its end: one
+ * that pins it, and "⋯", which opens the same menu.
  *
  * With a mouse they are dragged: a tile to another place among the tiles, a row onto the tiles,
  * which pins it there, and a tile down off them, which unpins it. What follows the pointer is the
