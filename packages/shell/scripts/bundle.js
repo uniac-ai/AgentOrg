@@ -2,9 +2,10 @@
 // The build writes both; the notices' test bundles again, unwritten, to check the notices against it.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-export const at = (path) => new URL(`../${path}`, import.meta.url).pathname;
+export const at = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 
 /** `dist/app.js`, with esbuild's record of every file that went into it. */
 export const bundleApp = (options = {}) =>
