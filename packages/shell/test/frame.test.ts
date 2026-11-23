@@ -68,8 +68,8 @@ test(
       ["0px", "0px"],
     );
     // Four places. Search is 44 square, 4 from the strip's end, in a strip 52 tall. The others are
-    // 44 wide and a little less tall, 36, in a row 56 tall: Chat and Team 4 apart from 8 in,
-    // Settings 8 from its end. Each of those holds an icon of 22.
+    // 44 wide and a little less tall, 36, in a row 56 tall, 12 from the window's foot: Chat and
+    // Team 4 apart from 8 in, Settings 8 from its end. Each of those holds an icon of 22.
     assert.deepEqual(
       await bar(page)
         .getByRole("button")
@@ -77,9 +77,9 @@ test(
       ["Search", "Chat", "Team", "Settings"],
     );
     assert.deepEqual(await boxOf(place(page, "Search")), [252, 4, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Chat")), [8, 854, 44, 36]);
-    assert.deepEqual(await boxOf(place(page, "Team")), [56, 854, 44, 36]);
-    assert.deepEqual(await boxOf(place(page, "Settings")), [248, 854, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Chat")), [8, 852, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [56, 852, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [248, 852, 44, 36]);
     // The strip's start is empty, for a window's own buttons: nothing to press or read is there.
     assert.equal(
       await page.evaluate(() =>
@@ -190,7 +190,7 @@ test(
       Promise.all(one.getAnimations().map((moving) => moving.finished)),
     );
     const [x, y, width, height] = await boxOf(label(page));
-    assert.ok(y + height <= 854 - 6, "over the place");
+    assert.ok(y + height <= 852 - 6, "over the place");
     assert.ok(Math.abs(x + width / 2 - 78) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
     await page.mouse.move(700, 450, { steps: 4 });
@@ -221,15 +221,19 @@ test(
       return new URL(page.url()).hash;
     };
     /** A gesture is over once nothing has come of it for a moment. */
-    const ended = () => page.waitForTimeout(300);
+    const ended = () => page.waitForTimeout(600);
     // Over the list: down is the list's own.
     await page.mouse.move(150, 450);
     await page.mouse.wheel(0, 120);
     assert.equal(await after(), "#/chat");
-    await page.mouse.wheel(120, 0);
+    // One gesture is one place, however far it runs on, and even turned back: its scrolls come
+    // one on another, so they are sent at once.
+    await page.evaluate(() => {
+      const over = document.elementFromPoint(150, 450) as Element;
+      for (const deltaX of [60, 200, -400])
+        over.dispatchEvent(new WheelEvent("wheel", { deltaX, bubbles: true, cancelable: true }));
+    });
     await page.waitForURL(/#\/team$/);
-    // The same gesture running on, even turned back, changes nothing more.
-    await page.mouse.wheel(-120, 0);
     assert.equal(await after(), "#/team");
     await ended();
     // Over the row of places, back: and before the first place there is none.

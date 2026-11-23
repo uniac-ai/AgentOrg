@@ -1,8 +1,8 @@
 // The page on the ground, in a real browser over the stand-in gateway: wider than a phone, its list
 // at the left on the ground itself, between the frame's strip and its row of places, and what it
-// shows in a card beside it, 6 px from the window's edges, with a 1 px line, 14 px corners and a
-// slight shadow. Narrower than both side by side, the card is alone between the strip and the row.
-// On a phone there is no card.
+// shows in a card beside it, 6 px from the window's top and side and 12 from its foot, with a 1 px
+// line, 14 px corners and a slight shadow. Narrower than both side by side, the card is alone
+// between the strip and the row. On a phone there is no card.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
@@ -50,13 +50,13 @@ const light = (page: Page) =>
   });
 
 test(
-  "wide, the list is on the ground at the left, 300 wide under the frame's rows, and the conversation is a card beside it, 6 from the window's edges, with a thin line, 14 px corners and a slight shadow, in dark and in light",
+  "wide, the list is on the ground at the left, 300 wide under the frame's rows, and the conversation is a card beside it, 6 from the window's top and side and 12 from its foot, with a thin line, 14 px corners and a slight shadow, in dark and in light",
   withGateway(async (gateway) => {
     const page = await open(gateway, 1440, 900, "#/chat");
     assert.deepEqual(await frame(page), {
       list: [0, 0, 300, 900],
       listFill: "rgba(0, 0, 0, 0)",
-      card: [300, 6, 1134, 888],
+      card: [300, 6, 1134, 882],
       bar: [0, 0, 300, 900],
       barLine: "0px",
       line: "1px rgba(255, 255, 255, 0.08)",

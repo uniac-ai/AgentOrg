@@ -63,7 +63,7 @@ test(
       else {
         const box = await boxOf(notice);
         assert.equal(box.x, SIDE + 12, `${width}: beside the row of places`);
-        assert.equal(box.y + box.height, 900 - 8, `${width}: in the row's height`);
+        assert.equal(box.y + box.height, 900 - 10, `${width}: level with the row's places`);
       }
       assert.equal(
         await notice.getByRole("link", { name: "Manage usage" }).getAttribute("href"),

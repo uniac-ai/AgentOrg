@@ -226,7 +226,8 @@ function Places() {
         </Place>
       </div>
       <Search open={searching} onOpenChange={search} query={query} onQuery={setQuery} />
-      <div className="flex h-[var(--foot)] shrink-0 items-center justify-between px-2 phone:contents">
+      {/* The row's places end 12 from the window's foot, level with a card beside them. */}
+      <div className="flex h-[var(--foot)] shrink-0 items-end justify-between px-2 pb-3 phone:contents">
         {/* The places, side by side from the row's start. */}
         <div className="flex gap-1 phone:contents">
           <Place
@@ -317,7 +318,7 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
   if (!notice) return null;
   const at = open
     ? "bottom-[calc(var(--foot)+6px)] left-3 max-w-[calc(var(--side)-24px)]"
-    : "bottom-2 left-[calc(var(--side)+12px)] max-w-[calc(100%-var(--side)-12px-var(--inset)-var(--tab-open)-var(--gap))] split:bottom-[calc(var(--foot)+6px)] split:left-3 split:max-w-[calc(var(--side)-24px)]";
+    : "bottom-2.5 left-[calc(var(--side)+12px)] max-w-[calc(100%-var(--side)-12px-var(--inset)-var(--tab-open)-var(--gap))] split:bottom-[calc(var(--foot)+6px)] split:left-3 split:max-w-[calc(var(--side)-24px)]";
   return (
     <div
       role="status"
