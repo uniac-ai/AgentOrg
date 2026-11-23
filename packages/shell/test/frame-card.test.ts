@@ -30,7 +30,10 @@ const frame = (page: Page) =>
         .slice(0, 4)
         .map((n) => Math.round((n as number) * 100) / 100);
     const list = document.querySelector('main section[aria-label="Chats"]');
-    const card = document.querySelector('main section[aria-label^="Conversation with"]');
+    // The card the conversation is in.
+    const card =
+      document.querySelector('main section[aria-label^="Conversation with"]')?.parentElement ??
+      null;
     const style = card && getComputedStyle(card);
     const bar = document.querySelector('nav[aria-label="Main"]') as Element;
     return {

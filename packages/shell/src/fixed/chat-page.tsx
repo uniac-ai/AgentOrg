@@ -1,9 +1,9 @@
 // The chat page: a place of its own for messages. Your conversations at the left, newest first, and
 // the open one beside them in a card at the page's full height, drawn as the chat draws it. Where
 // there is no room for both, the list comes first and a conversation takes its place, with a way
-// back. Wide, an agent's computer opens in a card of its own beside the conversation's rather than
-// over the page, and its details open there from its face: one of the two at a time, the one
-// opened last. The list is your conversations only: at the first start, before any has begun, it
+// back. Wide, an agent's computer opens in the same card, beside the conversation and past a line,
+// rather than over the page, and its details open there from its face: one of the two at a time,
+// the one opened last. The list is your conversations only: at the first start, before any has begun, it
 // says it has none, and the first agent's conversation is open, empty, wide and on a phone. The
 // plus at the end of the list's label picks who to message, and opens that agent's conversation,
 // empty if none has begun.
@@ -93,33 +93,36 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
         </ListPanel>
       )}
       {open && watched && (
-        <section
-          aria-label={`Conversation with ${watched.entry.name}`}
-          className={`flex flex-1 flex-col ${PAGE_CARD}`}
-        >
-          <Thread
-            key={open}
-            agent={{ id: open, name: watched.entry.name, tone: watched.now.tone }}
-            chat={chats.find((chat) => chat.agent.id === open)}
-            page={
-              split
-                ? { details }
-                : {
-                    back: () => {
-                      setBack(true);
-                      go({ screen: "chat" });
-                    },
-                  }
-            }
-          />
-        </section>
-      )}
-      {split && (
-        <Beside
-          room={beyond}
-          details={detailed && details ? open : undefined}
-          onClose={() => setDetailed(false)}
-        />
+        // One card: the conversation, and past a line what is open beside it.
+        <div className={`flex flex-1 ${PAGE_CARD}`}>
+          <section
+            aria-label={`Conversation with ${watched.entry.name}`}
+            className="flex min-w-0 flex-1 flex-col overflow-hidden"
+          >
+            <Thread
+              key={open}
+              agent={{ id: open, name: watched.entry.name, tone: watched.now.tone }}
+              chat={chats.find((chat) => chat.agent.id === open)}
+              page={
+                split
+                  ? { details }
+                  : {
+                      back: () => {
+                        setBack(true);
+                        go({ screen: "chat" });
+                      },
+                    }
+              }
+            />
+          </section>
+          {split && (
+            <Beside
+              room={beyond}
+              details={detailed && details ? open : undefined}
+              onClose={() => setDetailed(false)}
+            />
+          )}
+        </div>
       )}
       <Compose open={composing} onOpenChange={setComposing} />
     </div>
@@ -128,7 +131,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
 
 /** The list beside what is chosen: `--side` in styles.css. */
 const LIST = 300;
-/** A conversation's own room beside its sidebar, 468, with the 12 beside and between the cards. */
+/** A conversation's own room beside what is open with it, with the 6 beside the card and its line. */
 const CONVERSATION = 480;
 /** The computer's sidebar: what the page has beyond what it keeps, within 480 to 720. */
 const COMPUTER = [480, 720] as const;
@@ -136,11 +139,11 @@ const COMPUTER = [480, 720] as const;
 const DETAILS = 360;
 
 /**
- * What is open beside the conversation, in a card of its own: an agent's details, on a ground a
- * step off the conversation's, or else the open computer. It grows from the page's right edge as it
- * opens, the conversation narrowing with it, while what it shows slides in and fades in; it closes
- * the same way back, and keeps what it shows until it has gone. One takes the other's place as it
- * is, at its own width. Its times are the page's window times.
+ * What is open beside the conversation, in the conversation's card, on its ground and past a line
+ * of the card's own: an agent's details, or else the open computer. It grows from the card's right
+ * edge as it opens, the conversation narrowing with it, while what it shows slides in and fades in;
+ * it closes the same way back, and keeps what it shows until it has gone. One takes the other's
+ * place as it is, at its own width. Its times are the page's window times.
  */
 function Beside({
   room,
@@ -194,17 +197,14 @@ function Beside({
       data-beside={open ? "open" : "closed"}
       style={{ width: open ? wide : 0 }}
       className={cn(
-        "shrink-0 transition-[width,margin] motion-reduce:duration-0",
-        PAGE_CARD,
-        "wide:ml-0",
-        drawn.detailed && "bg-[var(--aside)]",
-        !open && "wide:mr-0 border-transparent",
+        "shrink-0 overflow-hidden border-l transition-[width] motion-reduce:duration-0",
+        !open && "border-transparent",
         motion,
       )}
     >
-      {/* As wide as the card is inside its line, while the card grows around it. */}
+      {/* As wide as it is past its line, while it grows around it. */}
       <div
-        style={{ width: wide - 2 }}
+        style={{ width: wide - 1 }}
         className={`flex h-full p-3 transition-[opacity,translate] motion-reduce:duration-0 ${open ? "translate-x-0 opacity-100" : "translate-x-6 opacity-0"} ${motion}`}
       >
         {drawn.detailed ? (
