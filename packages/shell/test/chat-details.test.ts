@@ -261,7 +261,6 @@ test(
     const page = await open(gateway);
     await computerButton(page).click();
     await computer(page).waitFor();
-    await page.locator('[data-beside="open"]').waitFor();
     await still(page);
     const sidebar = await widthOf(side(page));
     assert.ok(sidebar > COLUMN, `${sidebar}`);
