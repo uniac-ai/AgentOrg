@@ -114,6 +114,8 @@ export function startEngine(
     // Its own words: who its main loop speaks as, with nothing of its skills.
     const voice = instructions.find((part) => part.owner === WORDS)?.text ?? "";
     const fitted = offered(given.functions);
+    // What each part of it added is said of what was offered, not what was left out.
+    plugins.offered?.(fitted.tools.map(({ name }) => name));
     const leftOut = [...given.leftOut, ...fitted.leftOut];
     report(leftOut);
     // Its capabilities' sections: a worker is told them after its own words and its skills, the

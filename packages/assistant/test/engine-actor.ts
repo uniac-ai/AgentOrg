@@ -69,6 +69,7 @@ function everyAgent(
     pass: (request) => (context ? context.pass(request) : request),
     turn: async (loop) => (await ready).turn(loop),
     service: (name) => context?.service?.(name),
+    offered: (names) => context?.offered?.(names),
   };
   return { plugins, ready };
 }

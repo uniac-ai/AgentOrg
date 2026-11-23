@@ -36,9 +36,11 @@ export interface Capability<A = unknown> {
 }
 
 /**
- * A capability as the agent holds it: `mounted`, doing its part; `down`, mounted and saying it
- * can't now; `failed`, not mounted, and the agent runs without it. `detail` says why. `parent` is
- * the capability that mounted it, none for one mounted from outside the agent.
+ * A part of what the agent is made of: a capability it holds, or, with `kind: "plugin"`, a plugin a
+ * capability loaded directly, with what that plugin loads in turn. `mounted`, doing its part;
+ * `down`, there and saying it can't now, or waiting for a service it needs; `failed`, not there,
+ * and the agent runs without it. `detail` says why. `parent` is the capability that mounted it, or
+ * that loaded the plugin; none for one mounted from outside the agent.
  */
 export interface Held {
   name: string;
@@ -46,11 +48,12 @@ export interface Held {
   state: "mounted" | "down" | "failed";
   detail?: string;
   parent?: string;
+  kind?: "plugin";
   /**
-   * What it added to the last request, in characters: to the instructions, and to the functions.
-   * Not kept yet.
+   * What it added to the agent's latest request: the functions offered, by the names they were
+   * offered under, and what it told the model, by each section's name.
    */
-  added?: { instructions: number; functions: number };
+  added?: { functions: string[]; sections: string[] };
 }
 
 /**
@@ -148,17 +151,53 @@ export interface Host {
 
 /** Where Cordis keeps, on a service as a capability reaches it, the context it was reached from. */
 const CALLER = Symbol.for("cordis.caller");
+
 /**
- * The capability a service is called by, and the context to tie what it registers to: the one the
- * agent holds that the caller is part of. A capability's own inner components, and a service it
- * provides, calling it, are that capability's. Called on the service, as `ctx.store.get(…)`.
+ * Whether a fiber is a plugin a capability loaded: one with a name of its own that is neither a
+ * capability the agent holds nor a service. One with no name, as a block `ctx.inject` runs with an
+ * arrow, is part of what loaded it. A named function given to `ctx.inject` reads as a plugin of
+ * that name: Cordis says nothing public that tells the two apart.
  */
-export function callerOf(fibers: Host["fibers"], service: object): { name: string; ctx: Context } {
+export const isPlugin = (fibers: Host["fibers"], fiber: Fiber) =>
+  Boolean(fiber.runtime?.name) &&
+  !fibers.has(fiber) &&
+  !((fiber.runtime?.callback as { prototype?: unknown } | undefined)?.prototype instanceof Service);
+
+/** The most characters a part's name has: what a capability's id may. */
+const NAME_MAX = 64;
+/**
+ * A plugin part's name: its own name as a slug, and the number Cordis gave its fiber, which is the
+ * same while it runs: unique in the agent.
+ */
+export function pluginName(fiber: Fiber): string {
+  const number = `-${fiber.uid ?? 0}`;
+  const slug =
+    (fiber.runtime?.name ?? "")
+      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^[^a-z]+|-+$/g, "") || "plugin";
+  return `${slug.slice(0, NAME_MAX - number.length).replace(/-+$/, "")}${number}`;
+}
+
+/**
+ * The capability a service is called by, the context to tie what it registers to, and the part of
+ * the agent that calls it (`part`): the plugin that capability loaded, if the call is from inside
+ * one, else the capability. A capability's own inner components, and a service it provides,
+ * calling it, are that capability's. Called on the service, as `ctx.store.get(…)`.
+ */
+export function callerOf(
+  fibers: Host["fibers"],
+  service: object,
+): { name: string; ctx: Context; part: string } {
   const reached = service as { [CALLER]?: Context; ctx: Context };
   const ctx = reached[CALLER] ?? reached.ctx;
+  let plugin: Fiber | undefined;
   for (let fiber = ctx.fiber; ; fiber = fiber.parent.fiber) {
     const name = fibers.get(fiber);
-    if (name !== undefined) return { name, ctx };
+    if (name !== undefined) return { name, ctx, part: plugin ? pluginName(plugin) : name };
+    // The outermost plugin under the capability is the part: what it loads is part of it.
+    if (isPlugin(fibers, fiber)) plugin = fiber;
     if (fiber === fiber.parent.fiber) break;
   }
   throw new Error("Only a plugin the agent holds may use its services.");

@@ -441,7 +441,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           const mounted = plugins
             ?.list()
             .slice(0, HELD_MAX)
-            .map(({ added: _, detail: why, ...one }) => ({
+            .map(({ detail: why, ...one }) => ({
               ...one,
               ...(why ? { detail: head(why, DETAIL_MAX) } : {}),
             }));

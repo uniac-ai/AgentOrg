@@ -20,14 +20,16 @@ import {
   type Heard,
   type Held,
   type Host,
+  isPlugin,
   type Life,
   type Loop,
   type Pass,
   Passes,
+  pluginName,
   type Request,
   type Turn,
 } from "./substrate.js";
-import type { Candidate } from "./tools.js";
+import { type Candidate, offeredName } from "./tools.js";
 
 export { Agent, type Section } from "./bundled.js";
 export {
@@ -44,6 +46,20 @@ export {
 
 /** Cordis's `FiberState.ACTIVE`: a const enum it declares, which this build can't name. */
 const ACTIVE = 2 as FiberState;
+/**
+ * A plugin part's state, by its fiber's: Cordis's pending (waiting for a service it needs),
+ * loading, active and failed. One unloading or disposed is going, and isn't said.
+ */
+const PLUGIN_STATES = new Map<FiberState, Pick<Held, "state" | "detail">>([
+  [0 as FiberState, { state: "down", detail: "It waits for a service it needs." }],
+  [1 as FiberState, { state: "down", detail: "It is loading." }],
+  [ACTIVE, { state: "mounted" }],
+  [3 as FiberState, { state: "failed", detail: "It couldn't be loaded." }],
+]);
+/** The most functions, and sections, a part's `added` lists: what the contract takes. */
+const ADDED_FUNCTIONS = 128;
+const ADDED_SECTIONS = 64;
+const ADDED_NAME = 64;
 
 /** A plugin, as an agent's settings name it: a capability its executor carries. */
 export type AgentPlugin<C = unknown> = Capability<C>;
@@ -100,6 +116,8 @@ export interface AgentPlugins {
   turn(loop?: Loop): Promise<void>;
   /** A service its capabilities provide now, by name, for its host's own use. */
   service?(name: string): unknown;
+  /** The functions its latest request offered, by name: what each part's `added` lists of its own. */
+  offered?(names: string[]): void;
 }
 
 /** An agent's own context, as its executor holds it: what its engine reads, and more. */
@@ -166,8 +184,12 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
       /** Each capability by name, in the order they were mounted. */
       const entries = new Map<string, Entry>();
       /** Each that couldn't be mounted, and why, until it is tried again. */
-      const failed = new Map<string, Held & { kind: Entry["kind"] }>();
+      const failed = new Map<string, Held & { from: Entry["kind"] }>();
       const passes: { owner: string; pass: Pass; order: number }[] = [];
+      /** What each part added to the latest request, by its name. */
+      let added = new Map<string, { functions: string[]; sections: string[] }>();
+      /** The functions the latest request offered, once there was one. */
+      let offeredNow: Set<string> | undefined;
       const turns: { owner: string; turn: Turn }[] = [];
       /** The plugins its settings named last, in the order they named them. */
       let namedOrder: string[] = [];
@@ -281,7 +303,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
           title: entry.title,
           state: "failed",
           detail,
-          kind: entry.kind,
+          from: entry.kind,
           ...(entry.parent === undefined ? {} : { parent: entry.parent }),
         });
       const NEEDS = "It needs a service none of the agent's capabilities provides.";
@@ -326,18 +348,39 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
           throw new Error(detail);
         },
         unmount: (name) => drop(name, true),
-        list: () => [
-          ...[...entries.values()]
-            .filter((one) => one.loading.state === ACTIVE)
-            .map(({ capability, title, parent, said }) => ({
-              name: capability.name,
-              title,
-              state: said?.state ?? ("mounted" as const),
-              ...(said?.detail ? { detail: said.detail } : {}),
-              ...(parent === undefined ? {} : { parent }),
-            })),
-          ...[...failed.values()].map(({ kind: _, ...held }) => held),
-        ],
+        list: () => {
+          const loaded = pluginsOf();
+          return [
+            ...[...entries.values()]
+              .filter((one) => one.loading.state === ACTIVE)
+              .flatMap(({ capability, title, parent, said, fiber }): Held[] => [
+                {
+                  name: capability.name,
+                  title,
+                  state: said?.state ?? ("mounted" as const),
+                  ...(said?.detail ? { detail: said.detail } : {}),
+                  ...(parent === undefined ? {} : { parent }),
+                  ...addedBy(capability.name),
+                },
+                ...((fiber && loaded.get(fiber)) ?? []).flatMap((plugin): Held[] => {
+                  const state = PLUGIN_STATES.get(plugin.state);
+                  if (!state) return [];
+                  const name = pluginName(plugin);
+                  return [
+                    {
+                      name,
+                      title: plugin.runtime?.name ?? name,
+                      ...state,
+                      parent: capability.name,
+                      kind: "plugin",
+                      ...addedBy(name),
+                    },
+                  ];
+                }),
+              ]),
+            ...[...failed.values()].map(({ from: _, ...held }) => held),
+          ];
+        },
         signal(name) {
           const entry = entries.get(name);
           if (!entry) throw new Error(`The agent holds no ${name}.`);
@@ -406,7 +449,16 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         const ordered = [...passes].sort(
           (a, b) => a.order - b.order || order.indexOf(a.owner) - order.indexOf(b.owner),
         );
-        for (const { owner, pass } of ordered)
+        // What each part added, by what gave it: the part that registered it through `tools` or
+        // `prompt`, else the capability whose pass added it.
+        const now = new Map<string, { functions: string[]; sections: string[] }>();
+        const into = (part: string) => {
+          const one = now.get(part) ?? { functions: [], sections: [] };
+          now.set(part, one);
+          return one;
+        };
+        for (const { owner, pass } of ordered) {
+          const [functions, told] = [request.functions.length, request.instructions.length];
           try {
             pass(request);
           } catch (error) {
@@ -416,7 +468,51 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
               error: messageOf(error),
             });
           }
+          for (const fn of request.functions.slice(functions))
+            into(made.partOf(fn) ?? owner).functions.push(offeredName(fn.slot, fn.name));
+          for (const part of request.instructions.slice(told))
+            into(made.partOf(part) ?? owner).sections.push(made.sectionOf(part) ?? part.owner);
+        }
+        added = now;
         return request;
+      };
+      /** What a part added to the latest request, of what that request offered; none before one. */
+      const addedBy = (part: string): Pick<Held, "added"> => {
+        if (!offeredNow) return {};
+        const offered = offeredNow;
+        const one = added.get(part);
+        const names = (list: string[]) => [
+          ...new Set(list.map((name) => name.slice(0, ADDED_NAME))),
+        ];
+        return {
+          added: {
+            functions: names((one?.functions ?? []).filter((name) => offered.has(name))).slice(
+              0,
+              ADDED_FUNCTIONS,
+            ),
+            sections: names(one?.sections ?? []).slice(0, ADDED_SECTIONS),
+          },
+        };
+      };
+      /**
+       * The plugins each of the agent's capabilities loaded, under the capability's fiber, in the
+       * order Cordis numbered them. One under another plugin is part of that one, and isn't here.
+       */
+      const pluginsOf = () => {
+        const loaded = new Map<Fiber, Fiber[]>();
+        for (const runtime of root.registry.values())
+          for (const fiber of runtime.fibers) {
+            if (!isPlugin(fibers, fiber)) continue;
+            for (let up = fiber.parent.fiber; ; up = up.parent.fiber) {
+              if (fibers.has(up)) {
+                loaded.set(up, [...(loaded.get(up) ?? []), fiber]);
+                break;
+              }
+              if (isPlugin(fibers, up) || up === up.parent.fiber) break;
+            }
+          }
+        for (const list of loaded.values()) list.sort((a, b) => (a.uid ?? 0) - (b.uid ?? 0));
+        return loaded;
       };
       /** What every capability reads once a turn, one after another, in the order they hold. */
       const turn = async (loop?: Loop) => {
@@ -440,7 +536,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
       const hold = async (named: Named[]): Promise<Without[]> => {
         namedOrder = named.map(({ name }) => name);
         const without = new Map<string, Without>();
-        for (const [name, held] of failed) if (held.kind === "named") failed.delete(name);
+        for (const [name, held] of failed) if (held.from === "named") failed.delete(name);
         for (const { name } of named)
           if (!byName.has(name)) {
             without.set(name, { name, why: "not carried" });
@@ -449,7 +545,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
               title: name,
               state: "failed",
               detail: "Its executor doesn't carry it.",
-              kind: "named",
+              from: "named",
             });
           }
         const wanted = new Map(
@@ -511,6 +607,9 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         pass: run,
         turn,
         service: (name) => own.get(name),
+        offered: (names) => {
+          offeredNow = new Set(names);
+        },
         mount: (capability, args) =>
           inTurn(async () => {
             const { name } = capability;
