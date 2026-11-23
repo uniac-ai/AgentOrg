@@ -803,6 +803,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             units,
             capabilities,
             mounted: mounts.tree(record, held),
+            // Everything it is made of, as the agent says it, while it can be asked.
+            ...(held ? { composition: held } : {}),
           };
         },
         start: ({ agent }) => startAgent(agent),

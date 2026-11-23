@@ -25,9 +25,11 @@ import { Computer } from "@agentorg/computer-sdk";
 import { HubState, PERSON } from "@agentorg/hub";
 import { agents } from "@agentorg/interfaces";
 import { connect } from "@agentorg/sdk/client";
+import type { AgentPlugin } from "assistant/plugins";
 import { completed, fakeOpenAI, type Script } from "chatgpt/fake-openai";
+import type { Context } from "cordis";
 import WebSocket from "ws";
-import { type App, startApp } from "../src/index.ts";
+import { type App, type ProgramsOptions, startApp } from "../src/index.ts";
 
 type Reply = {
   id?: number;
@@ -183,6 +185,7 @@ async function open(
   firstRun: {
     assistant?: boolean;
     log?: (line: string) => void;
+    carried?: ProgramsOptions["carried"];
   } = {},
 ) {
   const home = newFolder("agentorg-programs-");
@@ -198,6 +201,7 @@ async function open(
         ...(fetch ? { fetch } : {}),
         // Made only where a test asks for it, so no other test's agents change.
         assistant: firstRun.assistant ?? false,
+        ...(firstRun.carried ? { carried: firstRun.carried } : {}),
       },
     });
     const person = personOf(app, home);
@@ -1446,4 +1450,116 @@ test("the person, the agent itself and another program each mount memory on a ru
   await person.call("agents", "remove", { agent });
   const { agents: left } = await person.call<{ agents: { agent: string }[] }>("agents", "list");
   assert.ok(!left.some((one) => one.agent === agent));
+});
+
+test("the person's get and the agent's capability_list give one tree of what the agent is made of: a capability, the child it mounted and the plugin it loaded, with what each added", async (t) => {
+  const fake = await fakeOpenAI();
+  const inputs: { type: string; call_id?: string; output?: string }[][] = [];
+  const answers: object[][] = [];
+  // A capability that loads a plugin, which gives the model a function, and mounts a child.
+  function nestWatcher(ctx: Context) {
+    ctx.tools.register({
+      name: "look",
+      description: "Look in the nest.",
+      parameters: { type: "object" },
+      run: async () => ({ output: "Empty.", ok: true }),
+    });
+  }
+  const nest: AgentPlugin = {
+    name: "nest",
+    title: "Nest",
+    inject: ["capabilities", "tools"],
+    async apply(ctx: Context) {
+      ctx.plugin(nestWatcher);
+      await ctx.capabilities.mount({
+        name: "nest-child",
+        title: "Nest child",
+        inject: [],
+        apply() {},
+      });
+    },
+  };
+  const carried = [
+    {
+      plugin: nest,
+      offer: {
+        id: "nest",
+        title: "Nest",
+        description: "A nest, for a test.",
+        arguments: { type: "object" as const, properties: {} },
+      },
+    },
+  ];
+  const s = await open(
+    t,
+    undefined,
+    async (request) => {
+      if (!request.url.endsWith("/responses")) return fake.handle(request);
+      const body = (await request.clone().json()) as { input: (typeof inputs)[number] };
+      inputs.push(body.input);
+      fake.script({ events: [completed((answers.shift() ?? []) as never)] });
+      return fake.handle(request);
+    },
+    { carried },
+  );
+  const { person, ran } = await s.start();
+  const { agents: executor } = ran as NonNullable<typeof ran>;
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  const agent = await createAssistant(person, "Nester");
+  for (const capability of ["control", "nest"]) {
+    const made = await person.call<{ mounted?: string }>("agents", "mount", {
+      agent,
+      provider: executor,
+      capability,
+      arguments: {},
+    });
+    assert.ok(made.mounted, capability);
+  }
+  const slot = await chatSlot(person, agent);
+  await until(
+    () =>
+      person.call(slot, "list").then(
+        () => true,
+        () => false,
+      ),
+    "the chat to be exposed",
+  );
+  // The agent reads its own tree through its control.
+  answers.push([
+    { type: "function_call", call_id: "l1", name: "control__capability_list", arguments: "{}" },
+  ]);
+  await person.call(slot, "send", { text: "What are you made of?" });
+  await until(
+    () =>
+      inputs.flat().some((item) => item.type === "function_call_output" && item.call_id === "l1"),
+    "the agent to read its tree",
+  );
+  await until(
+    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  const output = inputs
+    .flat()
+    .find((item) => item.type === "function_call_output" && item.call_id === "l1")?.output;
+  type Part = { name: string; parent?: string; kind?: string; added?: { functions: string[] } };
+  const byAgent = (JSON.parse(output ?? "{}") as { composition?: Part[] }).composition;
+  const byPerson = (await person.call<{ composition?: Part[] }>("agents", "get", { agent }))
+    .composition;
+  // One tree, whoever reads it.
+  assert.deepEqual(byAgent, byPerson);
+  const parts = new Map((byPerson ?? []).map((one) => [one.name.replace(/-\d+$/, "-#"), one]));
+  assert.deepEqual(
+    [...parts.keys()].filter((name) => name.startsWith("nest") || name === "control"),
+    ["control", "nest", "nest-watcher-#", "nest-child"],
+  );
+  assert.equal(parts.get("nest-watcher-#")?.kind, "plugin");
+  assert.equal(parts.get("nest-watcher-#")?.parent, "nest");
+  assert.equal(parts.get("nest-child")?.parent, "nest");
+  assert.equal(parts.get("nest-child")?.kind, undefined);
+  // What the plugin gave the model is its own, offered under its capability's name.
+  assert.deepEqual(parts.get("nest-watcher-#")?.added?.functions, ["nest__look"]);
+  assert.ok(parts.get("control")?.added?.functions.includes("control__capability_list"));
 });
