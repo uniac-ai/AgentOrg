@@ -38,7 +38,9 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
 };
 /** The page's list of your conversations. */
 const list = (page: Page) => page.getByRole("main").getByRole("region", { name: "Chats" });
-const rows = (page: Page) => list(page).getByRole("list", { name: "Chats" }).getByRole("button");
+/** The rows themselves: each has buttons of its own beside it. */
+const rows = (page: Page) =>
+  list(page).getByRole("list", { name: "Chats" }).locator(":scope > li > button");
 const row = (page: Page, name: string) => rows(page).filter({ hasText: name });
 /** The agents the rows name, top to bottom: each row's face comes first, then its name. */
 const names = async (page: Page) =>
