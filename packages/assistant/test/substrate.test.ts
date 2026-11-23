@@ -220,7 +220,7 @@ test("passes run in the order their capabilities were mounted, are told which lo
   order.length = 0;
   warnings.length = 0;
   const loop = { id: "person", with: "person" };
-  const passed = plugins.pass({ loop, instructions: [], functions: [], input: [] });
+  const passed = plugins.pass({ loop, instructions: [], functions: [], input: [], leftOut: [] });
   assert.deepEqual(order, ["second:person", "first:person"]);
   assert.deepEqual(
     passed.instructions.map(({ owner }) => owner),

@@ -749,10 +749,18 @@ test("it offers the capabilities it carries, mounts one its agent's settings nam
       state,
       ...(parent ? { parent } : {}),
     }));
-  const bundled = ["agent", "store", "tools", "prompt", "connector", "model"].map((name) => ({
-    name,
-    state: "mounted",
-  }));
+  // What every agent holds, then its instructions and skills, which its settings name first.
+  const bundled = [
+    "agent",
+    "store",
+    "tools",
+    "prompt",
+    "connector",
+    "model",
+    "connections",
+    "instructions",
+    "skills",
+  ].map((name) => ({ name, state: "mounted" }));
   assert.deepEqual(await held(), [...bundled, { name: "notes", state: "mounted" }]);
   // One that can't be mounted is said with why, and nothing is mounted.
   room = false;
