@@ -759,6 +759,7 @@ const groups = GROUPS.flatMap((group) => {
   if (last < 0) return [];
   return [
     {
+      ...group,
       steps: group.steps
         .slice(0, last + 1)
         .map((step) => (only.includes(step.n) ? step : { ...step, measured: false })),
