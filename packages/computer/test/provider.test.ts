@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Computer } from "@agentorg/computer-sdk";
 import { Hub, listen, PERSON } from "@agentorg/hub";
-import { capability, tools, Unit, unitProvider } from "@agentorg/interfaces";
+import { capability, capabilityProvider, tools, Unit, unitProvider } from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type WebSocket from "ws";
@@ -410,17 +410,21 @@ async function setup(
   leaving.push(() => provider.current.close());
   const asks = hub.state.createActor(PERSON, {
     name: "Management stand-in",
-    bindings: [{ slot: "units", provider: made.actorId, export: "provider" }],
+    bindings: [
+      { slot: "units", provider: made.actorId, export: "provider" },
+      { slot: "capabilities", provider: made.actorId, export: "capabilities" },
+    ],
   });
   const caller = await connect({
     hubUrl: server.url,
     actorId: asks.actorId,
     credential: asks.credential as string,
-    slots: { units: unitProvider },
+    slots: { units: unitProvider, capabilities: capabilityProvider },
   });
   leaving.push(() => caller.close());
-  await until(() => caller.slots.units.bound);
+  await until(() => caller.slots.units.bound && caller.slots.capabilities.bound);
   const units = caller.slots.units.call;
+  const capabilities = caller.slots.capabilities.call;
   const apply = (values: Record<string, unknown>, secrets: Record<string, string> = {}) =>
     units.apply({
       unit: "computer",
@@ -479,6 +483,7 @@ async function setup(
   return {
     hub,
     units,
+    capabilities,
     apply,
     local,
     asAgent,
@@ -2099,6 +2104,32 @@ test("where no provider that makes is there, the form states this computer, refu
   assert.deepEqual(made.capability?.rows?.where, [{ label: "Computer", value: "This computer" }]);
 });
 
+test("the computer capability's description is fixed, whatever this machine has now: how it stands, and why a part can't be had, are in its arguments", async (t) => {
+  const { capabilities, data } = await setup(t, { service: false, makes: false });
+  const here = await standIn(t);
+  here.info.machine = "Studio Mac";
+  here.thisComputer.capabilities.push(
+    { capability: "files", ready: true },
+    { capability: "screen", ready: true },
+  );
+  recordHere(t, data, here);
+  const listed = async () => {
+    const offered = (await capabilities.capabilities({})).capabilities;
+    const computer = offered.find((one) => one.id === "computer");
+    return { description: computer?.description, line: computer?.arguments.description };
+  };
+  const withScreen = await listed();
+  assert.equal(withScreen.description, "Where it runs commands, keeps files and acts on a screen.");
+  assert.match(String(withScreen.line), /^Studio Mac, whole: your files and apps and its screen\./);
+  // Its screen gone, and the machine named otherwise: the same description, another line.
+  here.info.machine = "Other Mac";
+  here.thisComputer.capabilities = [{ capability: "files", ready: true }];
+  const withoutScreen = await listed();
+  assert.equal(withoutScreen.description, withScreen.description);
+  assert.notEqual(withoutScreen.line, withScreen.line);
+  assert.match(String(withoutScreen.line), /^Other Mac, whole: your files and apps\./);
+});
+
 test("from a home with one agent on this computer and one in a container, the form asks which while the container is there, a change keeps it one, and once its agent is gone the form states this computer", async (t) => {
   const { units, data, workspace, dir, hub, restart, connected } = await setup(t, {
     service: false,
@@ -2670,4 +2701,122 @@ test("each skill's files are those its unit gives, and each text is among those 
       );
     }
   }
+});
+
+test("the computer and web are capabilities too: each unit's form as its arguments, the token secret; mounted on an agent, a computer makes what its unit makes, with the same functions, skills and views, and comes off with no restart", async (t) => {
+  const { hub, units, capabilities, apply, local, asAgent, connected } = await setup(t);
+  const { capabilities: offered } = await capabilities.capabilities({});
+  assert.deepEqual(
+    offered.map(({ id, title }) => [id, title]),
+    [
+      ["computer", "Computer"],
+      ["web", "Web search"],
+    ],
+  );
+  const computer = offered[0];
+  const properties = computer?.arguments.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.token?.secret, true);
+  assert.deepEqual(properties.kind?.enum, ["this", "new"]);
+  assert.match(String(properties.workspace?.description), /Only when kind is this\./);
+  assert.equal(properties.access?.default, "terminal");
+
+  // What the unit makes, and what the agent is offered through it.
+  const byUnit = await apply(local("terminal"));
+  await connected(byUnit.instance);
+  const listedByUnit = (await (await asAgent(byUnit.connections[0]?.connection as string)).list({}))
+    .tools;
+  await units.remove({ instance: byUnit.instance });
+
+  // The same, mounted on a running agent.
+  const agent = hub.state.createActor(PERSON, { name: "Scout" }).actorId;
+  const mounted = await capabilities.mount({
+    agent,
+    capability: "computer",
+    arguments: local("terminal"),
+  });
+  assert.ok("mounted" in mounted, JSON.stringify(mounted));
+  const { made } = mounted;
+  assert.deepEqual(
+    made?.connections?.map(({ slot }) => slot),
+    byUnit.connections.map(({ slot }) => slot),
+  );
+  assert.deepEqual(made?.skills, [
+    { name: "terminal", files: ["SKILL.md"] },
+    { name: "files", files: ["SKILL.md"] },
+    { name: "computer", files: ["SKILL.md", "ALWAYS.md"] },
+  ]);
+  assert.deepEqual(
+    Object.keys(made?.capability?.rows ?? {}).sort(),
+    Object.keys(byUnit.capability?.rows ?? {}).sort(),
+  );
+  // The person's capability: its title, and the surfaces and views the unit gives with these
+  // answers, what it always gives and then what "terminal" adds, in that order.
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  const terminal = form(unit, "access")?.options?.find((one) => one.value === "terminal") as
+    | { adds?: { surfaces?: unknown[] } }
+    | undefined;
+  const gives = unit?.gives as { surfaces?: unknown[]; views?: unknown[] } | undefined;
+  assert.equal(made?.capability?.title, "Computer");
+  assert.deepEqual(made?.capability?.surfaces, [
+    ...(gives?.surfaces ?? []),
+    ...(terminal?.adds?.surfaces ?? []),
+  ]);
+  assert.deepEqual(made?.capability?.views, gives?.views);
+  assert.deepEqual(
+    made?.capability?.surfaces?.map(({ surface }) => surface),
+    ["load", "presence", "terminal", "files"],
+  );
+  await connected(mounted.mounted);
+  // Byte for byte: the same functions, names, descriptions and arguments.
+  const listedByMount = (
+    await (await asAgent(made?.connections?.[0]?.connection as string)).list({})
+  ).tools;
+  assert.deepEqual(listedByMount, listedByUnit);
+  // A skill's files are read by the capability, as by the unit.
+  assert.deepEqual(
+    await capabilities.skill({ capability: "computer", name: "computer", path: "ALWAYS.md" }),
+    await units.skill({ unit: "computer", name: "computer", path: "ALWAYS.md" }),
+  );
+
+  // Taken off with no restart: its Actors close, and it is gone.
+  await assert.rejects(
+    capabilities.unmount({ agent: "act_other", mounted: mounted.mounted }),
+    (error: Error) => error instanceof Refused && error.code === "unknown",
+  );
+  await capabilities.unmount({ agent, mounted: mounted.mounted });
+  for (const { connection } of made?.connections ?? [])
+    assert.equal(hub.state.actor(connection).state, "closed");
+  assert.equal(hub.state.actor(made?.capability?.actor as string).state, "closed");
+  await assert.rejects(
+    capabilities.unmount({ agent, mounted: mounted.mounted }),
+    (error: Error) => error instanceof Refused && error.code === "unknown",
+  );
+});
+
+test("a capability's arguments that don't fit give each problem, at its path, and make nothing; web is mounted with its skill", async (t) => {
+  const { hub, capabilities } = await setup(t, { webUrl: "http://127.0.0.1:9/mcp" });
+  const agent = hub.state.createActor(PERSON, { name: "Scout" }).actorId;
+  const away = await capabilities.mount({
+    agent,
+    capability: "computer",
+    arguments: { kind: "new", made: "remote", address: "https://far.example/" },
+  });
+  assert.ok("problems" in away);
+  assert.ok(
+    away.problems.some(({ path }) => path === "/token"),
+    JSON.stringify(away),
+  );
+  const web = await capabilities.mount({ agent, capability: "web", arguments: {} });
+  assert.ok("mounted" in web, JSON.stringify(web));
+  assert.deepEqual(
+    web.made?.connections?.map(({ slot }) => slot),
+    ["web"],
+  );
+  assert.deepEqual(web.made?.skills, [{ name: "web-research", files: ["SKILL.md"] }]);
+  assert.equal(web.made?.capability, undefined);
+  await capabilities.unmount({ agent, mounted: web.mounted });
+  await assert.rejects(
+    capabilities.mount({ agent, capability: "printer", arguments: {} }),
+    (error: Error) => error instanceof Refused && error.code === "unknown",
+  );
 });
