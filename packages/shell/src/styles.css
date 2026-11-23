@@ -44,6 +44,15 @@
     }
   }
 }
+/* The list put away and looked at: the pointer is near the window's left edge, or the keyboard is
+   in the frame's left side, which lies over the page for as long. */
+@custom-variant peek {
+  @container app (width >= 56rem) {
+    &:where([data-shell][data-collapsed][data-peek] *) {
+      @slot;
+    }
+  }
+}
 @custom-variant narrow {
   @container app (width < 68.75rem) {
     @slot;

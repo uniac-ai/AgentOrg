@@ -2,19 +2,43 @@
 // and what it shows in cards. Wider than a phone both leave the frame's rows their room, the strip
 // along the top and the row of places along the foot.
 import { PlusIcon } from "lucide-react";
+import { cn } from "../cn.ts";
 import { Button } from "../ui/button.tsx";
 
 /**
- * The page's list, under the strip and over the row of places. Beside what is chosen it is as wide
- * as the frame's side; alone, as the page. A sideways scroll over it changes the place: the frame
- * finds it by its mark.
+ * How a part of the frame's left side goes with the list while it is put away: off the window's
+ * left edge, and back where it was, over the page, for as long as it is looked at. The list is
+ * over all the page draws then, and the frame's own parts over the list.
  */
-export function ListPanel({ label, children }: { label: string; children: React.ReactNode }) {
+export const SIDE_PART =
+  "away:-translate-x-[calc(var(--side)+24px)] away:transition-[translate] away:duration-200 away:ease-out peek:translate-x-0 motion-reduce:duration-0";
+
+/**
+ * The page's list, under the strip and over the row of places. Beside what is chosen it is as wide
+ * as the frame's side; alone, as the page. Put away from `beside` what is chosen, it is off the
+ * window's left edge, and looked at it lies over the page at the frame's side, on the ground, with
+ * a line and a shadow at its end. A sideways scroll over it changes the place: the frame finds it
+ * by its mark.
+ */
+export function ListPanel({
+  label,
+  beside,
+  children,
+}: {
+  label: string;
+  /** Something is chosen, and shown where there is room beside the list. */
+  beside: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <section
       aria-label={label}
       data-list
-      className="flex min-h-0 min-w-0 flex-1 flex-col wide:pt-[var(--strip)] wide:pb-[var(--foot)] split:w-[var(--side)] split:flex-none"
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col wide:pt-[var(--strip)] wide:pb-[var(--foot)] split:w-[var(--side)] split:flex-none",
+        beside &&
+          `away:absolute away:inset-y-0 away:left-0 away:z-30 away:w-[var(--side)] away:flex-none away:border-r away:bg-[var(--ground)] peek:shadow-2xl ${SIDE_PART}`,
+      )}
     >
       {children}
     </section>
@@ -49,7 +73,9 @@ export function ListHead({ label, add, onAdd }: { label: string; add: string; on
  * A card: what the page shows, on the canvas, with a thin line, 14 px corners and a slight shadow.
  * Beside the list it is 6 from the window's top and side and from the next card, and 12 from its
  * foot, level with the row of places; alone, it is between the strip and that row. With the list
- * put away it is under the strip, as wide as the page, and 12 from the window's foot. On a phone it has the page to its edges, with no line or corners.
+ * put away it has the window, 6 from each edge, and starts under a window's own buttons where the
+ * window draws them over the page (`--corner`). On a phone it has the page to its edges, with no
+ * line or corners.
  */
 export const PAGE_CARD =
-  "min-w-0 overflow-hidden bg-[var(--canvas)] wide:mx-1.5 wide:mt-[var(--strip)] wide:mb-[var(--foot)] wide:rounded-xl wide:border wide:shadow-[var(--card-shadow)] split:mt-1.5 split:mb-3 split:ml-0 away:mb-3";
+  "min-w-0 overflow-hidden bg-[var(--canvas)] wide:mx-1.5 wide:mt-[var(--strip)] wide:mb-[var(--foot)] wide:rounded-xl wide:border wide:shadow-[var(--card-shadow)] split:mt-1.5 split:mb-3 split:ml-0 away:mt-[calc(6px+min(var(--corner),46px))] away:mb-1.5";
