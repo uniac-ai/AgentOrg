@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "n
 import { join } from "node:path";
 import {
   agentProvider,
-  agentSettings,
+  agentSettings2,
   agents,
   type ConnectionOrigin,
   type ConnectionStatus,
@@ -26,8 +26,9 @@ import { createActivity } from "./activity.js";
 import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createMounts } from "./mounts.js";
+import { treeOf } from "./settings.js";
 import { createSkills, readSkillFolder } from "./skills.js";
-import { type AgentRecord, createStacks, pluginsOf, Records, slotFieldOf } from "./stack.js";
+import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
 
 type Origin = z.infer<typeof ConnectionOrigin>;
 type Agents = Slot<typeof agentProvider>["call"];
@@ -148,7 +149,7 @@ function withoutLater(parsed: unknown) {
 
 /**
  * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1` and, as `settings`,
- * `agent.settings@1`. It keeps only what the Hub can't know. A provider is connected by exposing
+ * `agent.settings@2`. It keeps only what the Hub can't know. A provider is connected by exposing
  * its export to this Actor: the Hub's slots are the list of them, and what is exposed to an agent
  * is the Hub's bindings. No status is stored, and no secret reaches it to keep.
  */
@@ -220,7 +221,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors, grants: hubGrants, bindings: hubBindings },
-    exports: { agents, connections, skills, settings: agentSettings, tools },
+    exports: { agents, connections, skills, settings: agentSettings2, tools },
     log,
     start(ctx) {
       const hub = {
@@ -403,6 +404,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       });
 
       const mounts = createMounts({
+        self: options.actorId,
         records,
         save,
         log,
@@ -512,7 +514,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             return void (await stacks.reachAgents((reached) => reached === actor));
           // A unit provider that is back may serve newer skills than were copied here.
           if (actor && unitProviders().some((one) => one.actor === actor)) void refreshing();
-          await Promise.all([stacks.holdOwns(actor), stacks.reachHeld(actor)]);
+          await Promise.all([
+            stacks.holdOwns(actor),
+            stacks.reachHeld(actor),
+            stacks.reachControl(actor),
+          ]);
           await stacks.reachAgents(
             (reached, holder) => !actor || reached === actor || holder === actor,
           );
@@ -653,19 +659,17 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           // A message from its maker says it is from its id: this says whose that is, while the
           // maker is here. Its name is the maker's own words, kept to one line.
           const maker = parent && records.agents[parent.agent] ? parent : undefined;
-          return {
-            instructions: [
-              instructions,
-              ...(purpose ? [`What you are for: ${purpose}`] : []),
-              ...(maker
-                ? [
-                    `You were made by the agent ${JSON.stringify(maker.name.replace(/\s+/g, " ").trim())} (${maker.agent}). Its messages to you say they are from ${maker.agent}.`,
-                  ]
-                : []),
-            ].join("\n\n"),
-            skills: names.flatMap((name) => library.entry(name) ?? []),
-            plugins: pluginsOf(record),
-          };
+          const told = [
+            instructions,
+            ...(purpose ? [`What you are for: ${purpose}`] : []),
+            ...(maker
+              ? [
+                  `You were made by the agent ${JSON.stringify(maker.name.replace(/\s+/g, " ").trim())} (${maker.agent}). Its messages to you say they are from ${maker.agent}.`,
+                ]
+              : []),
+          ].join("\n\n");
+          const exposed = names.flatMap((name) => library.entry(name) ?? []);
+          return { mounted: treeOf(record, options.actorId, told, exposed) };
         },
         skill: ({ name, path: file }, { caller }) => {
           const text = settingsOf(caller).skills.includes(name)
@@ -677,11 +681,21 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
-      personOnly(ctx.exports.agents, "agents", ["get", "mount", "unmount"]).implement({
-        // Not built yet: the capability providers' definitions come with the change after.
-        capabilities: () => {
-          throw new Refused("unimplemented", "Management can't list capabilities yet.");
-        },
+      personOnly(ctx.exports.agents, "agents", [
+        "get",
+        "capabilities",
+        "mount",
+        "unmount",
+      ]).implement({
+        capabilities: async () => ({
+          capabilities: (
+            await fromEach(capabilityProviders(), async ({ actor, call }) =>
+              (
+                await call.capabilities({})
+              ).capabilities.map((one) => ({ ...one, provider: actor })),
+            )
+          ).flat(),
+        }),
         creatable: async () => ({
           creatables: (
             await fromEach(agentProviders(), async ({ actor, call }) =>

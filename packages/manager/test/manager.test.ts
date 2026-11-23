@@ -19,6 +19,7 @@ import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   agentProvider,
   agentSettings,
+  agentSettings2,
   agents,
   capability,
   capabilityProvider,
@@ -48,6 +49,18 @@ const refused = (code: string) => (error: unknown) =>
   error instanceof Refused && error.code === code;
 const SKILL = (name: string, text = "Use it well.") =>
   `---\nname: ${name}\ndescription: The ${name} skill.\n---\n${text}\n`;
+/** An agent's settings, read: its tree, and of it what management tells it and the rest it holds. */
+const settingsRead = async (channel: { slots: { settings: Slot<typeof agentSettings2> } }) => {
+  const { mounted } = await channel.slots.settings.call.get({});
+  const own = (name: string) => mounted.find((root) => root.mounted === name)?.arguments ?? {};
+  return {
+    mounted,
+    instructions: own("instructions").text as string,
+    skills: own("skills").skills as { name: string; description: string }[],
+    /** Its roots but management's own. */
+    held: mounted.filter((root) => root.provider !== undefined),
+  };
+};
 
 const MODELS = [
   { id: "small", name: "Small" },
@@ -558,7 +571,7 @@ async function setup(t: test.TestContext) {
             hubUrl: server.url,
             actorId,
             credential: credential as string,
-            slots: { settings: agentSettings },
+            slots: { settings: agentSettings2 },
             // What a `working` agent holds of itself it serves as these.
             exports: { chat, capability, tools },
             start(own) {
@@ -914,21 +927,7 @@ async function setup(t: test.TestContext) {
     ).connection;
   /** The agent's own channel, to read its settings as it would. */
   const agentChannel = (agent: string) =>
-    running.get(agent) as unknown as {
-      slots: {
-        settings: {
-          bound: boolean;
-          call: {
-            get(input: object): Promise<{
-              instructions: string;
-              skills: { name: string }[];
-              plugins?: { name: string; capability: string }[];
-            }>;
-            skill(input: { name: string; path?: string }): Promise<{ text: string }>;
-          };
-        };
-      };
-    };
+    running.get(agent) as unknown as { slots: { settings: Slot<typeof agentSettings2> } };
   const base = { provider: agentActor.actorId, creatable: "plain" };
   const unit = (id: string, values?: Record<string, string | boolean>, more?: object) => ({
     provider: unitsActor.actorId,
@@ -968,23 +967,28 @@ async function setup(t: test.TestContext) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   };
-  /** An agent leaves and comes back offering its chats as `offered`, as a new release's would. */
+  /**
+   * An agent leaves and comes back offering its chats as `offered`, and reading its settings as
+   * `settings`, as a new release's would.
+   */
   const rejoin = async (
     agent: string,
     offered: Interface,
     more: Record<string, Interface> = {},
+    settings: Interface = agentSettings2,
   ) => {
     running.get(agent)?.close();
     const client = await connect({
       hubUrl: server.url,
       actorId: agent,
       credential: credentials.get(agent) as string,
-      slots: { settings: agentSettings },
+      slots: { settings },
       exports: { chat: offered, ...more },
       start() {},
     });
     running.set(agent, client as never);
     leaving.push(() => client.close());
+    return client;
   };
   /** What is exposed to an agent at a slot, once it has heard of it. */
   const exposedTo = async <T>(agent: string, slot: string) => {
@@ -1105,7 +1109,9 @@ test("an agent that comes back offering its chats in another shape keeps the per
   assert.equal(exposed(), made, "nothing made again");
 
   // And when the agent came back while management was away, as it does when the app starts.
-  await s.restart(() => s.rejoin(agent, chat));
+  await s.restart(async () => {
+    await s.rejoin(agent, chat);
+  });
   assert.deepEqual(
     (await reached()).map((b) => [b.slot, b.at, b.mismatched]),
     [[before.slot, before.at, undefined]],
@@ -1405,12 +1411,18 @@ test("an agent sees only its own settings, and only it hears that they changed",
   await until(() => (s.heard.get(a) ?? 0) === 1);
   assert.equal(s.heard.get(b) ?? 0, 0);
 
+  // What it is told and its skills are management's own roots, naming no provider.
   assert.deepEqual(await one.slots.settings.call.get({}), {
-    instructions: "Be plain.",
-    skills: [{ name: "secret-sauce", description: "The secret-sauce skill." }],
-    plugins: [],
+    mounted: [
+      { mounted: "instructions", capability: "instructions", arguments: { text: "Be plain." } },
+      {
+        mounted: "skills",
+        capability: "skills",
+        arguments: { skills: [{ name: "secret-sauce", description: "The secret-sauce skill." }] },
+      },
+    ],
   });
-  assert.deepEqual((await other.slots.settings.call.get({})).skills, []);
+  assert.deepEqual((await settingsRead(other)).skills, []);
   assert.match((await one.slots.settings.call.skill({ name: "secret-sauce" })).text, /Use it well/);
   assert.equal(
     (await one.slots.settings.call.skill({ name: "secret-sauce", path: "more/deep.md" })).text,
@@ -1430,7 +1442,7 @@ test("an agent sees only its own settings, and only it hears that they changed",
   assert.match((await one.slots.settings.call.skill({ name: "secret-sauce" })).text, /Better/);
   await s.calls.skills.remove({ name: "secret-sauce" });
   await until(() => (s.heard.get(a) ?? 0) === 3);
-  assert.deepEqual((await one.slots.settings.call.get({})).skills, []);
+  assert.deepEqual((await settingsRead(one)).skills, []);
   assert.equal(s.heard.get(b) ?? 0, 0);
 });
 
@@ -1491,7 +1503,7 @@ test("an agent is told what it's for", async (t) => {
   const channel = s.agentChannel(agent);
   await until(() => channel.slots.settings.bound);
   assert.equal(
-    (await channel.slots.settings.call.get({})).instructions,
+    (await settingsRead(channel)).instructions,
     "Be plain.\n\nWhat you are for: Keeps the docs tidy.",
   );
 });
@@ -1786,13 +1798,13 @@ test("a unit can be added to a living agent and removed, with what it made", asy
   const added = await s.calls.agents.addUnit({ agent, unit: s.unit("files", { folder: "/a" }) });
   await until(() => (s.heard.get(agent) ?? 0) >= 2);
   assert.deepEqual(
-    (await channel.slots.settings.call.get({})).skills.map((one) => one.name),
+    (await settingsRead(channel)).skills.map((one) => one.name),
     ["notes"],
   );
   const actors = await s.openActors();
   await s.calls.agents.removeUnit({ agent, instance: added.instance });
   assert.equal((await s.openActors()).length, actors.length - 1);
-  assert.deepEqual((await channel.slots.settings.call.get({})).skills, []);
+  assert.deepEqual((await settingsRead(channel)).skills, []);
   await s.calls.agents.removeUnit({ agent, instance });
   await s.calls.agents.removeUnit({ agent, instance: computer });
   assert.deepEqual((await s.calls.agents.get({ agent })).units, []);
@@ -2518,7 +2530,7 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     ["Please start."],
   );
   assert.match(
-    (await s.agentChannel(child).slots.settings.call.get({})).instructions,
+    (await settingsRead(s.agentChannel(child))).instructions,
     new RegExp(
       `You were made by the agent "Parent" \\(${parent}\\)\\. Its messages to you say they are from ${parent}\\.`,
     ),
@@ -2542,10 +2554,7 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
   // One whose maker is gone isn't told of it.
   const left = await s.made(tools, "create_helper", { name: "Left", purpose: "Stay." });
   await s.calls.agents.remove({ agent: parent });
-  assert.doesNotMatch(
-    (await s.agentChannel(left).slots.settings.call.get({})).instructions,
-    /You were made/,
-  );
+  assert.doesNotMatch((await settingsRead(s.agentChannel(left))).instructions, /You were made/);
 });
 
 test("a template's values are the defaults of what an agent fills in", async (t) => {
@@ -4177,9 +4186,11 @@ test("the Memory unit builds a capability made of the memory plugin, with no Act
   const [one, another] = [s.agentChannel(agent), s.agentChannel(other)];
   await until(() => one.slots.settings.bound && another.slots.settings.bound);
   await new Promise((resolve) => setTimeout(resolve, 200));
-  const plugins = async (channel = one) => (await channel.slots.settings.call.get({})).plugins;
-  const held = [{ name: "memory", capability: "memory" }];
-  // Its executor reads the plugin, with the capability it is of; another agent reads none.
+  const plugins = async (channel = one) => (await settingsRead(channel)).held;
+  const held = [
+    { mounted: "memory", capability: "memory", arguments: {}, provider: s.agentActor.actorId },
+  ];
+  // Its executor holds the plugin, by its name, as its own; another agent holds none.
   assert.deepEqual(await plugins(), held);
   assert.deepEqual(await plugins(another), []);
   // No Actor was made for it, and the person reaches nothing new but the two agents' chats.
@@ -4296,16 +4307,21 @@ test("a capability naming a plugin the agent already holds, or taking it past 64
     }));
   await holding(() => full(64));
   const channel = s.agentChannel(agent);
-  assert.equal((await channel.slots.settings.call.get({})).plugins?.length, 64);
+  assert.equal((await settingsRead(channel)).held.length, 64);
   assert.deepEqual(await problems({ agent, unit: memory }), [
     { message: "An agent holds at most 64 plugins." },
   ]);
   await assert.rejects(adding(), refused("invalid"));
   await holding(() => full(63));
   await adding();
-  const now = (await channel.slots.settings.call.get({})).plugins ?? [];
+  const now = (await settingsRead(channel)).held;
   assert.equal(now.length, 64);
-  assert.deepEqual(now.at(-1), { name: "memory", capability: "memory" });
+  assert.deepEqual(now.at(-1), {
+    mounted: "memory",
+    capability: "memory",
+    arguments: {},
+    provider: s.agentActor.actorId,
+  });
 });
 
 test("taking the Memory unit off an agent leaves its control unit's slot and its reach to the agents it made", async (t) => {
@@ -4462,7 +4478,7 @@ async function mountCallers(
   return { app: app.slots.agents.call, appActor: appActor.actorId, itself };
 }
 
-test("the person, the agent itself and another program each mount a capability on a running agent and take it off, and get gives all three the same tree", async (t) => {
+test("the person, the agent itself and another program each list what may be mounted, mount a capability on a running agent and take it off, and get gives all three the same tree", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([]);
   const { app, appActor, itself } = await mountCallers(s, t, agent);
@@ -4471,8 +4487,14 @@ test("the person, the agent itself and another program each mount a capability o
     { calls: itself, by: agent },
     { calls: app, by: appActor },
   ];
-  const plugins = async () =>
-    (await s.agentChannel(agent).slots.settings.call.get({})).plugins ?? [];
+  // Each is given every capability on offer, naming its provider: the agent bound to agents@1 too.
+  for (const { calls, by } of callers)
+    assert.deepEqual(
+      (await calls.capabilities({})).capabilities,
+      [MEMORY, GITHUB].map((one) => ({ ...one, provider: s.agentActor.actorId })),
+      by,
+    );
+  const plugins = async () => (await settingsRead(s.agentChannel(agent))).held;
   for (const { calls, by } of callers) {
     const heard = s.heard.get(agent) ?? 0;
     const made = await calls.mount({
@@ -4484,7 +4506,14 @@ test("the person, the agent itself and another program each mount a capability o
     assert.ok("mounted" in made, by);
     assert.deepEqual(s.given.mounted.at(-1), { agent, capability: "memory", arguments: {} });
     // Its executor holds it from the agent's settings, and was told to read them again.
-    assert.deepEqual(await plugins(), [{ name: "memory", capability: "memory" }]);
+    assert.deepEqual(await plugins(), [
+      {
+        mounted: made.mounted,
+        capability: "memory",
+        arguments: {},
+        provider: s.agentActor.actorId,
+      },
+    ]);
     await until(() => (s.heard.get(agent) ?? 0) > heard);
     const tree = [
       {
@@ -4527,6 +4556,170 @@ test("the person, the agent itself and another program each mount a capability o
   assert.equal((await s.calls.agents.get({ agent })).status.state, "running");
 });
 
+test("an agent's settings give the tree of what it holds: management's own roots, its control, its capabilities' plugins, then what was mounted on it", async (t) => {
+  const s = await delegating(t);
+  const { agent: parent, tools } = await s.parent({ templates: ["helper"] });
+  const child = await s.made(tools, "create_helper", {
+    name: "Kid",
+    purpose: "Do the small part.",
+  });
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
+  await s.calls.agents.expose({ agent: child, skill: "notes" });
+  await s.calls.agents.addUnit({ agent: child, unit: s.own("memory", {}) } as never);
+  const made = await s.calls.agents.mount({
+    agent: child,
+    provider: s.agentActor.actorId,
+    capability: "github",
+    arguments: { owner: "o", token: "tok-1" },
+  });
+  assert.ok("mounted" in made);
+  const executor = s.agentActor.actorId;
+  // What it is told and its skills name no provider; the rest are its executor's to hold, the
+  // secret left out.
+  assert.deepEqual((await s.agentChannel(child).slots.settings.call.get({})).mounted, [
+    {
+      mounted: "instructions",
+      capability: "instructions",
+      arguments: {
+        text: `Be plain.\n\nWhat you are for: Do the small part.\n\nYou were made by the agent "Parent" (${parent}). Its messages to you say they are from ${parent}.`,
+      },
+    },
+    {
+      mounted: "skills",
+      capability: "skills",
+      arguments: { skills: [{ name: "notes", description: "The notes skill." }] },
+    },
+    { mounted: "memory", capability: "memory", arguments: {}, provider: executor },
+    { mounted: made.mounted, capability: "github", arguments: { owner: "o" }, provider: executor },
+  ]);
+  // Its control unit is its control, after management's own.
+  assert.deepEqual(
+    (await s.agentChannel(parent).slots.settings.call.get({})).mounted.map((root) => [
+      root.mounted,
+      root.provider,
+    ]),
+    [
+      ["instructions", undefined],
+      ["skills", undefined],
+      ["control", executor],
+    ],
+  );
+});
+
+test("no one mounts or unmounts management's own roots, and what came with a unit goes with the unit", async (t) => {
+  const s = await delegating(t);
+  const { agent } = await s.parent({ templates: ["helper"] });
+  await s.calls.agents.addUnit({ agent, unit: s.own("memory", {}) } as never);
+  const tree = async () => (await s.agentChannel(agent).slots.settings.call.get({})).mounted;
+  const before = await tree();
+  const itself = await s.exposedTo<AgentsCalls>(agent, "agents");
+  for (const [by, calls] of [
+    ["the person", s.calls.agents],
+    ["the agent", itself],
+  ] as const) {
+    for (const capability of ["instructions", "skills"]) {
+      await assert.rejects(
+        calls.mount({ agent, provider: s.agentActor.actorId, capability, arguments: {} }),
+        (error: Error) =>
+          refused("forbidden")(error) &&
+          error.message === `${capability} is management's own: it is never mounted or unmounted.`,
+        `${by} mounting ${capability}`,
+      );
+      await assert.rejects(
+        calls.unmount({ agent, mounted: capability }),
+        refused("forbidden"),
+        `${by} unmounting ${capability}`,
+      );
+    }
+    for (const mounted of ["control", "memory"])
+      await assert.rejects(
+        calls.unmount({ agent, mounted }),
+        (error: Error) =>
+          refused("state")(error) && error.message === "This came with a unit: remove the unit.",
+        `${by} unmounting ${mounted}`,
+      );
+  }
+  assert.deepEqual(await tree(), before);
+  assert.deepEqual(s.given.mounted, []);
+});
+
+test("an agent holding the control unit reaches management's agents@1, answered only what answers whoever is bound: it goes with the unit, and one kept before is given it as management starts", async (t) => {
+  const s = await delegating(t);
+  const { agent } = await s.parent({ templates: ["helper"] });
+  const plain = await s.makeStack([], "Plain");
+  const reach = async (of = agent) =>
+    (await s.bindingsOf(of))
+      .filter((b) => b.consumer === of && b.slot === "agents")
+      .map((b) => `${b.provider} ${b.export} ${b.interface}`);
+  const reached = [`${s.management.actorId} agents agents@1`];
+  assert.deepEqual(await reach(), reached);
+  assert.deepEqual(await reach(plain), []);
+  // Only what answers whoever is bound answers it; the rest is through its control unit.
+  const itself = await s.exposedTo<AgentsCalls>(agent, "agents");
+  assert.equal((await itself.get({ agent: plain })).agent, plain);
+  assert.equal((await itself.capabilities({})).capabilities.length, 2);
+  await assert.rejects(itself.list({}), refused("forbidden"));
+  // The agent's page shows its control unit's slot as before, and nothing of this.
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent })).mcp.map((one) => one.slot),
+    ["control"],
+  );
+
+  // It goes with the unit, and comes with it.
+  const control = (await s.calls.agents.get({ agent })).units.find((one) => one.unit === "control");
+  await s.calls.agents.removeUnit({ agent, instance: control?.instance as string });
+  assert.deepEqual(await reach(), []);
+  await s.calls.agents.addUnit({ agent, unit: s.agentsUnit({ templates: ["helper"] }) } as never);
+  assert.deepEqual(await reach(), reached);
+
+  // An agent kept before it came with the unit is given it as management starts.
+  await s.person.slots.grants.call.unexpose({ to: agent, slot: "agents" });
+  assert.deepEqual(await reach(), []);
+  await s.restart(() => {});
+  for (let i = 0; (await reach()).length === 0; i++) {
+    assert.ok(i < 300, "it was never given it");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(await reach(), reached);
+  assert.deepEqual(await reach(plain), []);
+});
+
+test("an agent kept as 0.0.38 kept it, its settings binding made while its executor read the first major, is kept as it reads the second and gets the tree: refused while its ends differ, answered once they are alike", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([], "Elder");
+  const settings = async () =>
+    (await s.bindingsOf(agent))
+      .filter((b) => b.consumer === agent && b.slot === "settings")
+      .map((b) => `${b.provider} ${b.export} ${b.interface}`);
+  const bound = await settings();
+  assert.deepEqual(bound, [`${s.management.actorId} settings agent.settings@2`]);
+  // Its record as 0.0.38 kept it, with nothing mounted on it, and its executor reading the first
+  // major, as management starts: its binding is kept, and refused while its ends differ.
+  let earlier: Awaited<ReturnType<typeof s.rejoin>> | undefined;
+  await s.restart(async (kept) => {
+    delete (kept.agents as unknown as Record<string, { mounted?: unknown }>)[agent]?.mounted;
+    earlier = await s.rejoin(agent, chat, {}, agentSettings);
+  });
+  assert.ok(earlier);
+  assert.deepEqual(await settings(), [`${s.management.actorId} settings agent.settings@1`]);
+  await assert.rejects(
+    (earlier.slots as { settings: Slot<typeof agentSettings> }).settings.call.get({}),
+    (error: Error) => error instanceof Refused,
+  );
+  // As this one reads it: the same binding answers.
+  const now = await s.rejoin(agent, chat);
+  assert.deepEqual(await settings(), bound);
+  const reads = (now.slots as { settings: Slot<typeof agentSettings2> }).settings;
+  for (let i = 0; !reads.bound; i++) {
+    assert.ok(i < 300, "it was never bound");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.deepEqual((await reads.call.get({})).mounted, [
+    { mounted: "instructions", capability: "instructions", arguments: { text: "Be plain." } },
+    { mounted: "skills", capability: "skills", arguments: { skills: [] } },
+  ]);
+});
+
 test("a capability is held once, and one its provider doesn't make isn't kept", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([]);
@@ -4566,7 +4759,7 @@ test("a capability is held once, and one its provider doesn't make isn't kept", 
     ["memory"],
   );
   assert.deepEqual(
-    (await s.agentChannel(agent).slots.settings.call.get({})).plugins?.map((one) => one.name),
+    (await settingsRead(s.agentChannel(agent))).held.map((one) => one.capability),
     ["memory"],
   );
   // Kept, then put back: the agent was told both times.
@@ -4595,8 +4788,13 @@ test("a secret argument goes to the provider and nowhere else, and is said as â€
   assert.deepEqual(s.given.mounted.at(-1)?.arguments, { owner: "o", token });
   const [root] = (await s.calls.agents.get({ agent })).mounted ?? [];
   assert.deepEqual(root?.arguments, { owner: "o" });
-  assert.deepEqual((await s.agentChannel(agent).slots.settings.call.get({})).plugins, [
-    { name: "github", settings: { owner: "o" }, capability: "github" },
+  assert.deepEqual((await settingsRead(s.agentChannel(agent))).held, [
+    {
+      mounted: made.mounted,
+      capability: "github",
+      arguments: { owner: "o" },
+      provider: s.agentActor.actorId,
+    },
   ]);
   assert.ok(!readFileSync(join(s.dir, "manager.json"), "utf8").includes(token));
   await s.calls.agents.unmount({ agent, mounted: made.mounted });
@@ -4639,7 +4837,7 @@ test("unmounting goes through the provider: one it has lost goes anyway, and one
     [kept],
   );
   assert.deepEqual(
-    (await s.agentChannel(agent).slots.settings.call.get({})).plugins?.map((one) => one.name),
+    (await settingsRead(s.agentChannel(agent))).held.map((one) => one.capability),
     ["memory"],
   );
   delete s.script.fail;
@@ -4704,5 +4902,7 @@ test("an agent kept before capabilities were mounted reads as one with none moun
     ["memory"],
   );
   assert.deepEqual(await s.agentChannel(agent).slots.settings.call.get({}), before);
-  assert.deepEqual(before.plugins, [{ name: "memory", capability: "memory" }]);
+  assert.deepEqual((await settingsRead(s.agentChannel(agent))).held, [
+    { mounted: "memory", capability: "memory", arguments: {}, provider: s.agentActor.actorId },
+  ]);
 });

@@ -13,6 +13,14 @@ import type { AgentRecord, Offer, StackInput } from "./stack.js";
 
 export const AGENTS_UNIT = "control";
 export const AGENTS_SLOT = "control";
+/**
+ * Where an agent holding the control unit reaches management's `agents@1`, exposed to it beside its
+ * `control` tools: what its control capability calls. Of `agents@1`, it is answered only what
+ * answers whoever is bound.
+ */
+export const AGENTS_REACH = "agents";
+/** Management's `agents@1` export. */
+export const AGENTS_EXPORT = "agents";
 /** Each scope's answers, each containing the one before. */
 const AGENTS = ["none", "own", "all"];
 const REACH = ["none", "see", "use", "add"];
