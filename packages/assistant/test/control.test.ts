@@ -286,9 +286,20 @@ test("the agent's loops ask through its model capability: a loop's request goes 
   await plugins.close();
 });
 
-test("control tells the agent, once a turn, what it can mount and what it holds, by id and description; with management away, nothing", async () => {
+test("control tells the agent, once a turn, what it can mount and what it holds, by id and description, asking management only what is on offer and nothing of the agent; with management away, nothing", async () => {
   const { call } = management();
-  let reached: object | undefined = call;
+  // Each call management is asked, by its name.
+  const asked: string[] = [];
+  const counted = Object.fromEntries(
+    Object.entries(call).map(([name, fn]) => [
+      name,
+      (input: never) => {
+        asked.push(name);
+        return (fn as (input: never) => unknown)(input);
+      },
+    ]),
+  );
+  let reached: object | undefined = counted;
   const exposed = () =>
     reached
       ? [
@@ -302,7 +313,9 @@ test("control tells the agent, once a turn, what it can mount and what it holds,
         ]
       : [];
   const hub = { exposed, onExposed: () => () => {} } as unknown as AgentHub;
-  const plugins = await createPluginHost(quiet, [control()]).open(SELF, {
+  // What it holds is its own: here, memory beside control.
+  const held: Capability = { name: "memory", inject: [], apply() {} };
+  const plugins = await createPluginHost(quiet, [control(), held]).open(SELF, {
     store: memory(),
     provides: ["hub"],
   });
@@ -312,20 +325,25 @@ test("control tells the agent, once a turn, what it can mount and what it holds,
     provide: "hub",
     apply: (ctx: Context) => void ctx.provide("hub", hub),
   });
-  await plugins.hold([{ name: "control" }]);
+  await plugins.hold([{ name: "control" }, { name: "memory" }]);
   const told = () =>
     plugins
       .pass({ instructions: [], functions: [], input: [], leftOut: [] })
       .instructions.filter(({ owner }) => owner === "plugin:control/capabilities")
       .map(({ text }) => text);
-  await plugins.turn();
-  assert.deepEqual(told(), [
-    `## Capabilities
-A capability gives you more to do and know, from your next request. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
+  const list = `## Capabilities
+A capability gives you more to do and know, from your next message. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
 - memory (Memory, mounted): It remembers what you tell it to.
 - github (GitHub): Its repositories.
-- notes (Notes): Notes, with a key if you have one.`,
-  ]);
+- notes (Notes): Notes, with a key if you have one.`;
+  await plugins.turn();
+  assert.deepEqual(told(), [list]);
+  // The first turn waited for what is on offer; the next waits for nothing of management's, and
+  // reads it again behind itself. No turn asks management of the agent.
+  await plugins.turn();
+  assert.deepEqual(told(), [list]);
+  await new Promise((done) => setTimeout(done, 10));
+  assert.deepEqual(asked, ["capabilities", "capabilities"]);
   reached = undefined;
   await plugins.turn();
   assert.deepEqual(told(), []);

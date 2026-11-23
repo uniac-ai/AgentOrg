@@ -58,7 +58,7 @@ export function offeredText(
       `- ${id} (${title}${mounted.includes(id) ? ", mounted" : ""}): ${description}`,
   );
   return `## Capabilities
-A capability gives you more to do and know, from your next request. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
+A capability gives you more to do and know, from your next message. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
 ${lines.join("\n")}`;
 }
 
@@ -66,15 +66,40 @@ ${lines.join("\n")}`;
 export const control = (): Capability => ({
   name: "control",
   title: "Control",
-  inject: ["tools", "prompt", "context", "hub", "agent"],
+  inject: ["tools", "prompt", "context", "hub", "agent", "capabilities"],
   apply(ctx: Context) {
     const self = ctx.agent.id;
     /** Management's `agents@1` as exposed to the agent now, if it is. */
     const management = () =>
       ctx.hub.exposed().find((one) => one.slot === SLOT && one.described.id === AGENTS_ID)
         ?.call as unknown as Agents | undefined;
-    // What it can mount, read once a turn and told in each of its requests; while management
-    // can't be reached, nothing.
+    /**
+     * What is on offer, held: read at the first turn, then again behind each turn, so a turn waits
+     * on management at most once. What it holds it reads from itself, which asks no provider.
+     */
+    let onOffer: { id: string; title: string; description: string }[] | undefined;
+    let reading: Promise<void> | undefined;
+    const readOnOffer = (calls: Agents) => {
+      reading ??= calls
+        .capabilities({})
+        .then(
+          ({ capabilities }) => {
+            onOffer = capabilities.map(({ id, title, description }) => ({
+              id,
+              title,
+              description,
+            }));
+          },
+          () => {
+            // Read again behind the next turn; what was read before stands meanwhile.
+          },
+        )
+        .finally(() => {
+          reading = undefined;
+        });
+      return reading;
+    };
+    // What it can mount, told in each of its requests; while management can't be reached, nothing.
     let offered: string | undefined;
     ctx.context.turn(async () => {
       const calls = management();
@@ -82,14 +107,13 @@ export const control = (): Capability => ({
         offered = undefined;
         return;
       }
-      const [{ capabilities }, { mounted = [] }] = await Promise.all([
-        calls.capabilities({}),
-        calls.get({ agent: self }),
-      ]);
-      offered = offeredText(
-        capabilities,
-        mounted.map(({ capability }) => capability),
-      );
+      if (onOffer === undefined) await readOnOffer(calls);
+      else void readOnOffer(calls);
+      const held = ctx.capabilities
+        .list()
+        .filter(({ kind, state }) => kind === undefined && state !== "failed")
+        .map(({ name }) => name);
+      offered = onOffer ? offeredText(onOffer, held) : undefined;
     });
     ctx.prompt.section({ name: "capabilities", text: () => offered, max: OFFERED_MAX });
     /**
@@ -162,7 +186,7 @@ export const control = (): Capability => ({
     ctx.tools.register({
       name: "capability_mount",
       description:
-        "Mount a capability capability_list gives on yourself, or on an agent you made, with the arguments it takes. It takes effect from the next model request.",
+        "Mount a capability capability_list gives on yourself, or on an agent you made, with the arguments it takes. It takes effect from your next message.",
       parameters: {
         type: "object",
         properties: {
