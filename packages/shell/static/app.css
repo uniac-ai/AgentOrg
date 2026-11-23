@@ -22,7 +22,10 @@
   --create: rgb(38 38 38);
   --create-card: rgb(46 46 46);
   --radius: 16px;
-  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Apple's system font first, where there is one; nothing is loaded. */
+  --font:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", ui-sans-serif, system-ui,
+    "Segoe UI", sans-serif;
   /* The ground under a page's list and around its cards, darker than the cards' canvas, and a card's shadow. */
   --ground: rgb(20 20 20);
   --card-shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 2px 10px rgb(0 0 0 / 0.4);

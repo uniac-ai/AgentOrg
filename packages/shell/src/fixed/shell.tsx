@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { USAGE } from "../app.tsx";
-import { go, openSettings, useRoute, useSettings } from "../data.ts";
+import { api, go, openSettings, useRoute, useSettings } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip.tsx";
 import { AllChatsProvider, useAllChats } from "./all-chats.tsx";
@@ -135,9 +135,9 @@ const onApple = () => {
 /**
  * The frame's two rows, on every page, icons only. Wider than a phone they lie over the page's left
  * side, as wide as its list beside what is chosen, and the page leaves them their room: a strip
- * along the top with Search at its end, its start left empty for a window's own buttons, and a row
- * along the foot with the places from its start and Settings at its end. On a phone they are one
- * row along the foot. Chat carries the count of conversations with something new, as the floating
+ * along the top with Search at its end, and a row along the foot with the places from its start
+ * and Settings at its end. With the list put away they go with it, and come back with it. On a
+ * phone they are one row along the foot. Chat carries the count of conversations with something new, as the floating
  * chat's button does. Search opens from its key too, anywhere, with nothing drawn to say so: ⌘K on
  * a Mac, and Ctrl K elsewhere. A terminal keeps Ctrl K itself: xterm takes it at its own text area,
  * and the window never hears it. While the service is out of reach nothing opens over the notice.
@@ -208,7 +208,7 @@ function Places() {
   return (
     <nav
       aria-label="Main"
-      className="pointer-events-none absolute inset-y-0 left-0 z-10 flex w-[var(--side)] flex-col justify-between phone:pointer-events-auto phone:static phone:order-last phone:h-[var(--foot)] phone:w-full phone:shrink-0 phone:flex-row phone:border-t"
+      className="pointer-events-none absolute inset-y-0 left-0 z-10 flex w-[var(--side)] flex-col justify-between away:hidden phone:pointer-events-auto phone:static phone:order-last phone:h-[var(--foot)] phone:w-full phone:shrink-0 phone:flex-row phone:border-t"
     >
       <div className="flex h-[var(--strip)] shrink-0 items-center justify-end pr-1 phone:contents">
         <Place
@@ -277,23 +277,40 @@ function Places() {
   );
 }
 
+/** The person's store key that says the list is put away. */
+const LIST_COLLAPSED = "ui/list-collapsed";
+
 /**
  * Puts the page's list away and brings it back, where a page has room for a list beside what is
- * chosen: first in the strip along the top after the 80 left empty for a window's own buttons, and
- * drawn as quietly as Search. With the list away, what is chosen has the page's width between the
- * frame's two rows, as it has in a narrower window, so every place stays in reach.
+ * chosen: first in the strip along the top, after the room left for a window's own buttons, and
+ * drawn as quietly as Search. With the list away, Search and the row of places go with it, and what
+ * is chosen has the page under the strip, where this alone is left: it brings them all back. Search
+ * still opens from its key. The choice is the person's, kept in their store: it is as it was left
+ * when the page opens again.
  */
 function Collapse() {
   const collapsed = useCollapsed();
+  useEffect(() => {
+    void api
+      .call<{ value?: unknown }>("store", "get", { key: LIST_COLLAPSED })
+      .then(({ value }) => {
+        if (value === true) setCollapsed(true);
+      })
+      .catch(() => {});
+  }, []);
+  const put = (away: boolean) => {
+    setCollapsed(away);
+    void api.call("store", "set", { key: LIST_COLLAPSED, value: away }).catch(() => {});
+  };
   return (
-    <div className="absolute top-1 left-20 z-10 hidden @min-[56rem]/app:block">
+    <div className="absolute top-1 left-[calc(var(--corner)+4px)] z-10 hidden @min-[56rem]/app:block">
       <Place
         label={collapsed ? "Show list" : "Hide list"}
         side="bottom"
         size="size-11"
         current={false}
         aria-expanded={!collapsed}
-        onClick={() => setCollapsed(!collapsed)}
+        onClick={() => put(!collapsed)}
       >
         <PanelLeftIcon className="size-[18px] stroke-[1.5] text-muted-foreground" />
       </Place>
@@ -306,8 +323,9 @@ function Collapse() {
  * page's list, above the row of places: a list ends well above it. It is no wider than the list, its
  * words cut, so its link and its close stay whole. Where the page holds one thing at a time it is
  * beside the row of places, short of the chat's tab; with the chat open there is no room there, and
- * it is above the places as beside a list, where a page with the chat over it ends well above it. On
- * a phone it has a row of its own along the top, above the page. It holds the plan's notice, once,
+ * it is above the places as beside a list, where a page with the chat over it ends well above it.
+ * With the list put away it is in the strip, after the button that brings the list back. On a phone
+ * it has a row of its own along the top, above the page. It holds the plan's notice, once,
  * until it is dismissed (being offline is the notice at the top).
  */
 function ShellBar({ notice, dismiss }: Required<Notice>) {
@@ -322,7 +340,7 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
   return (
     <div
       role="status"
-      className={`window absolute z-20 flex h-10 ${at} items-center gap-3 rounded-full bg-[var(--raised)] pr-1.5 pl-4 text-[13px] shadow-lg phone:relative phone:inset-auto phone:mx-3 phone:my-2 phone:max-w-none phone:shrink-0`}
+      className={`window absolute z-20 flex h-10 ${at} items-center gap-3 rounded-full bg-[var(--raised)] pr-1.5 pl-4 text-[13px] shadow-lg away:top-1.5 away:bottom-auto away:left-[calc(var(--corner)+56px)] away:max-w-[calc(100%-var(--corner)-68px-var(--inset)-var(--panel)-var(--gap))] phone:relative phone:inset-auto phone:mx-3 phone:my-2 phone:max-w-none phone:shrink-0`}
     >
       <>
         <span className="min-w-0 flex-1 truncate">You're using your ChatGPT plan</span>

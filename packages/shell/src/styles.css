@@ -37,6 +37,14 @@
     }
   }
 }
+/* That room, with the list put away: what is chosen has the page, under the strip. */
+@custom-variant away {
+  @container app (width >= 56rem) {
+    &:where([data-shell][data-collapsed] *) {
+      @slot;
+    }
+  }
+}
 @custom-variant narrow {
   @container app (width < 68.75rem) {
     @slot;
@@ -379,8 +387,10 @@
     --strip: 52px;
     --side: 300px;
   }
-  /* How long a window of the page takes to open, and to close. */
+  /* How long a window of the page takes to open, and to close; and the room left at the top left
+     for a window's own buttons drawn over the page: none, as in a browser. */
   :root {
+    --corner: 0px;
     --window-open: 220ms;
     --window-close: 160ms;
   }

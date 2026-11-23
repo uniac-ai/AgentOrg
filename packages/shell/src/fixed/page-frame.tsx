@@ -48,8 +48,8 @@ export function ListHead({ label, add, onAdd }: { label: string; add: string; on
 /**
  * A card: what the page shows, on the canvas, with a thin line, 14 px corners and a slight shadow.
  * Beside the list it is 6 from the window's top and side and from the next card, and 12 from its
- * foot, level with the row of places; alone, or with the list put away, it is between the strip and
- * that row. On a phone it has the page to its edges, with no line or corners.
+ * foot, level with the row of places; alone, it is between the strip and that row. With the list
+ * put away it is under the strip, as wide as the page, and 12 from the window's foot. On a phone it has the page to its edges, with no line or corners.
  */
 export const PAGE_CARD =
-  "min-w-0 overflow-hidden bg-[var(--canvas)] wide:mx-1.5 wide:mt-[var(--strip)] wide:mb-[var(--foot)] wide:rounded-xl wide:border wide:shadow-[var(--card-shadow)] split:mt-1.5 split:mb-3 split:ml-0";
+  "min-w-0 overflow-hidden bg-[var(--canvas)] wide:mx-1.5 wide:mt-[var(--strip)] wide:mb-[var(--foot)] wide:rounded-xl wide:border wide:shadow-[var(--card-shadow)] split:mt-1.5 split:mb-3 split:ml-0 away:mb-3";

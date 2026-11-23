@@ -1,6 +1,7 @@
 // Who to message, from Chat's list, in a real browser over the stand-in gateway: a small label,
 // "Chats", with a plus at its end, which opens a "To" picker over the agents; a pick opens that
-// agent's conversation, or its empty one, which its first message makes.
+// agent's conversation, or its empty one, which its first message makes. Its last line, whatever
+// is typed, is the way to a new agent.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
@@ -63,7 +64,7 @@ test(
 );
 
 test(
-  'the plus opens the picker: "To", "Name", and every agent in Team\'s order, each with its face; typing keeps the names that hold it',
+  'the plus opens the picker: "To", "Name", and every agent in Team\'s order, each with its face, then "New agent"; typing keeps the names that hold it, and "New agent"',
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await compose(page).click();
@@ -83,13 +84,43 @@ test(
       "TTriage",
       "WRWeekly report",
       "BBroken",
+      "New agent",
     ]);
     await input.fill("re");
-    assert.deepEqual(await offered(page), ["RResearch", "RReviewer", "WRWeekly report"]);
+    assert.deepEqual(await offered(page), [
+      "RResearch",
+      "RReviewer",
+      "WRWeekly report",
+      "New agent",
+    ]);
     await input.fill("tri");
-    assert.deepEqual(await offered(page), ["TTriage"]);
+    assert.deepEqual(await offered(page), ["TTriage", "New agent"]);
     await page.keyboard.press("Escape");
     await picker(page).waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  '"New agent" is the picker\'s last line, under the agents and apart from them, there whatever is typed: it closes the picker and opens the creation window',
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await compose(page).click();
+    const last = picker(page).getByRole("option", { name: "New agent" });
+    // Under a line of its own, after the last agent.
+    assert.equal(
+      await last.evaluate((line) => {
+        const group = line.closest("[cmdk-group]") as Element;
+        return getComputedStyle(group).borderTopWidth;
+      }),
+      "1px",
+    );
+    // No agent holds what is typed: it is the one line left, and the one Enter takes.
+    await picker(page).getByRole("combobox").fill("nobody of that name");
+    assert.deepEqual(await offered(page), ["New agent"]);
+    await page.keyboard.press("Enter");
+    await picker(page).waitFor({ state: "detached" });
+    await page.getByRole("dialog", { name: "Create" }).waitFor();
     await page.close();
   }),
 );

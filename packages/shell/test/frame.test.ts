@@ -55,7 +55,7 @@ const reply = (id: string, text: string) => ({
 });
 
 test(
-  "the frame's rows lie over the page's left 300 with no line: Search at the end of a strip along the top, whose start is left empty, Chat and Team from the start of a row along the foot and Settings at its end, and no words, agents, search box or Create",
+  "the frame's rows lie over the page's left 300 with no line: Search at the end of a strip along the top, Chat and Team from the start of a row along the foot and Settings at its end, and no words, agents, search box or Create",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
@@ -80,15 +80,6 @@ test(
     assert.deepEqual(await boxOf(place(page, "Chat")), [8, 852, 44, 36]);
     assert.deepEqual(await boxOf(place(page, "Team")), [56, 852, 44, 36]);
     assert.deepEqual(await boxOf(place(page, "Settings")), [248, 852, 44, 36]);
-    // The strip's start is empty, for a window's own buttons: nothing to press or read is there.
-    assert.equal(
-      await page.evaluate(() =>
-        [8, 40, 79].some((x) =>
-          [8, 26, 51].some((y) => document.elementFromPoint(x, y)?.closest("button, a, h1, li")),
-        ),
-      ),
-      false,
-    );
     for (const name of ["Chat", "Team", "Settings"]) {
       const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
       const [px, py] = await boxOf(place(page, name));
@@ -175,22 +166,26 @@ test(
 );
 
 test(
-  "a place's label shows over it while the pointer rests on it or the keyboard is on it, fading in and out",
+  "a place's label shows over it once the pointer has rested on it for a second, or as the keyboard comes to it, fading in and out: a rounded card 24 tall, with no arrow",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await place(page, "Team").waitFor();
     assert.equal(await label(page).count(), 0, "no label at first");
     await place(page, "Team").hover();
+    await page.waitForTimeout(600);
+    assert.equal(await label(page).count(), 0, "not before the pointer has rested a second");
     await label(page).waitFor();
     assert.equal(await label(page).innerText(), "Team");
     const animation = () => label(page).evaluate((one) => getComputedStyle(one).animationName);
     assert.equal(await animation(), "enter", "it fades in");
-    // Once it has come in: over its place, past its arrow, on the place's middle.
+    // Once it has come in: over its place, on the place's middle.
     await label(page).evaluate((one) =>
       Promise.all(one.getAnimations().map((moving) => moving.finished)),
     );
     const [x, y, width, height] = await boxOf(label(page));
     assert.ok(y + height <= 852 - 6, "over the place");
+    assert.equal(height, 24);
+    assert.equal(await label(page).locator("svg").count(), 0, "no arrow");
     assert.ok(Math.abs(x + width / 2 - 78) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
     await page.mouse.move(700, 450, { steps: 4 });

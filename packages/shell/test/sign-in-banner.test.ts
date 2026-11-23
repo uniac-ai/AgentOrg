@@ -69,6 +69,13 @@ test(
         `${hash}: no mark in the bar`,
       );
     }
+    // Its title starts at the banner's own inset; where a window draws its own buttons over the
+    // page's top left, past their room.
+    const title = banner(page).getByRole("heading", { name: "Sign in with ChatGPT" });
+    assert.equal((await boxOf(title)).x, 16);
+    await page.evaluate(() => document.documentElement.style.setProperty("--corner", "80px"));
+    assert.equal((await boxOf(title)).x, 96);
+    await page.evaluate(() => document.documentElement.style.removeProperty("--corner"));
     gateway.setAccount("signed_in");
     await banner(page).waitFor({ state: "detached" });
     const bar = await boxOf(page.getByRole("navigation", { name: "Main" }));

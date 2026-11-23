@@ -106,7 +106,7 @@ test(
 );
 
 test(
-  "the list is put away from the strip, by a button after the 80 left for a window's own buttons: what is chosen then has the page's width between the frame's rows, on Chat and on Team, and the same button brings the list back; narrower than both side by side there is no such button",
+  "the list is put away by the first button of the strip: Search and the row of places go with it, and what is chosen has the page under the strip, on Chat and on Team; it is so when the page opens again, and the same button brings them all back; narrower than both side by side there is no such button",
   withGateway(async (gateway) => {
     let page = await open(gateway, 1440, 900, "#/chat");
     const button = (name: string) => page.getByRole("button", { name, exact: true });
@@ -114,32 +114,53 @@ test(
       const box = await button(name).boundingBox();
       return box && [box.x, box.y, box.width, box.height];
     };
-    assert.deepEqual(await boxOf("Hide list"), [80, 4, 44, 44]);
+    const places = page.getByRole("navigation", { name: "Main" });
+    /** Whether the person's store says the list is away, once it says so or not. */
+    const kept = async (wanted: boolean) => {
+      for (let tries = 0; gateway.notes.get("ui/list-collapsed") !== wanted; tries++) {
+        assert.ok(tries < 100, `the store says ${wanted}`);
+        await page.waitForTimeout(40);
+      }
+    };
+    assert.deepEqual(await boxOf("Hide list"), [4, 4, 44, 44]);
     assert.equal(await button("Hide list").getAttribute("aria-expanded"), "true");
     await button("Hide list").click();
     await button("Show list").waitFor();
     assert.equal(await button("Show list").getAttribute("aria-expanded"), "false");
-    assert.deepEqual(await boxOf("Show list"), [80, 4, 44, 44]);
+    assert.deepEqual(await boxOf("Show list"), [4, 4, 44, 44]);
     const away = await frame(page);
-    assert.deepEqual(
-      [away.list, away.card, away.bar],
-      [null, [6, 52, 1428, 792], [0, 0, 300, 900]],
-    );
+    assert.deepEqual([away.list, away.card], [null, [6, 52, 1428, 836]]);
+    assert.equal(await places.count(), 0, "Search and the places are away with it");
     // The conversation is as it is beside its list: it has no way back to one.
     assert.equal(await button("All chats").count(), 0);
-    // Team's list is away too, and its details have the width.
-    await page
-      .getByRole("navigation", { name: "Main" })
-      .getByRole("button", { name: "Team" })
-      .click();
+    // The plan's notice is in the strip, after the button.
+    const notice = await page.getByRole("status").filter({ hasText: "ChatGPT plan" }).boundingBox();
+    assert.deepEqual([notice?.x, notice?.y], [56, 6]);
+    // Search still opens from its key.
+    await page.keyboard.press("Control+k");
+    await page.getByRole("dialog", { name: "Search" }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Search" }).waitFor({ state: "detached" });
+    // It is kept: the page opens again as it was left, and Team's list is away as Chat's is.
+    await kept(true);
+    await page.goto(`${gateway.url}/#/team`);
+    await page.reload();
+    await button("Show list").waitFor();
     const details = page.getByRole("main").getByRole("heading", { level: 1 });
     await details.waitFor();
     assert.equal(await page.locator('main section[aria-label="Team"]').count(), 0);
     assert.equal(await details.count(), 1, "the agent's own heading alone");
+    assert.equal(await places.count(), 0);
     await button("Show list").click();
     const team = page.locator('main section[aria-label="Team"]');
     await team.waitFor();
     assert.equal((await team.boundingBox())?.width, 300);
+    await places.getByRole("button", { name: "Settings" }).waitFor();
+    await kept(false);
+    // Where a window draws its own buttons over the page's top left, their room is left: the
+    // button is the first thing after it.
+    await page.evaluate(() => document.documentElement.style.setProperty("--corner", "80px"));
+    assert.deepEqual(await boxOf("Hide list"), [84, 4, 44, 44]);
     await page.close();
     page = await open(gateway, 800, 900, "#/chat");
     assert.equal(await page.getByRole("button", { name: /^(Hide|Show) list$/ }).count(), 0);

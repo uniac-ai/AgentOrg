@@ -24,7 +24,7 @@ export function useSplit<T extends HTMLElement>() {
   return [ref, split, width] as const;
 }
 
-/** Whether the list is put away, where a page has room for it beside what is chosen: for this page only. */
+/** Whether the list is put away, where a page has room for it beside what is chosen. */
 let collapsed = false;
 const watching = new Set<() => void>();
 export function setCollapsed(next: boolean) {
