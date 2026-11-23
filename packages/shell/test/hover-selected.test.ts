@@ -48,7 +48,8 @@ test(
         .getByRole("main")
         .getByRole("region", { name: "Chats" })
         .getByRole("list", { name: "Chats" })
-        .getByRole("button");
+        // The rows themselves: each has buttons of its own beside it.
+        .locator(":scope > li > button");
       const selected = rows.and(page.locator('[aria-current="true"]'));
       await selected.waitFor();
       const [chosen, over] = [await token(page, "--selected"), await token(page, "--hover")];
