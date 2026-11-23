@@ -1,6 +1,6 @@
-// Who to message, from Chat's head, in a real browser over the stand-in gateway: "Chats" with a
-// line under it and a compose icon at its end, which opens a "To" picker over the agents; a pick
-// opens that agent's conversation, or its empty one, which its first message makes.
+// Who to message, from Chat's list, in a real browser over the stand-in gateway: a small label,
+// "Chats", with a plus at its end, which opens a "To" picker over the agents; a pick opens that
+// agent's conversation, or its empty one, which its first message makes.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
@@ -29,29 +29,32 @@ const offered = (page: Page) =>
     .evaluateAll((options) => options.map((one) => one.textContent?.trim()));
 
 test(
-  'Chat\'s head is "Chats" with a compose icon, "Message", at its end, and a line the column\'s width under it, wide and on a phone',
+  'Chat\'s list is 300 wide beside a conversation, under a small label, "Chats", with a plus, "Message", at its end and no line under it, wide and on a phone',
   withGateway(async (gateway) => {
-    for (const width of [1440, 390]) {
+    for (const [width, across] of [
+      [1440, 300],
+      [390, 390],
+    ] as const) {
       // On a phone the page opens on the list.
       const page = await open(gateway, width);
       await compose(page).waitFor();
       const seen = await list(page).evaluate((section) => {
         const head = section.querySelector("header") as Element;
+        const words = head.querySelector("h1") as Element;
         const icon = head.querySelector('button[aria-label="Message"]');
-        const s = getComputedStyle(head);
         const h = head.getBoundingClientRect();
         return {
-          words: head.querySelector("h1")?.textContent,
-          line: `${s.borderBottomWidth} ${s.borderBottomStyle}`,
-          // Across the column, inside the line at its side.
-          across: h.width === (section as HTMLElement).clientWidth,
+          across: section.getBoundingClientRect().width,
+          words: words.textContent,
+          size: getComputedStyle(words).fontSize,
+          line: getComputedStyle(head).borderBottomWidth,
           end: icon ? Math.round(h.right - icon.getBoundingClientRect().right) : null,
-          icon: !!icon?.querySelector("svg.lucide-square-pen"),
+          icon: !!icon?.querySelector("svg.lucide-plus"),
         };
       });
       assert.deepEqual(
         seen,
-        { words: "Chats", line: "1px solid", across: true, end: 8, icon: true },
+        { across, words: "Chats", size: "13px", line: "0px", end: 12, icon: true },
         `at ${width}`,
       );
       await page.close();
@@ -60,7 +63,7 @@ test(
 );
 
 test(
-  'the compose icon opens the picker: "To", "Name", and every agent in Team\'s order, each with its face; typing keeps the names that hold it',
+  'the plus opens the picker: "To", "Name", and every agent in Team\'s order, each with its face; typing keeps the names that hold it',
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await compose(page).click();
@@ -122,7 +125,7 @@ test(
 );
 
 test(
-  'on a phone with "No chats", the compose icon is the way to a conversation',
+  'on a phone with "No chats", the plus is the way to a conversation',
   withGateway(async (gateway) => {
     gateway.noChats();
     const page = await open(gateway, 390);

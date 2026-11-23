@@ -60,7 +60,7 @@ async function openBeside(page: Page) {
 }
 
 test(
-  "wide, a conversation's computer opens beside it: no window over the page, and the conversation narrower by the sidebar",
+  "wide, a conversation's computer opens beside it in a card of its own: no window over the page, and the conversation narrower by the sidebar and the 6 between their cards",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
     const page = await open(gateway);
@@ -70,7 +70,24 @@ test(
     await beside(page).waitFor();
     assert.equal(await window(page).count(), 0);
     const sidebar = await widthOf(page, side(page));
-    assert.equal(before - (await widthOf(page, conversation(page))), sidebar);
+    assert.equal(before - (await widthOf(page, conversation(page))), sidebar + 6);
+    // Both are cards on the ground, with the same line and corners, 6 apart.
+    const [left, right] = await Promise.all(
+      [conversation(page), side(page)].map((card) =>
+        card.evaluate((e) => {
+          const style = getComputedStyle(e);
+          const box = e.getBoundingClientRect();
+          return {
+            from: box.left,
+            to: box.right,
+            look: [style.borderTopWidth, style.borderTopLeftRadius, style.backgroundColor],
+          };
+        }),
+      ),
+    );
+    assert.ok(left && right);
+    assert.deepEqual(right.look, left.look);
+    assert.deepEqual([right.from - left.to, 1440 - right.to], [6, 6]);
     await page.close();
   }),
 );
@@ -79,10 +96,10 @@ test(
   "the sidebar is the page's width less 780, held between 480 and 720",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
-    // The page is the screen less the bar's 62, and the card's 6 at each side with its line.
+    // The page is as wide as the screen.
     for (const [screen, wide] of [
-      [1300, 480],
-      [1440, 584],
+      [1200, 480],
+      [1440, 660],
       [1600, 720],
     ] as const) {
       const page = await open(gateway, "#/chat", screen);

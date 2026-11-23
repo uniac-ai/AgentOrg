@@ -1,19 +1,19 @@
 // The chat page: a place of its own for messages. Your conversations at the left, newest first, and
-// the open one beside them at the page's full height, drawn as the chat draws it. Where there is no
-// room for both, the list comes first and a conversation takes its place, with a way back. Wide, an
-// agent's computer opens beside the conversation rather than over the page. The list is your
-// conversations only: at the first start, before any has begun, it says it has none, and the first
-// agent's conversation is open, empty, wide and on a phone. Its head's compose icon picks who to
-// message, and opens that agent's conversation, empty if none has begun.
-import { SquarePenIcon } from "lucide-react";
+// the open one beside them in a card at the page's full height, drawn as the chat draws it. Where
+// there is no room for both, the list comes first and a conversation takes its place, with a way
+// back. Wide, an agent's computer opens in a card of its own beside the conversation's rather than
+// over the page. The list is your conversations only: at the first start, before any has begun, it
+// says it has none, and the first agent's conversation is open, empty, wide and on a phone. The
+// plus at the end of the list's label picks who to message, and opens that agent's conversation,
+// empty if none has begun.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, go } from "../data.ts";
-import { Button } from "../ui/button.tsx";
 import { useAllChats } from "./all-chats.tsx";
 import { ChatList } from "./chat-parts.tsx";
 import { Compose } from "./compose.tsx";
 import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
+import { ListHead, ListPanel, PAGE_CARD } from "./page-frame.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
 import { useSplit } from "./split.ts";
 import { Thread } from "./thread.tsx";
@@ -51,42 +51,27 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   return (
     <div ref={ref} className="flex h-full min-h-0">
       {listing && (
-        <section
-          aria-label="Chats"
-          className={`flex min-h-0 flex-col ${split ? "w-[320px] shrink-0 border-r" : "min-w-0 flex-1"}`}
-        >
-          {/* "Chats", and at its end who to message; a line the column's width under it. */}
-          <header className="flex h-14 shrink-0 items-center gap-1 border-b pr-2 pl-4">
-            <h1 className="min-w-0 flex-1 text-[17px] font-semibold">Chats</h1>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Message"
-              aria-haspopup="dialog"
-              onClick={() => setComposing(true)}
-            >
-              <SquarePenIcon />
-            </Button>
-          </header>
+        <ListPanel label="Chats">
+          <ListHead label="Chats" add="Message" onAdd={() => setComposing(true)} />
           {chats.length > 0 && (
             <ChatList
               chats={chats}
               current={split ? open : undefined}
               onOpen={(id) => go({ screen: "chat", agent: id })}
-              className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pt-3 pb-24"
+              className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-24"
             />
           )}
           {nothing && (
-            <div className="flex items-center gap-4 px-4">
+            <div className="flex items-center gap-4 px-[18px]">
               <Nothing>{nothing}</Nothing>
             </div>
           )}
-        </section>
+        </ListPanel>
       )}
       {open && watched && (
         <section
           aria-label={`Conversation with ${watched.entry.name}`}
-          className="flex min-w-0 flex-1 flex-col"
+          className={`flex flex-1 flex-col ${PAGE_CARD}`}
         >
           <Thread
             key={open}
@@ -111,7 +96,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   );
 }
 
-/** The sidebar's width: what the page has beyond its list and a conversation of 460, within 480 to 720. */
+/** The sidebar's width: what the page has beyond its list, a conversation of 468 and the 12 beside the cards, within 480 to 720. */
 export const besideWidth = (page: number) => Math.min(720, Math.max(480, page - 780));
 
 /**
@@ -157,7 +142,7 @@ function Beside({ room }: { room: number }) {
       ref={side}
       data-beside={open ? "open" : "closed"}
       style={{ width: open ? wide : 0 }}
-      className={`shrink-0 overflow-hidden border-l transition-[width] motion-reduce:duration-0 ${open ? "" : "border-transparent"} ${motion}`}
+      className={`shrink-0 transition-[width,margin] motion-reduce:duration-0 ${PAGE_CARD} ${open ? "" : "wide:mr-0 border-transparent"} ${motion}`}
     >
       <div
         style={{ width: wide }}

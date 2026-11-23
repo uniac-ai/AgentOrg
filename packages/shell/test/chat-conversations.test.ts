@@ -228,19 +228,6 @@ test(
 );
 
 test(
-  "search on the team page finds agents, not what was said to them",
-  withGateway(async (gateway) => {
-    gateway.converse("a-research", [reply("o1", "The three oldest are #212, #240 and #251.")]);
-    const page = await visit(gateway, "a-reviewer");
-    const team = page.getByRole("main").getByRole("region", { name: "Team" });
-    await team.getByRole("searchbox", { name: "Search" }).fill("oldest");
-    await page.waitForTimeout(300);
-    assert.equal(await page.getByRole("list", { name: "Chats found" }).count(), 0);
-    await page.close();
-  }),
-);
-
-test(
   "the chat opens on what it showed last, its face goes to its agent's details, and nothing in it starts, renames or archives a chat",
   withGateway(async (gateway) => {
     const page = await open(gateway);

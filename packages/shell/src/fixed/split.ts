@@ -1,7 +1,10 @@
 // Whether a page has room for its list beside what is chosen in it, by the page's own width.
 import { useLayoutEffect, useRef, useState } from "react";
 
-/** The width, in pixels, from which a page holds its list and what is chosen side by side. */
+/**
+ * The width, in pixels, from which a page holds its list and what is chosen side by side: the
+ * `split` variant in styles.css, which the frame and the page's parts are laid out by.
+ */
 export const SPLIT = 896;
 
 /** A ref for the page, whether it is wide enough for both, and its width, measured as it changes. */

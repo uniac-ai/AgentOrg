@@ -21,10 +21,17 @@
     @slot;
   }
 }
-/* Wider than a phone, everything `phone` leaves out: the page's card and the ground around it. A phone
-   has no card; its content runs to the window's edges. */
+/* Wider than a phone, everything `phone` leaves out: the frame's rows over the page, and its cards. A
+   phone has neither; its content runs to the window's edges. */
 @custom-variant wide {
   @container app (width >= 40rem) {
+    @slot;
+  }
+}
+/* Wide enough for a page's list beside what is chosen in it: `SPLIT` in fixed/split.ts, which the
+   pages go by. */
+@custom-variant split {
+  @container app (width >= 56rem) {
     @slot;
   }
 }
@@ -364,8 +371,11 @@
     --panel: 420px;
     --tab: 64px;
     --tab-open: 80px;
-    /* A phone's row of places along the foot. */
+    /* The row of places along the foot. */
     --foot: 56px;
+    /* The strip along the top, and the page's list beside what is chosen in it. */
+    --strip: 52px;
+    --side: 300px;
   }
   /* How long a window of the page takes to open, and to close. */
   :root {

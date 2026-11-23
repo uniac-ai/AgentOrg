@@ -111,10 +111,11 @@ export function SignInButton({ className = "" }: { className?: string }) {
 }
 
 /**
- * What is left to set up, as a banner across the top of the app, over the bar and every page. It
+ * What is left to set up, as a banner across the top of the app, over the frame and every page. It
  * is there while something is, and gone once nothing is; it has no close. It holds a title and the
- * way in, at one height through every state, so going from one to the next moves nothing. On a
- * phone the title wraps beside the way in.
+ * way in, at one height through every state, so going from one to the next moves nothing. Wider
+ * than a phone its title starts 96 in, past the room a window's own buttons take at the top left.
+ * On a phone the title wraps beside the way in.
  */
 export function SignInBanner() {
   const login = useLogin();
@@ -125,7 +126,7 @@ export function SignInBanner() {
   return (
     <section
       aria-label="Set up"
-      className="flex h-12 shrink-0 items-center gap-4 border-b bg-[var(--raised)] px-4 phone:gap-3"
+      className="flex h-12 shrink-0 items-center gap-4 border-b bg-[var(--raised)] px-4 wide:pl-24 phone:gap-3"
     >
       <div className="flex min-w-0 flex-1 items-baseline gap-3">
         <h2 className="shrink-0 text-[15px] font-semibold phone:line-clamp-2 phone:min-w-0 phone:shrink phone:leading-[18px]">

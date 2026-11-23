@@ -106,18 +106,32 @@ test(
 );
 
 test(
-  "the search field narrows the list by name, and clearing it brings the list back; + opens the creation window",
+  'the list is as Chat\'s: 300 wide, under a small label, "Agents", with a plus, "Create", at its end, which opens the creation window; it has no search field',
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await until(async () => (await listed(page)).length, NAMES.length);
-    const search = team(page).getByRole("searchbox", { name: "Search" });
-    await search.fill("re");
-    await until(
-      async () => (await listed(page)).map(([name]) => name),
-      ["Research", "Reviewer", "Weekly report"],
-    );
-    await search.fill("");
-    await until(async () => (await listed(page)).map(([name]) => name), NAMES);
+    const seen = await team(page).evaluate((section) => {
+      const head = section.querySelector("header") as Element;
+      const words = head.querySelector("h1") as Element;
+      const icon = head.querySelector('button[aria-label="Create"]');
+      return {
+        across: section.getBoundingClientRect().width,
+        words: words.textContent,
+        size: getComputedStyle(words).fontSize,
+        end: icon
+          ? Math.round(head.getBoundingClientRect().right - icon.getBoundingClientRect().right)
+          : null,
+        icon: !!icon?.querySelector("svg.lucide-plus"),
+      };
+    });
+    assert.deepEqual(seen, {
+      across: 300,
+      words: "Agents",
+      size: "13px",
+      end: 12,
+      icon: true,
+    });
+    assert.equal(await team(page).getByRole("searchbox").count(), 0);
     await team(page).getByRole("button", { name: "Create" }).click();
     await page.getByRole("dialog", { name: "Create" }).waitFor();
     await page.close();

@@ -570,8 +570,8 @@ const probe = (what: Part): Parts => {
   }
 
   if (what === "compose") {
-    // Chat's head, from the shell's top left: its words, the compose icon and the line under it;
-    // and, open, the picker: its frame, "To", the field, and its first rows, each a face and a name.
+    // Chat's head, from the shell's top left: its label and the plus at its end; and, open, the
+    // picker: its frame, "To", the field, and its first rows, each a face and a name.
     const shell = document.querySelector("[data-shell]");
     if (!shell) return parts;
     origin = shell.getBoundingClientRect();
