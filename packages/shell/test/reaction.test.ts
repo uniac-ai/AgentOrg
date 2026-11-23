@@ -182,8 +182,8 @@ test(
     // Once the reply has come in: it rises through a few pixels as it does.
     await thread.evaluate((root) =>
       Promise.all(
-        [...root.querySelectorAll('[data-slot="bubble"]')]
-          .flatMap((bubble) => bubble.getAnimations())
+        [...root.querySelectorAll('[data-slot="message"]')]
+          .flatMap((message) => message.getAnimations())
           .map((one) => one.finished),
       ),
     );

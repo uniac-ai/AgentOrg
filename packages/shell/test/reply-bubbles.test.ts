@@ -3,10 +3,9 @@
 // message.
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Locator, Page, WebSocket } from "@playwright/test";
-import { bubblesOf } from "../src/fixed/bubbles.ts";
+import type { Locator, Page } from "@playwright/test";
 import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
-import { chunksOf, type Moment, researchSays, SAID } from "./design/samples.ts";
+import { type Moment, researchSays, SAID } from "./design/samples.ts";
 
 withBrowser();
 
@@ -19,14 +18,10 @@ async function conversation(
   moment: Moment,
   where: "chat" | "floating" = "chat",
   width = 1440,
-): Promise<{ page: Page; thread: Locator; sockets: WebSocket[] }> {
+): Promise<{ page: Page; thread: Locator }> {
   researchSays(gateway, moment);
   const page = await browser().newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(8000);
-  // The page's sockets to the gateway: a piece that changes nothing drawn is known to have come
-  // by the frame that carries it.
-  const sockets: WebSocket[] = [];
-  page.on("websocket", (socket) => sockets.push(socket));
   await page.addInitScript((session) => {
     localStorage.setItem("agentorg.session", session);
     Object.defineProperty(navigator, "clipboard", {
@@ -54,7 +49,7 @@ async function conversation(
   await thread.locator(".whitespace-pre-wrap").first().waitFor();
   // The pointer away from what is said.
   await page.mouse.move(1, 1);
-  return { page, thread, sockets };
+  return { page, thread };
 }
 /** Copies a message as a person does: points at one of its bubbles, presses its "⋯", then Copy. */
 async function copyThrough(page: Page, bubble: Locator) {
@@ -270,73 +265,6 @@ test(
 );
 
 test(
-  "a reply being written: none of it shows part written; each bubble comes whole once the next has begun, one at a time, the typing sign under them, and each is the same element with the same words to the end",
-  withGateway(async (gateway) => {
-    const { page, thread } = await conversation(gateway, "writing");
-    assert.equal(await thread.locator(".prose-chat").count(), 0, "nothing before the first word");
-    const chunks = chunksOf(SAID.long);
-    /**
-     * The reply's bubbles drawn now, each marked with the place and the words it was first seen
-     * with: its place, and whether its words are still those; and whether the sign is under them.
-     */
-    const seen = () =>
-      thread.evaluate((root) => {
-        const all = [
-          ...root.querySelectorAll('[data-slot="bubble"]:not([data-variant="secondary"])'),
-        ];
-        const reply = all.filter((bubble) => !bubble.querySelector(".typing-dot"));
-        return {
-          sign: all.length - reply.length === 1 && all.at(-1)?.querySelector(".typing-dot") != null,
-          bubbles: reply.map((bubble, n) => {
-            const kept = bubble as HTMLElement & { first?: number; words?: string };
-            kept.first ??= n;
-            kept.words ??= bubble.textContent ?? "";
-            return kept.words === bubble.textContent ? kept.first : -1;
-          }),
-        };
-      });
-    let written = "";
-    let was: number[] = [];
-    for (let i = 0; i < chunks.length; i += 3) {
-      const piece = chunks.slice(i, i + 3).join("");
-      written += piece;
-      gateway.delta("a-research", "v-a2", piece);
-      // Every bubble but the one being written.
-      const expected = Math.max(bubblesOf(written, true).length - 1, 0);
-      for (let tries = 0; (await seen()).bubbles.length !== expected; tries++)
-        assert.ok(tries < 200, `${expected} bubbles once "${written.slice(-20)}" has come`);
-      const now = await seen();
-      assert.ok(now.sign, "the sign is under what has come");
-      assert.ok(
-        now.bubbles.length - was.length <= 1,
-        `one at a time: ${was.length} → ${now.bubbles.length}`,
-      );
-      assert.deepEqual(
-        now.bubbles,
-        [...now.bubbles.keys()],
-        "each the element and the words it was",
-      );
-      was = now.bubbles;
-    }
-    assert.equal(was.length, 5, "the code, the last, isn't drawn while it may still be written");
-    gateway.addMessage("a-research", {
-      id: "v-a2",
-      role: "assistant",
-      text: SAID.long,
-      at: new Date().toISOString(),
-    });
-    gateway.setChatStatus("a-research", { state: "idle" });
-    await thread.getByRole("button", { name: "More" }).first().waitFor();
-    assert.deepEqual(
-      await seen(),
-      { sign: false, bubbles: [0, 1, 2, 3, 4, 5] },
-      "recorded, the same five and the code, and no sign",
-    );
-    await page.close();
-  }),
-);
-
-test(
   "the person's own message stays one bubble, with its lines kept",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "writing");
@@ -378,104 +306,6 @@ test(
       );
     const [has, needs] = said.page;
     assert.ok(needs !== undefined && has !== undefined && needs <= has, "nothing sideways");
-    await page.close();
-  }),
-);
-
-/**
- * A piece of a reply, sent, and the page past it: the frame that carries it has reached the page,
- * and two frames have been drawn since.
- */
-async function piece(page: Page, gateway: Gateway, sockets: WebSocket[], words: string) {
-  const sent = JSON.stringify(words);
-  const came = Promise.any(
-    sockets.map((socket) =>
-      socket.waitForEvent("framereceived", {
-        predicate: (frame) => typeof frame.payload === "string" && frame.payload.includes(sent),
-      }),
-    ),
-  );
-  gateway.delta("a-research", "v-a2", words);
-  await came;
-  await page.evaluate(async () => {
-    for (let i = 0; i < 2; i++) await new Promise((done) => requestAnimationFrame(done));
-  });
-}
-/**
- * The reply's bubbles drawn now, the typing sign aside: each one's words, and whether it is one
- * seen before.
- */
-const drawn = (thread: Locator) =>
-  thread.evaluate((root) =>
-    [...root.querySelectorAll('[data-slot="bubble"]:not([data-variant="secondary"])')]
-      .filter((bubble) => !bubble.querySelector(".typing-dot"))
-      .map((bubble) => {
-        const kept = bubble as HTMLElement & { seen?: true };
-        const was = !!kept.seen;
-        kept.seen = true;
-        return { words: (bubble.textContent ?? "").trim(), was };
-      }),
-  );
-
-test(
-  'a numbered list after a line and a blank line, as it is written: the line is drawn once the list has begun, which its "1" alone doesn\'t say; the list is drawn once the message is whole; and the line stays the same element',
-  withGateway(async (gateway) => {
-    const { page, thread, sockets } = await conversation(gateway, "writing");
-    await piece(page, gateway, sockets, "Here are the steps:\n\n");
-    assert.deepEqual(await drawn(thread), [], "the line may still be written");
-    await piece(page, gateway, sockets, "1");
-    assert.deepEqual(await drawn(thread), [], 'after "1", which may be words or a list');
-    await piece(page, gateway, sockets, ".");
-    assert.deepEqual(
-      await drawn(thread),
-      [{ words: "Here are the steps:", was: false }],
-      'after ".", the list has begun: the line is whole',
-    );
-    await piece(page, gateway, sockets, " Install it");
-    assert.deepEqual(
-      await drawn(thread),
-      [{ words: "Here are the steps:", was: true }],
-      "the list isn't drawn while it is written",
-    );
-    gateway.addMessage("a-research", {
-      id: "v-a2",
-      role: "assistant",
-      text: "Here are the steps:\n\n1. Install it",
-      at: new Date().toISOString(),
-    });
-    gateway.setChatStatus("a-research", { state: "idle" });
-    await thread.getByRole("button", { name: "More" }).nth(1).waitFor();
-    assert.deepEqual(await drawn(thread), [
-      { words: "Here are the steps:", was: true },
-      { words: "Install it", was: false },
-    ]);
-    await page.close();
-  }),
-);
-
-test(
-  "a message whose last paragraph is only a number: neither it nor the line above, which it doesn't yet end, is drawn while it is written; both are once it is settled, with its menu as for any message",
-  withGateway(async (gateway) => {
-    const { page, thread, sockets } = await conversation(gateway, "writing");
-    await piece(page, gateway, sockets, "The answer is below.\n\n42");
-    assert.deepEqual(await drawn(thread), []);
-    gateway.addMessage("a-research", {
-      id: "v-a2",
-      role: "assistant",
-      text: "The answer is below.\n\n42",
-      at: new Date().toISOString(),
-    });
-    gateway.setChatStatus("a-research", { state: "idle" });
-    await thread.getByRole("button", { name: "More" }).nth(1).waitFor();
-    assert.deepEqual(await drawn(thread), [
-      { words: "The answer is below.", was: false },
-      { words: "42", was: false },
-    ]);
-    await copyThrough(page, thread.locator('[data-slot="bubble"]').filter({ hasText: "42" }));
-    assert.equal(
-      await page.evaluate(() => (globalThis as { copied?: string }).copied),
-      "The answer is below.\n\n42",
-    );
     await page.close();
   }),
 );

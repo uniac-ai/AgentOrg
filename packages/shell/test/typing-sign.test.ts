@@ -52,42 +52,12 @@ const under = (thread: Locator) =>
 const at_ = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
 test(
-  "one message: the sign at the conversation's end while the agent works on it and while its reply is written, under each bubble of the reply that is whole, 4 px under the last; gone once the reply is whole",
+  "one message: the sign at the conversation's end while the agent works on it, gone once its reply has come, which is drawn whole in the sign's place",
   withGateway(async (gateway) => {
     const { page, thread } = await at(gateway, "one");
     await sign(thread).waitFor();
     assert.deepEqual(await drawn(thread), [`you: ${SAID.longAsk}`, "typing"]);
     assert.equal(await sign(thread).locator(".typing-dot").count(), 3);
-    // Its first words say nothing yet: they may still be written.
-    gateway.delta("a-research", "v-a2", "It's a small shop demo");
-    await page.waitForTimeout(300);
-    assert.deepEqual(await drawn(thread), [`you: ${SAID.longAsk}`, "typing"]);
-    assert.equal(await thread.getByText("It's a small shop demo").count(), 0);
-    // Its next paragraph begun, the first is whole, and the sign is under it.
-    gateway.delta("a-research", "v-a2", ".\n\nThe README");
-    await thread.getByText("It's a small shop demo.").waitFor();
-    assert.deepEqual(await drawn(thread), [
-      `you: ${SAID.longAsk}`,
-      "agent: It's a small shop demo.",
-      "typing",
-    ]);
-    assert.equal(await thread.getByText("The README").count(), 0);
-    // Once the bubble has come in: it rises through a few pixels as it does. Its own motion, not
-    // the sign's dots', which never ends.
-    await thread.evaluate((root) =>
-      Promise.all(
-        [...root.querySelectorAll('[data-slot="bubble"]')]
-          .flatMap((bubble) => bubble.getAnimations())
-          .map((one) => one.finished),
-      ),
-    );
-    const [whole, typing] = await thread.evaluate((root) =>
-      [...root.querySelectorAll('[data-slot="bubble"]')]
-        .slice(-2)
-        .map((bubble) => bubble.getBoundingClientRect())
-        .map((box) => [Math.round(box.top), Math.round(box.bottom)]),
-    );
-    assert.equal((typing?.[0] ?? 0) - (whole?.[1] ?? 0), 4, "4 px under the agent's own bubble");
     gateway.addMessage("a-research", {
       id: "v-a2",
       role: "assistant",

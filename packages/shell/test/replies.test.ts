@@ -113,20 +113,10 @@ async function receiptThenResult(gateway: Gateway, page: Page, thread: Locator) 
   await ask(gateway, thread, "Is #482 ready to merge?");
   gateway.addMessage("a-reviewer", reply("r-receipt", "Looking at #482 now."));
   await message(thread, "Looking at #482 now.").waitFor();
-  // While the result is being written, none of it is drawn: the agent's sign is under the receipt,
-  // which, settled, offers its menu.
-  gateway.delta("a-reviewer", "r-result", "It is ready: ");
-  await thread.getByRole("status", { name: "Reviewer is typing" }).waitFor();
-  let now = await said(thread);
-  assert.deepEqual(
-    now.agent.slice(-1).map(({ text, more }) => [text, more]),
-    [["Looking at #482 now.", true]],
-  );
-  assert.equal(await thread.getByText("It is ready:").count(), 0);
   gateway.addMessage("a-reviewer", reply("r-result", "It is ready: the tests pass."));
   gateway.setChatStatus("a-reviewer", { state: "idle" });
   await message(thread, "the tests pass.").getByRole("button", { name: "More" }).waitFor();
-  now = await said(thread);
+  const now = await said(thread);
   const [receipt, result] = now.agent.slice(-2);
   assert.ok(receipt && result && now.asked);
   assert.deepEqual(
@@ -171,33 +161,28 @@ test(
 );
 
 test(
-  "a message being written and the same one once recorded are one element, and nothing animates again",
+  "a message that has come is the same element when the next comes, and nothing of it moves again",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "floating");
     await ask(gateway, thread, "Why did it fail?");
-    // Its first paragraph is drawn once its second has begun.
-    gateway.delta("a-reviewer", "r1", "Three causes explain it.\n\nThe first ");
+    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
     await message(thread, "Three causes explain it.").waitFor();
-    // Once its bubble has come in: that is the one time it moves.
+    // Once it has come in: that is the one time it moves.
     await message(thread, "Three causes explain it.").evaluate(async (e) => {
-      const bubble = e.querySelector('[data-slot="bubble"]') as Element;
-      await Promise.all(bubble.getAnimations().map((one) => one.finished));
+      const whole = e.querySelector('[data-slot="message"]') as Element;
+      await Promise.all(whole.getAnimations().map((one) => one.finished));
       (e as HTMLElement & { kept?: true }).kept = true;
     });
-    gateway.addMessage(
-      "a-reviewer",
-      reply("r1", "Three causes explain it.\n\nThe first is the lock file."),
-    );
+    gateway.addMessage("a-reviewer", reply("r2", "The first is the lock file."));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
     await message(thread, "The first is the lock file.")
       .getByRole("button", { name: "More" })
-      .first()
       .waitFor();
-    // Its bubble and its words: what its "⋯" does as it appears is its own.
+    // The message and its words: what its "⋯" does as it appears is its own.
     const after = await message(thread, "Three causes explain it.").evaluate((e) => ({
       kept: !!(e as HTMLElement & { kept?: true }).kept,
       moving: [
-        ...(e.querySelector('[data-slot="bubble"]') as Element).getAnimations(),
+        ...(e.querySelector('[data-slot="message"]') as Element).getAnimations(),
         ...(e.querySelector(".prose-chat") as Element).getAnimations({ subtree: true }),
       ].filter((one) => one.playState === "running").length,
     }));

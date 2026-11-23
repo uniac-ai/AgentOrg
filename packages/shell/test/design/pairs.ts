@@ -83,7 +83,6 @@ import {
   type Without,
   windowSays,
   windowState,
-  writeSoFar,
   youActed,
 } from "./samples.ts";
 
@@ -713,14 +712,17 @@ const SCREENS: Screen[] = [
         if (moment === "writing") await page.waitForTimeout(2600);
         if (where === "floating") await researchInFloatingChat(page);
       },
-      built: async (page, gateway) => {
+      built: async (page) => {
         const main = page.getByRole("main");
         if (where === "floating") await researchInFloatingChat(page);
         const thread =
           where === "floating" ? page.getByRole("complementary", { name: "Chats" }) : main;
         await thread.locator(".whitespace-pre-wrap").last().waitFor();
-        if (moment === "writing") writeSoFar(gateway);
-        await thread.locator(".prose-chat").first().waitFor();
+        // A reply being written hasn't come: the agent's sign is what the built side shows.
+        await thread
+          .locator(moment === "writing" ? ".typing-dot" : ".prose-chat")
+          .first()
+          .waitFor();
       },
     }),
   ),

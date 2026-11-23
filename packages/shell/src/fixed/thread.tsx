@@ -111,27 +111,16 @@ type Turn =
       /** A card's answer: drawn by its card, never as a bubble, though it is the party's turn. */
       answer?: Answer;
     }
-  | { kind: "agent"; id: string; text: string; at?: string; streaming?: boolean; ask?: Ask };
-
-/**
- * What of a message is drawn: every bubble of one that is settled; of one still being written, the
- * bubbles that are complete, each once the next has begun. Words are never drawn part written.
- */
-const wholeOf = (text: string, writing: boolean) => {
-  const bubbles = bubblesOf(text, writing);
-  return writing ? bubbles.slice(0, -1) : bubbles;
-};
+  | { kind: "agent"; id: string; text: string; at: string; ask?: Ask };
 
 function turnsOf(
   messages: readonly ChatMessage[],
   unrecorded: readonly Sending[],
-  streaming: ReadonlyMap<string, string>,
   keys: ReadonlyMap<string, string>,
 ): Turn[] {
   const turns: Turn[] = [];
-  // Each of the agent's messages is its own, known by its id. The words it streams under and its
-  // record share that id, so one being written and the same one once recorded are one thing here:
-  // nothing draws it anew, and earlier messages read in above it change nothing.
+  // Each of the agent's messages is its own, known by its id, and drawn once it has come whole:
+  // earlier messages read in above it change nothing.
   for (const message of messages) {
     if (message.role === "user")
       turns.push({
@@ -160,9 +149,6 @@ function turnsOf(
       images,
       ...(answer ? { answer } : {}),
     });
-  // One being written is a turn once it has a bubble to draw.
-  for (const [id, text] of streaming)
-    if (wholeOf(text, true).length > 0) turns.push({ kind: "agent", id, text, streaming: true });
   return turns;
 }
 
@@ -377,40 +363,35 @@ const corners = (side: "start" | "end", above: boolean, below: boolean) =>
 /**
  * The agent typing in this conversation, as a messenger shows the other end typing: three dots in a
  * muted bubble on its side, heard as "<agent> is typing". The dots rise in turn, and stay still for
- * a person who asks for less motion. Where it comes once something has come while the conversation
- * was open, it rises in as a message does; one there as the conversation opens is simply there.
- * Under the agent's own bubbles it is one of their run.
+ * a person who asks for less motion. Under a message that came while the conversation was open, it
+ * comes in as that message did.
  */
-function TypingSign({ name, came, above }: { name: string; came: boolean; above: boolean }) {
-  // As it was when the sign came: what comes later doesn't bring the sign in again.
-  const [rises] = useState(came);
-  return (
-    <Message>
-      <MessageContent>
-        <Bubble
-          variant="muted"
-          role="status"
-          aria-label={`${name} is typing`}
-          className={`max-w-[80%] ${rises ? "message-in" : ""}`}
+const TypingSign = ({ name, came }: { name: string; came: boolean }) => (
+  <Message>
+    <MessageContent>
+      <Bubble
+        variant="muted"
+        role="status"
+        aria-label={`${name} is typing`}
+        className={`max-w-[80%] ${came ? "message-in" : ""}`}
+      >
+        <BubbleContent
+          className={`flex h-10 items-center gap-1 px-4 ${corners("start", false, false)}`}
         >
-          <BubbleContent
-            className={`flex h-10 items-center gap-1 px-4 ${corners("start", above, false)}`}
-          >
-            <span className="sr-only">{name} is typing</span>
-            {[0, 1, 2].map((n) => (
-              <span
-                key={n}
-                aria-hidden
-                className="typing-dot size-1.5 rounded-full bg-current"
-                style={{ animationDelay: `${n * 160}ms` }}
-              />
-            ))}
-          </BubbleContent>
-        </Bubble>
-      </MessageContent>
-    </Message>
-  );
-}
+          <span className="sr-only">{name} is typing</span>
+          {[0, 1, 2].map((n) => (
+            <span
+              key={n}
+              aria-hidden
+              className="typing-dot size-1.5 rounded-full bg-current"
+              style={{ animationDelay: `${n * 160}ms` }}
+            />
+          ))}
+        </BubbleContent>
+      </Bubble>
+    </MessageContent>
+  </Message>
+);
 
 /**
  * Where a conversation is drawn: the chat page rather than the chat, and what its way back to the
@@ -528,9 +509,8 @@ export function Thread({
   // A stopped agent's chat is for reading: it has no composer until the agent starts.
   const state = watched?.entry.status.state;
   const off = state === "stopped";
-  /** The record, in order, and the text still streaming by id. */
+  /** The record, in order. */
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streaming, setStreaming] = useState<ReadonlyMap<string, string>>(new Map());
   /** Where each message that came in stands, by its id, as the record and the latest word say. */
   const [progress, setProgress] = useState<ReadonlyMap<string, Progress>>(new Map());
   /** The messages whose emoji came while the conversation was open: it grows in. One read with it is simply there. */
@@ -555,11 +535,6 @@ export function Thread({
   const sends = useRef(0);
   /** A recorded message's key in the thread: the one it was shown under at once, so it stays. */
   const keys = useRef(new Map<string, string>());
-  // A reply cut off by a problem never settles: it goes.
-  const failed = !!entry?.problem;
-  useEffect(() => {
-    if (failed) setStreaming(new Map());
-  }, [failed]);
   // A reply shown here is read.
   const replied = messages.findLast((m) => m.role === "assistant")?.at;
   useEffect(() => {
@@ -575,8 +550,8 @@ export function Thread({
     // What is said in this conversation; one it has with anyone else is not here.
     const here = (payload: unknown) => (payload as { with: string }).with === party;
     /**
-     * The record and the status now. The record outranks what streamed, and only what arrives
-     * while the page is read is newer than it.
+     * The record and the status now. Only what arrives while the record is read is newer than
+     * it.
      */
     /** Whether the status was said while the record was being read: that is the newer word. */
     let heard = false;
@@ -614,11 +589,6 @@ export function Thread({
         });
         // With earlier pages kept, whether there are earlier still is as their read said.
         if (older.length === 0) setHasEarlier(more);
-        // A reply that settled while nothing was heard is in the record: its partial text goes.
-        setStreaming((was) => {
-          const left = new Map([...was].filter(([reply]) => !known.has(reply)));
-          return left.size === was.size ? was : left;
-        });
         if (!heard) setWorking(now.state === "working");
         setFailure((was) => (was?.read ? undefined : was));
       } catch (error) {
@@ -634,12 +604,6 @@ export function Thread({
           if (!here(payload)) return;
           const message = payload as ChatMessage;
           if (!shown.current.some((m) => m.id === message.id)) came.current.add(message.id);
-          setStreaming((was) => {
-            if (!was.has(message.id)) return was;
-            const next = new Map(was);
-            next.delete(message.id);
-            return next;
-          });
           // The record has what the person sent: it takes the place of the one shown at once.
           if (message.role === "user")
             setSending((was) => {
@@ -654,19 +618,6 @@ export function Thread({
             const at = was.findIndex((m) => m.id === message.id);
             return at === -1 ? [...was, message] : was.map((m, i) => (i === at ? message : m));
           });
-        },
-        { again: load },
-      ),
-      api.subscribe(
-        slot,
-        "delta",
-        (payload) => {
-          if (!here(payload)) return;
-          const { id: reply, text: piece } = payload as { id: string; text: string };
-          // A late piece of a reply already settled changes nothing.
-          if (shown.current.some((m) => m.id === reply)) return;
-          came.current.add(reply);
-          setStreaming((was) => new Map(was).set(reply, (was.get(reply) ?? "") + piece));
         },
         { again: load },
       ),
@@ -699,12 +650,8 @@ export function Thread({
           setWorking(status.state === "working");
           // What went wrong on this page is over once the agent works again.
           if (status.state === "working") setFailure(undefined);
-          // A reply cut off when the agent was stopped never settles: it goes. Gone idle, it is
-          // answering nothing sent from here.
-          if (status.state === "idle") {
-            setStreaming(new Map());
-            setSentHere(false);
-          }
+          // Gone idle, it is answering nothing sent from here.
+          if (status.state === "idle") setSentHere(false);
         },
         { again: load },
       ),
@@ -734,29 +681,22 @@ export function Thread({
   const wrong = failure?.said ?? problem?.message;
   // A problem that the plan's page can fix ends its line with the way there.
   const fix = problem && fixOf(problem);
-  const turns = useMemo(
-    () => turnsOf(messages, unrecorded, streaming, keys.current),
-    [messages, unrecorded, streaming],
-  );
+  const turns = useMemo(() => turnsOf(messages, unrecorded, keys.current), [messages, unrecorded]);
   const lastTurn = turns.at(-1);
   /** The emoji the agent closed one of the party's messages with, drawn on its bubble. */
   const reactionOf = (turn: Turn) =>
     turn.kind === "user" && turn.message && turn.text
       ? progress.get(turn.message)?.reaction
       : undefined;
-  // The agent types here, one sign at the conversation's end, while the conversation has no
-  // problem and either holds: a message of the agent's is being written, whose complete bubbles
-  // are above the sign; or the agent works, the newest thing said here is the party's, just sent
-  // or recorded, and that message is taken or not yet heard of. So a message from the agent once
-  // it is whole (a receipt counts), one closed with no reply, or its turn's end takes it away. Two
-  // messages sent show one sign. A call of this page's own that failed is said at once, and the
-  // sign gives way to it: one or the other, never both.
+  // The agent types here, one sign at the conversation's end, while all four hold: it works; the
+  // newest thing said here is the party's, just sent or recorded; that message is taken or not yet
+  // heard of; and the conversation has no problem. So a message from the agent (a receipt counts),
+  // one closed with no reply, or its turn's end takes it away: its reply is drawn once it has come
+  // whole, in the sign's place. Two messages sent show one sign. A call of this page's own that
+  // failed is said at once, and the sign gives way to it: one or the other, never both.
   const newest = lastTurn?.kind === "user" ? lastTurn : undefined;
   const where = newest?.message === undefined ? undefined : progress.get(newest.message);
-  const typing =
-    (streaming.size > 0 || (working && !!newest && (!where || taken(where)))) &&
-    !entry?.problem &&
-    !failure;
+  const typing = working && !!newest && (!where || taken(where)) && !entry?.problem && !failure;
   // What became of each card. Answered: a message of the party's names it, recorded or just sent.
   // Passed over: the party sent anything after it, or a newer card came. Open: the newest, once
   // the agent's turn has ended; until then it isn't drawn.
@@ -938,12 +878,9 @@ export function Thread({
                       <Reply
                         text={turn.text}
                         at={turn.at}
-                        streaming={!!turn.streaming}
                         came={came.current.has(turn.id)}
                         above={after === "agent"}
-                        below={before === "agent" || (typing && turn === lastTurn)}
-                        isLast={turn === lastTurn}
-                        awaiting={awaiting}
+                        below={before === "agent"}
                       />
                       {/* The agent's question, its own part: 4 px under its words, or alone. Only
                           the party answers it, and only while the agent is there to read it. */}
@@ -969,14 +906,8 @@ export function Thread({
                   scroller's stand-in height for an item not yet drawn: the end the room goes to as
                   the sign comes is the end it keeps. */}
               {typing && (
-                <MessageScrollerItem
-                  className={`[content-visibility:visible] ${lastTurn?.kind === "agent" ? SAME_SIDE : SIDE_CHANGES}`}
-                >
-                  <TypingSign
-                    name={agent.name}
-                    came={came.current.size > 0}
-                    above={lastTurn?.kind === "agent"}
-                  />
+                <MessageScrollerItem className={`[content-visibility:visible] ${SIDE_CHANGES}`}>
+                  <TypingSign name={agent.name} came={!!newest && came.current.has(newest.id)} />
                 </MessageScrollerItem>
               )}
               {/* The conversation's own problem never shows with the sign (see `typing`), and the
@@ -1004,8 +935,8 @@ export function Thread({
 
 /**
  * The room between two messages, in place of the list's 24 px between its items: 4 px between two
- * of one side's, as between one message's bubbles and before the agent's typing sign under its own
- * bubbles, and 16 px where the side changes, the sign under the person's message included.
+ * of one side's, as between one message's bubbles, and 16 px where the side changes and before the
+ * agent's typing sign.
  */
 const SAME_SIDE = "-mt-5";
 const SIDE_CHANGES = "-mt-2";
@@ -1056,40 +987,28 @@ function Room({
  * One of the agent's messages: its bubbles, which its blank lines make. Each bubble is filled as the
  * person's is, at the start side, as wide as its words up to 80%, 4 px apart; a code block keeps the
  * conversation's whole width and the frame code has, with no fill, and its own Copy. Nothing is
- * under the last. A bubble is known by its place in the message: as the message is written, bubbles
- * are only added at its end. One still being written draws only its bubbles that are complete, so
- * no words are seen part written; each bubble of a message that came while the conversation was
- * open rises in as it first appears.
+ * under the last. It is drawn once it has come whole, all its bubbles together; one that came
+ * while the conversation was open rises in, as the person's does.
  */
 function Reply({
   text,
   at,
-  streaming,
   came,
   above,
   below,
-  isLast,
-  awaiting,
 }: {
   text: string;
-  /** When it was sent: one still being written has no time yet. */
-  at: string | undefined;
-  /** Still being written. */
-  streaming: boolean;
+  /** When it was sent. */
+  at: string;
   /** It came while the conversation was open. */
   came: boolean;
   /** The agent's own message is just above it, or just under it: their bubbles meet. */
   above: boolean;
   below: boolean;
-  isLast: boolean;
-  /** The chat still awaits its reply: the last message isn't settled, and offers nothing yet. */
-  awaiting: boolean;
 }) {
-  const settled = !(isLast && (awaiting || streaming));
-  // The menu and whether it is settled are the message's, not what is drawn of it.
-  const bubbles = useMemo(() => wholeOf(text, streaming), [text, streaming]);
+  const bubbles = useMemo(() => bubblesOf(text), [text]);
   return (
-    <Message>
+    <Message className={came ? "message-in" : undefined}>
       <MessageContent className="gap-2">
         <BubbleGroup className="gap-1">
           {bubbles.map((bubble, n) => {
@@ -1099,12 +1018,11 @@ function Reply({
               : `${corners("start", above || n > 0, below || n < bubbles.length - 1)} px-4 py-2`;
             return (
               <ReplyBubble
-                // biome-ignore lint/suspicious/noArrayIndexKey: a message's bubbles only grow at its end.
+                // biome-ignore lint/suspicious/noArrayIndexKey: a bubble is known by its place in its message.
                 key={n}
                 code={code}
-                came={came}
                 text={text}
-                at={settled ? at : undefined}
+                at={at}
               >
                 {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
                 <BubbleContent className={`prose-chat text-[15px] leading-[1.6] ${shape}`}>
@@ -1123,24 +1041,21 @@ function Reply({
 const LONG_PRESS_MS = 500;
 
 /**
- * One bubble of the agent's message. One with words, once the message is settled, has its "⋯" at
- * its outer side; a long press on it, held still, opens the same menu, as messengers do where there
- * is no pointer. A code block's bubble has its own Copy in its frame, and no menu.
+ * One bubble of the agent's message. One with words has its "⋯" at its outer side; a long press on
+ * it, held still, opens the same menu, as messengers do where there is no pointer. A code block's
+ * bubble has its own Copy in its frame, and no menu.
  */
 function ReplyBubble({
   code,
-  came,
   text,
   at,
   children,
 }: {
   code: boolean;
-  /** Its message came while the conversation was open: it rises in. */
-  came: boolean;
   /** The whole message's words, which its Copy copies. */
   text: string;
-  /** When the message was sent; none while it isn't settled, which has no menu yet. */
-  at: string | undefined;
+  /** When the message was sent. */
+  at: string;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -1149,11 +1064,11 @@ function ReplyBubble({
     y: 0,
   });
   const release = () => clearTimeout(held.current.timer);
-  const menu = !code && at !== undefined && !!text.trim();
+  const menu = !code && !!text.trim();
   return (
     <Bubble
       variant={code ? "ghost" : "muted"}
-      className={`${code ? "w-full" : "max-w-[80%]"} ${came ? "message-in" : ""}`}
+      className={code ? "w-full" : "max-w-[80%]"}
       {...(menu
         ? {
             onPointerDown: (event: React.PointerEvent) => {
