@@ -84,7 +84,8 @@ export function startEngine(
       const named = mounted
         .filter(({ provider }) => provider === undefined || provider === options.self)
         .map(({ capability, arguments: settings }) => ({ name: capability, settings }));
-      return { mounted, given: await plugins.hold(named) };
+      const everything = mounted.map(({ capability }) => capability);
+      return { mounted, given: await plugins.hold(named, everything) };
     });
     reading = done.catch(() => {});
     return done;

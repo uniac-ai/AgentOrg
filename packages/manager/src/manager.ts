@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type Arguments,
   agentProvider,
   agentSettings2,
   agents,
@@ -10,12 +11,14 @@ import {
   capabilityProvider,
   connections,
   type FieldValues,
+  type HeldCapability,
   hubActors,
   hubBindings,
   hubGrants,
   type ProvidedStatus,
   skills,
   type Template,
+  type Template2,
   tools,
   type Unit,
   unitProvider,
@@ -26,8 +29,8 @@ import type { z } from "zod";
 import { createActivity } from "./activity.js";
 import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
-import { createMounts } from "./mounts.js";
-import { treeOf } from "./settings.js";
+import { createMounts, keysOf } from "./mounts.js";
+import { CONTROL_ROOT, treeOf } from "./settings.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
 
@@ -57,6 +60,8 @@ export interface ManagerOptions {
   dir: string;
   /** Templates the app ships. */
   templates?: z.infer<typeof Template>[];
+  /** Templates of capabilities the app ships, which `agents@2` offers as capabilities. */
+  capabilityTemplates?: z.infer<typeof Template2>[];
   log?: Log;
 }
 
@@ -165,6 +170,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       agents: {},
       connections: {},
       templates: {},
+      capabilityTemplates: {},
       instances: {},
       copies: {},
       uncopied: [],
@@ -418,9 +424,50 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         unwire: (agent, record, root) => stacks.unwireMade(agent, record, root),
         reachControl: async (agent, reach) => {
           if (reach) await stacks.reachManagement(agent);
-          else await stacks.unreachManagement(agent);
+          else {
+            await stacks.unreachManagement(agent);
+            await stacks.unreachAgents(agent);
+          }
         },
+        settleControl: (record, given, by) => stacks.settleControl(record, given as never, by),
+        wireControl: (agent, record) => stacks.wireControl(agent, record),
+        nameOf,
       });
+      /**
+       * Mount through `mount`, and once control is mounted, have the agent reach the agents its
+       * arguments let it, as an AgentOrg control unit added does.
+       */
+      const mountReaching = async <T extends { mounted: string } | { problems: unknown[] }>(
+        agent: string,
+        capability: string,
+        mount: () => Promise<T>,
+      ) => {
+        const made = await mount();
+        // Control itself, or as one of a template's.
+        const control = recordOf(agent).mounted.find((one) => one.capability === CONTROL_ROOT);
+        if (
+          "mounted" in made &&
+          control &&
+          (capability === CONTROL_ROOT || control.parent === made.mounted)
+        )
+          await stacks.reachAgents((_, reaching) => reaching === agent);
+        return made;
+      };
+      /** What capability providers offer, each naming its provider: control's arguments are management's. */
+      const offered = async () =>
+        (
+          await fromEach(capabilityProviders(), async ({ actor, call }) =>
+            (await call.capabilities({})).capabilities.map((one) => ({ ...one, provider: actor })),
+          )
+        ).flat();
+      const withControl = async <T extends { id: string; arguments: unknown }>(all: T[]) => {
+        const schema = all.some((one) => one.id === CONTROL_ROOT)
+          ? await stacks.controlSchema()
+          : undefined;
+        return all.map((one) =>
+          one.id === CONTROL_ROOT && schema ? { ...one, arguments: schema as never } : one,
+        );
+      };
 
       /** An agent's own provider, which runs it and keeps its model. */
       const makerOf = (agent: string) =>
@@ -695,15 +742,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         "mount",
         "unmount",
       ]).implement({
-        capabilities: async () => ({
-          capabilities: (
-            await fromEach(capabilityProviders(), async ({ actor, call }) =>
-              (
-                await call.capabilities({})
-              ).capabilities.map((one) => ({ ...one, provider: actor })),
-            )
-          ).flat(),
-        }),
+        capabilities: async () => ({ capabilities: await withControl(await offered()) }),
         creatable: async () => ({
           creatables: (
             await fromEach(agentProviders(), async ({ actor, call }) =>
@@ -856,7 +895,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           }),
         /** Units and connections go first: if one can't, the agent is still here to be tried again. */
         remove: ({ agent }) => removeWhole(agent),
-        mount: (input, { caller }) => mounts.mount(input, caller),
+        mount: (input, { caller }) =>
+          mountReaching(input.agent, input.capability, () => mounts.mount(input, caller)),
         unmount: (input) => mounts.unmount(input),
       });
 
@@ -876,6 +916,62 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       const carried = (method: string) => (input: unknown, info: { caller: string }) =>
         handlerOf(method)(input, info) as never;
+      const shippedTemplates = options.capabilityTemplates ?? [];
+      /** The templates of capabilities: those shipped, each in its place where one is saved under its id. */
+      const templateList = () => {
+        const saved = records.capabilityTemplates;
+        return [
+          ...shippedTemplates.map((one) => saved[one.id] ?? { ...one, shipped: true as const }),
+          ...Object.values(saved).filter(
+            (one) => !shippedTemplates.some(({ id }) => id === one.id),
+          ),
+        ];
+      };
+      /** Each provider's name on the Hub, by its id. */
+      const namesOf = async (listed: { provider: string }[]) =>
+        new Map(
+          await Promise.all(
+            [...new Set(listed.map(({ provider }) => provider))].map(
+              async (actor) => [actor, await nameOf(actor)] as const,
+            ),
+          ),
+        );
+      type Json = z.infer<typeof Arguments>[string];
+      /**
+       * A template as a capability management offers: its arguments have one property for each
+       * capability it lists, by key, that capability's own arguments, needing only what the
+       * template leaves empty. None while something it lists isn't on offer.
+       */
+      const asCapability = (
+        template: z.infer<typeof Template2>,
+        listed: { id: string; provider: string; arguments: Record<string, Json> }[],
+        names: Map<string, string>,
+      ) => {
+        const keys = keysOf(template);
+        const properties: Record<string, Json> = {};
+        const required: string[] = [];
+        for (const [at, one] of template.capabilities.entries()) {
+          const defined = listed.find(
+            ({ id, provider }) => id === one.capability && names.get(provider) === one.provider,
+          );
+          if (!defined) return undefined;
+          const key = keys[at] as string;
+          const needs = (
+            Array.isArray(defined.arguments.required) ? defined.arguments.required : []
+          )
+            .map(String)
+            .filter((name) => one.arguments[name] === undefined);
+          properties[key] = { ...defined.arguments, required: needs };
+          if (needs.length) required.push(key);
+        }
+        return {
+          id: template.id,
+          title: template.title,
+          description: template.description,
+          arguments: { type: "object" as const, properties, required, additionalProperties: false },
+          provider: options.actorId,
+        };
+      };
       ctx.exports.agents2.implement({
         async create({ name, purpose }, { caller }) {
           // On the agents' executor: what every agent holds, and nothing mounted.
@@ -912,21 +1008,79 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             ...rest
           } = (await handlerOf("get")(input, info)) as Record<string, unknown> & {
             mounted?: unknown[];
+            composition?: z.infer<typeof HeldCapability>[];
           };
-          return { ...rest, mounted } as never;
+          // Each mounted as a template's names the template's mount.
+          const { agent } = input as { agent: string };
+          return {
+            ...rest,
+            mounted: mounted && mounts.tree(recordOf(agent), rest.composition, true),
+          } as never;
         },
-        capabilities: carried("capabilities"),
-        mount: (input, { caller }) => mounts.mount(input, caller),
+        async capabilities() {
+          const listed = await withControl(await offered());
+          const names = await namesOf(listed);
+          return {
+            capabilities: [
+              ...listed,
+              ...templateList().flatMap((template) => {
+                const offer = asCapability(template, listed, names);
+                return offer ? [offer] : [];
+              }),
+            ],
+          };
+        },
+        mount(input, { caller }) {
+          if (input.provider !== options.actorId)
+            return mountReaching(input.agent, input.capability, () => mounts.mount(input, caller));
+          const template = templateList().find((one) => one.id === input.capability);
+          if (!template)
+            throw new Refused("unknown", `Management offers no template ${input.capability}.`);
+          return mountReaching(input.agent, input.capability, () =>
+            mounts.mountTemplate(
+              { agent: input.agent, template, arguments: input.arguments },
+              caller,
+            ),
+          );
+        },
         unmount: (input) => mounts.unmount(input),
-        // Templates as capabilities come in the change after this.
-        templates: () => {
-          throw new Refused("unimplemented", "Management can't list templates on agents@2 yet.");
+        templates: () => ({ templates: templateList() }),
+        async saveTemplate(template) {
+          // Never a secret: each it lists is looked up, to tell its secrets apart.
+          const listed = await offered();
+          const names = await namesOf(listed);
+          for (const one of template.capabilities) {
+            const defined = listed.find(
+              ({ id, provider }) => id === one.capability && names.get(provider) === one.provider,
+            );
+            if (!defined)
+              throw new Refused(
+                "not_connected",
+                `${one.provider} offers no ${one.capability} now, so its secrets can't be told apart.`,
+              );
+            const properties = defined.arguments.properties as Record<string, unknown> | undefined;
+            const secret = Object.keys(one.arguments).find(
+              (name) => (properties?.[name] as { secret?: unknown } | undefined)?.secret === true,
+            );
+            if (secret)
+              throw new Refused(
+                "forbidden",
+                `A template never keeps a secret: ${one.capability}'s ${secret} is given as it is mounted.`,
+              );
+          }
+          records.capabilityTemplates[template.id] = template;
+          save();
+          return {};
         },
-        saveTemplate: () => {
-          throw new Refused("unimplemented", "Management can't save templates on agents@2 yet.");
-        },
-        removeTemplate: () => {
-          throw new Refused("unimplemented", "Management can't remove templates on agents@2 yet.");
+        removeTemplate({ id }) {
+          if (records.capabilityTemplates[id]) {
+            delete records.capabilityTemplates[id];
+            save();
+            return {};
+          }
+          if (shippedTemplates.some((one) => one.id === id))
+            throw new Refused("forbidden", "It came with the app: it can't be removed.");
+          throw new Refused("unknown", `There is no template ${id}.`);
         },
         start: carried("start"),
         stop: carried("stop"),

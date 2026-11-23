@@ -247,8 +247,8 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
        */
       const held: AgentPlugins = {
         ...context,
-        hold: async (named) => {
-          const given = await context.hold(named);
+        hold: async (named, everything) => {
+          const given = await context.hold(named, everything);
           const without = withoutOf(given.without);
           if (one.plugins === context && without !== one.without) {
             if (without) {

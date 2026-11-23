@@ -23,6 +23,7 @@ import {
   SlotName,
   Surface,
   Template,
+  Template2,
   type Unit,
   UnitResult,
   type unitProvider,
@@ -36,6 +37,9 @@ import {
   AGENTS_SLOT,
   AGENTS_UNIT,
   agentsUnit,
+  SKILL as CONTROL_SKILL,
+  SKILL_FILE as CONTROL_SKILL_FILE,
+  controlForChild,
   managesAll,
   managesOwn,
   type Reach,
@@ -48,6 +52,7 @@ import {
   formProblems,
   givesProblems,
   heldProblems,
+  schemaOf,
   settle,
   type Worked,
   workedOut,
@@ -146,6 +151,8 @@ export const MountRecord = z.object({
   title: z.string(),
   arguments: z.record(z.string(), z.json()),
   by: z.string(),
+  /** The template's mount it was mounted with, as one of the template's own. */
+  parent: z.string().optional(),
   /**
    * What management wired of what the provider made for it: its connections, exposed to the agent
    * at their slots, and the skills it exposed to the agent for it. Its capability, if it made one, is
@@ -193,6 +200,8 @@ export const Records = z.object({
   agents: z.record(z.string(), AgentRecord),
   connections: z.record(z.string(), ConnectionOrigin),
   templates: z.record(z.string(), Template).default({}),
+  /** The templates of capabilities saved, by id: one under a shipped one's id is listed in its place. */
+  capabilityTemplates: z.record(z.string(), Template2).default({}),
   /** A connection the person made, to its provider's id for it; none means they are the same. */
   instances: z.record(z.string(), z.string()).default({}),
   /**
@@ -527,14 +536,17 @@ export function createStacks(parts: StackParts) {
       gives: { slots: [{ field: MCP_SLOT }], skills: [], results: [] },
     };
   };
-  const ownUnits = async (kinds: TheUnit[]): Promise<TheUnit[]> => [
-    mcpUnit(kinds),
+  /** The AgentOrg control unit, with what can be chosen today. */
+  const controlUnit = async () =>
     agentsUnit(
       templates()
         .slice(0, MAX_OPTIONS)
         .map(({ id, title, description }) => ({ value: id, title, description })),
       (await places()).slice(0, MAX_OPTIONS - 1),
-    ),
+    );
+  const ownUnits = async (kinds: TheUnit[]): Promise<TheUnit[]> => [
+    mcpUnit(kinds),
+    await controlUnit(),
     {
       id: SKILL_UNIT,
       title: "Skill",
@@ -1612,6 +1624,55 @@ export function createStacks(parts: StackParts) {
     save();
   };
 
+  /**
+   * Control's arguments, as its AgentOrg control unit's answers are settled before it is applied:
+   * checked against the unit's form, defaults given, with what the agent's own computer can't reach.
+   * Given by an agent, they are held to its own control.
+   */
+  const settleControl = async (record: TheAgent, given: Values, by: string) => {
+    const { form } = await controlUnit();
+    const settled = settle(form, given, []);
+    const problems = [...settled.problems];
+    let { values } = settled;
+    // An agent gives control held to its own, as through a template with a control unit.
+    const giver = records.agents[by];
+    if (giver && problems.length === 0) {
+      const held = controlForChild(self, giver, record, form, given, values);
+      problems.push(...held.problems);
+      values = held.values;
+    }
+    return { values, problems: [...problems, ...reachProblems(values, reachOf(record))] };
+  };
+  /**
+   * What mounted control gives the agent, as its control unit does: management's tools at
+   * `control`, gated by control's arguments, and the skill that says how to use them. All or none.
+   */
+  const wireControl = async (agent: string, record: TheAgent) => {
+    const undo: (() => unknown)[] = [];
+    try {
+      await parts.exposeConnection(agent, self, AGENTS_SLOT);
+      undo.push(() => hub.grants.unexpose({ to: agent, slot: AGENTS_SLOT }).catch(() => {}));
+      if (!library.has(CONTROL_SKILL)) {
+        const copied: SkillFiles = {
+          [CONTROL_SKILL_FILE]: skillFile(CONTROL_SKILL_FILE) as string,
+        };
+        library.add(copied, CONTROL_SKILL);
+        records.copies[CONTROL_SKILL] = {
+          provider: self,
+          unit: AGENTS_UNIT,
+          files: hashesOf(copied),
+        };
+      }
+      const skills = record.skills.includes(CONTROL_SKILL) ? [] : [CONTROL_SKILL];
+      record.skills.push(...skills);
+      save();
+      return { connections: [{ slot: AGENTS_SLOT, connection: self }], skills };
+    } catch (error) {
+      for (const one of undo.reverse()) await one();
+      throw error;
+    }
+  };
+
   /** Expose management's `agents@1` to an agent, at `AGENTS_REACH`: it is there already, or made. */
   const reachManagement = (agent: string) =>
     hub.grants.expose({ provider: self, export: AGENTS_EXPORT, to: agent, as: AGENTS_REACH });
@@ -1798,6 +1859,12 @@ export function createStacks(parts: StackParts) {
     reachControl,
     wireMade,
     unwireMade,
+    settleControl,
+    wireControl,
+    /** Control's arguments: the JSON Schema of its AgentOrg control unit's form. */
+    controlSchema: async () => schemaOf((await controlUnit()).form),
+    /** Take off what an agent reaches of other agents through its control. */
+    unreachAgents: (agent: string) => unreach(agent),
     reachManagement,
     unreachManagement,
     holdOwns,

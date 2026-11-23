@@ -118,12 +118,28 @@ const FIRST_PARTS = ["terminal", "files", "screen"];
  * What the first Assistant's AgentOrg control unit lets it do: make and manage its own agents from
  * the Assistant template, on its own computer, with commands, and no browser of their own.
  */
-const FIRST_CONTROL = {
+export const FIRST_CONTROL = {
   agents: "own",
   templates: ["assistant"],
   places: ["own"],
   access: "terminal",
   browser: false,
+};
+
+/**
+ * The Assistant as capabilities, which `agents@2` offers as one: a computer the person has, the
+ * web, memory, and control with what the first Assistant's control unit lets it do.
+ */
+const ASSISTANT: NonNullable<ManagerOptions["capabilityTemplates"]>[number] = {
+  id: "assistant",
+  title: "Assistant",
+  description: "Works on a computer and on the web, remembers, and makes agents of its own.",
+  capabilities: [
+    { provider: "Computers", capability: "computer", arguments: { access: "terminal" } },
+    { provider: "Computers", capability: "web", arguments: { service: "exa" } },
+    { provider: "AgentOrg", capability: "memory", arguments: {} },
+    { provider: "AgentOrg", capability: "control", arguments: FIRST_CONTROL },
+  ],
 };
 
 /** The Hub's exports each program holds. */
@@ -285,6 +301,7 @@ export async function startPrograms(
       dir: dirOf("management"),
       log: programLog,
       templates: [ASSISTANT_TEMPLATE],
+      capabilityTemplates: [ASSISTANT],
     });
     closers.push(() => running.close());
     for (const [slot, exported] of [

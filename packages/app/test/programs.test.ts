@@ -30,6 +30,7 @@ import { completed, fakeOpenAI, type Script } from "chatgpt/fake-openai";
 import type { Context } from "cordis";
 import WebSocket from "ws";
 import { type App, type ProgramsOptions, startApp } from "../src/index.ts";
+import { FIRST_CONTROL } from "../src/programs.ts";
 
 type Reply = {
   id?: number;
@@ -1278,6 +1279,102 @@ test("an agent made from the Assistant template, with nothing mounted, is told t
   await person.call("agents", "remove", { agent });
 });
 
+test("an Assistant made empty with the assistant template mounted is told and offered what one made as the first start makes it is, but memory's words and function, and its computer, web and memory said as mounted", async (t) => {
+  const root = newFolder("agentorg-assistant-");
+  const data = join(root, "data");
+  const workspace = join(root, "work");
+  mkdirSync(workspace);
+  await startService(t, data);
+  // The model, scripted: no reply. What each request is told and offered is kept.
+  const fake = await fakeOpenAI();
+  type Tool = { name: string };
+  const asked: { instructions: string; tools: Tool[] }[] = [];
+  const s = await open(
+    t,
+    { dataFolder: data, webUrl: "http://127.0.0.1:9/mcp", agentsFolder: join(root, "Agents") },
+    async (request) => {
+      if (!request.url.endsWith("/responses")) return fake.handle(request);
+      const body = (await request.clone().json()) as { instructions: string; tools?: Tool[] };
+      asked.push({ instructions: body.instructions, tools: body.tools ?? [] });
+      fake.script({ events: [completed([])] });
+      return fake.handle(request);
+    },
+  );
+  const { person, ran } = await s.start();
+  const { management } = ran as NonNullable<typeof ran>;
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  // As the first start makes it: the Assistant template's computer and web, then its control unit.
+  const { agent: units } = await person.call<{ agent: string }>("agents", "create", {
+    template: "assistant",
+    fill: [{ values: { workspace, ...NEITHER } }],
+    name: "Ada",
+  });
+  await person.call("agents", "addUnit", {
+    agent: units,
+    unit: { provider: management, unit: "control", values: FIRST_CONTROL },
+  });
+  // Made empty, then the template mounted, given the same computer.
+  const { agent: mounts } = await person.call<{ agent: string }>("agents2", "create", {
+    name: "Bea",
+  });
+  const made = await person.call<{ mounted?: string }>("agents2", "mount", {
+    agent: mounts,
+    provider: management,
+    capability: "assistant",
+    arguments: { computer: { workspace, ...NEITHER } },
+  });
+  assert.ok(made.mounted, JSON.stringify(made));
+  /** What its first message's first request is told and offered. */
+  const firstAsked = async (agent: string) => {
+    const before = asked.length;
+    const slot = await chatSlot(person, agent);
+    await until(
+      () =>
+        person.call(slot, "list").then(
+          () => true,
+          () => false,
+        ),
+      "the chat to be exposed",
+    );
+    await person.call(slot, "send", { text: "Hi!" });
+    await until(() => asked.length > before, "the agent to be asked");
+    await until(
+      async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+      "the turn to end",
+    );
+    const one = asked[before] as (typeof asked)[number];
+    return { ...one, instructions: one.instructions.replaceAll(root, "<root>") };
+  };
+  const byUnits = await firstAsked(units);
+  const byMounts = await firstAsked(mounts);
+  // Told the same, but memory's section, added whole, and what is said as mounted: memory, and the
+  // computer and the web, which its settings name though their provider is outside the agent.
+  const marks = /^- (memory|computer|web) \(([^)]*?), mounted\)/gm;
+  assert.deepEqual(
+    [...byMounts.instructions.matchAll(marks)].map((one) => one[1]),
+    ["memory", "computer", "web"],
+  );
+  assert.equal([...byUnits.instructions.matchAll(marks)].length, 0);
+  const told = byUnits.instructions;
+  const unmarked = byMounts.instructions.replace(marks, "- $1 ($2)");
+  let same = 0;
+  while (same < told.length && told[same] === unmarked[same]) same++;
+  let after = 0;
+  while (after < told.length - same && told.at(-1 - after) === unmarked.at(-1 - after)) after++;
+  assert.equal(same + after, told.length, "nothing of what it was told is changed or gone");
+  matchesSaved("assistant-memory.txt", unmarked.slice(same, unmarked.length - after));
+  // Offered the same functions, and memory's.
+  assert.deepEqual(
+    byMounts.tools.filter((one) => one.name !== "memory__edit"),
+    byUnits.tools,
+  );
+  assert.equal(byMounts.tools.length, byUnits.tools.length + 1);
+  for (const agent of [units, mounts]) await person.call("agents", "remove", { agent });
+});
+
 test("the person, the agent itself and another program each mount memory on a running agent through management and take it off; the agent mounts it through its control, which reaches management once mounted, and the lines outlast each and a restart", async (t) => {
   // The model, scripted: each of the agent's requests answered in turn, nothing once those run out.
   // What each request is told, and its input, are kept.
@@ -1384,7 +1481,11 @@ test("the person, the agent itself and another program each mount memory on a ru
   // The person mounts control, which reaches management's agents@1 for as long as it is mounted.
   assert.equal(await reaches(), false);
   await mounted("person", () =>
-    person.call("agents", "mount", { ...memory, capability: "control" }),
+    person.call("agents", "mount", {
+      ...memory,
+      capability: "control",
+      arguments: { templates: ["assistant"] },
+    }),
   );
   assert.equal(await reaches(), true);
 
@@ -1509,12 +1610,13 @@ test("the person's get and the agent's capability_list give one tree of what the
   });
   await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
   const agent = await createAssistant(person, "Nester");
+  // Control takes its unit's answers: at least a template its agents can be made from.
   for (const capability of ["control", "nest"]) {
     const made = await person.call<{ mounted?: string }>("agents", "mount", {
       agent,
       provider: executor,
       capability,
-      arguments: {},
+      arguments: capability === "control" ? { templates: ["assistant"] } : {},
     });
     assert.ok(made.mounted, capability);
   }
