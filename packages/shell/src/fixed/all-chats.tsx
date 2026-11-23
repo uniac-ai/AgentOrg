@@ -42,8 +42,11 @@ interface AllChats {
   read(agent: string, at: string): void;
   /** The agents whose conversations with you are pinned, in the order they were pinned. */
   pins: readonly string[];
-  /** Pins your conversation with an agent, or unpins it. */
-  pin(agent: string, pinned: boolean): void;
+  /**
+   * Pins your conversation with an agent, or unpins it. Pinned, it is put just before the pinned
+   * conversation of the agent `before`, or last, from wherever it was.
+   */
+  pin(agent: string, pinned: boolean, before?: string): void;
 }
 
 const Context = createContext<AllChats>({
@@ -180,10 +183,13 @@ function usePins() {
     };
   }, [connection, pins]);
 
-  const pin = useCallback((agent: string, pinned: boolean) => {
+  const pin = useCallback((agent: string, pinned: boolean, before?: string) => {
     const change = (was: readonly string[]) => {
       const rest = was.filter((one) => one !== agent);
-      return pinned ? [...rest, agent] : rest;
+      if (!pinned) return rest;
+      // Before one that isn't pinned, it goes last.
+      const at = before === undefined ? -1 : rest.indexOf(before);
+      return at < 0 ? [...rest, agent] : [...rest.slice(0, at), agent, ...rest.slice(at)];
     };
     setPins((was) => was && change(was));
     // Another tab may have pinned others since this one read the pins: the change is made to what

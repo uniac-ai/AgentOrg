@@ -1,7 +1,14 @@
 // What the chat's views share: a conversation's row, your conversations as a list of them, the
 // pinned ones as tiles above the rest, and the control that collapses the chat.
-import { CircleAlertIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
-import { useEffect, useRef } from "react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CircleAlertIcon,
+  PinIcon,
+  PinOffIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button.tsx";
 import {
   ContextMenu,
@@ -135,10 +142,26 @@ function ChatTile({
 }
 
 /**
+ * Where among the tiles a drag is: the agent of the first tile after the pointer, as the tiles are
+ * read, line by line, the dragged one aside; none when it is after them all.
+ */
+const tileAfter = (
+  { currentTarget, clientX, clientY }: React.DragEvent<HTMLUListElement>,
+  dragged: string,
+) =>
+  ([...currentTarget.children] as HTMLElement[]).find((tile) => {
+    if (tile.dataset.chat === dragged) return false;
+    const box = tile.getBoundingClientRect();
+    return clientY < box.top || (clientY <= box.bottom && clientX < box.left + box.width / 2);
+  })?.dataset.chat;
+
+/**
  * Your conversations. The pinned ones come first, a tile each in a grid, in the order they were
  * pinned; the rest follow, newest first, a row each. `current` is the agent of the one open beside
  * them. A right-click on one, a long press, or Shift+F10 while it has the keyboard, opens its menu:
- * Pin, or Unpin.
+ * Pin, or Unpin, and for a tile with another beside it, Move earlier and Move later. With a mouse
+ * they are dragged too: a tile to another place among the tiles, a row into the tiles, which pins
+ * it there, and a tile down to the rows, which unpins it.
  */
 export function ChatList({
   chats,
@@ -164,38 +187,114 @@ export function ChatList({
       ?.focus();
     moved.current = undefined;
   });
+  /**
+   * The conversation being dragged, and, while it is over the tiles, where it would be put: before
+   * that agent's tile, or last.
+   */
+  const [drag, setDrag] = useState<{ id: string; to?: { before: string | undefined } }>();
   const pinned = pins.flatMap((id) => chats.find((chat) => chat.agent.id === id) ?? []);
+  const tiles = pinned.map((chat) => chat.agent.id);
   const item = (chat: ListedChat, Shown: typeof ChatTile) => {
     const { id } = chat.agent;
-    const isPinned = pins.includes(id);
+    const at = tiles.indexOf(id);
+    const isPinned = at >= 0;
+    /** The menu's way to pin it, unpin it, or put it before another tile; the keyboard goes with it. */
+    const put = (pinning: boolean, before?: string) => () => {
+      moved.current = id;
+      pin(id, pinning, before);
+    };
+    // A line at the side of the tile the dragged one would be put beside.
+    const mark = !drag?.to
+      ? ""
+      : drag.to.before === id
+        ? "shadow-[-2px_0_0_0_var(--unread)]"
+        : drag.to.before === undefined && at === tiles.length - 1
+          ? "shadow-[2px_0_0_0_var(--unread)]"
+          : "";
     return (
       <ContextMenu key={id}>
         <ContextMenuTrigger asChild>
-          <li data-chat={id}>
+          <li
+            data-chat={id}
+            className={`${mark} ${drag?.id === id ? "opacity-40" : ""}`}
+            // A mouse drags it; a touch scrolls the list, and held still opens the menu. A row is
+            // dragged into the tiles, so only while there are some.
+            onPointerDown={(event) => {
+              event.currentTarget.draggable = event.pointerType === "mouse" && tiles.length > 0;
+            }}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", chat.agent.name);
+              setDrag({ id });
+            }}
+            onDragEnd={() => setDrag(undefined)}
+          >
             <Shown chat={chat} current={id === current} onOpen={() => onOpen(id)} />
           </li>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem
-            onSelect={() => {
-              moved.current = id;
-              pin(id, !isPinned);
-            }}
-          >
+          <ContextMenuItem onSelect={put(!isPinned)}>
             {isPinned ? <PinOffIcon /> : <PinIcon />}
             {isPinned ? "Unpin" : "Pin"}
           </ContextMenuItem>
+          {at > 0 && (
+            <ContextMenuItem onSelect={put(true, tiles[at - 1])}>
+              <ArrowLeftIcon />
+              Move earlier
+            </ContextMenuItem>
+          )}
+          {isPinned && at < tiles.length - 1 && (
+            <ContextMenuItem onSelect={put(true, tiles[at + 2])}>
+              <ArrowRightIcon />
+              Move later
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     );
   };
   return (
-    <ul ref={list} aria-label="Chats" className={`${CHAT_ROWS} ${className}`}>
+    <ul
+      ref={list}
+      aria-label="Chats"
+      className={`${CHAT_ROWS} ${className}`}
+      // Below the tiles: a tile dropped there is unpinned, and a row has nowhere to go.
+      onDragOver={(event) => {
+        if (!drag) return;
+        if (tiles.includes(drag.id)) event.preventDefault();
+        if (drag.to) setDrag({ id: drag.id });
+      }}
+      onDragLeave={(event) => {
+        if (drag?.to && !event.currentTarget.contains(event.relatedTarget as Node | null))
+          setDrag({ id: drag.id });
+      }}
+      onDrop={(event) => {
+        if (!drag || !tiles.includes(drag.id)) return;
+        event.preventDefault();
+        pin(drag.id, false);
+        setDrag(undefined);
+      }}
+    >
       {pinned.length > 0 && (
         <li className="pb-2">
           <ul
             aria-label="Pinned"
             className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-1"
+            // Over the tiles: where it would be put is marked, and dropped, it is put there.
+            onDragOver={(event) => {
+              if (!drag) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const before = tileAfter(event, drag.id);
+              if (!drag.to || drag.to.before !== before) setDrag({ id: drag.id, to: { before } });
+            }}
+            onDrop={(event) => {
+              if (!drag) return;
+              event.preventDefault();
+              event.stopPropagation();
+              pin(drag.id, true, tileAfter(event, drag.id));
+              setDrag(undefined);
+            }}
           >
             {pinned.map((chat) => item(chat, ChatTile))}
           </ul>
