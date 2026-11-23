@@ -67,8 +67,9 @@ test(
       }),
       ["0px", "0px"],
     );
-    // Four places, each an icon of 22 in a place of 44: Search 4 from the strip's end, in a strip
-    // 52 tall; the others in a row 56 tall, Chat and Team 4 apart from 8 in, Settings 8 from its end.
+    // Four places. Search is 44 square, 4 from the strip's end, in a strip 52 tall. The others are
+    // 44 wide and a little less tall, 36, in a row 56 tall: Chat and Team 4 apart from 8 in,
+    // Settings 8 from its end. Each of those holds an icon of 22.
     assert.deepEqual(
       await bar(page)
         .getByRole("button")
@@ -76,9 +77,9 @@ test(
       ["Search", "Chat", "Team", "Settings"],
     );
     assert.deepEqual(await boxOf(place(page, "Search")), [252, 4, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Chat")), [8, 850, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Team")), [56, 850, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Settings")), [248, 850, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Chat")), [8, 854, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [56, 854, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [248, 854, 44, 36]);
     // The strip's start is empty, for a window's own buttons: nothing to press or read is there.
     assert.equal(
       await page.evaluate(() =>
@@ -92,7 +93,7 @@ test(
       const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
       const [px, py] = await boxOf(place(page, name));
       assert.deepEqual([width, height], [22, 22], name);
-      assert.deepEqual([x - px, y - py], [11, 11], `${name}'s icon in the middle of its place`);
+      assert.deepEqual([x - px, y - py], [11, 7], `${name}'s icon in the middle of its place`);
     }
     // Search is quieter than the places: an icon of 18 in the middle of its place, with a thinner
     // line, in the grey of what is said quietly.
@@ -189,7 +190,7 @@ test(
       Promise.all(one.getAnimations().map((moving) => moving.finished)),
     );
     const [x, y, width, height] = await boxOf(label(page));
-    assert.ok(y + height <= 850 - 6, "over the place");
+    assert.ok(y + height <= 854 - 6, "over the place");
     assert.ok(Math.abs(x + width / 2 - 78) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
     await page.mouse.move(700, 450, { steps: 4 });
@@ -205,6 +206,44 @@ test(
     await label(page).filter({ hasText: "Chat" }).waitFor({ state: "detached" });
     await page.keyboard.press("Escape");
     await label(page).waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  "a sideways scroll over the list or the frame's rows goes to the next place and back, one place a gesture; a scroll up or down, or one over a card, changes nothing",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, WIDE, "#/chat");
+    await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
+    /** The place, a moment after a scroll that should change nothing. */
+    const after = async () => {
+      await page.waitForTimeout(120);
+      return new URL(page.url()).hash;
+    };
+    /** A gesture is over once nothing has come of it for a moment. */
+    const ended = () => page.waitForTimeout(300);
+    // Over the list: down is the list's own.
+    await page.mouse.move(150, 450);
+    await page.mouse.wheel(0, 120);
+    assert.equal(await after(), "#/chat");
+    await page.mouse.wheel(120, 0);
+    await page.waitForURL(/#\/team$/);
+    // The same gesture running on, even turned back, changes nothing more.
+    await page.mouse.wheel(-120, 0);
+    assert.equal(await after(), "#/team");
+    await ended();
+    // Over the row of places, back: and before the first place there is none.
+    await page.mouse.move(150, 890);
+    await page.mouse.wheel(-120, 0);
+    await page.waitForURL(/#\/chat$/);
+    await ended();
+    await page.mouse.wheel(-120, 0);
+    assert.equal(await after(), "#/chat");
+    await ended();
+    // Over the conversation's card it is the card's own.
+    await page.mouse.move(800, 450);
+    await page.mouse.wheel(120, 0);
+    assert.equal(await after(), "#/chat");
     await page.close();
   }),
 );

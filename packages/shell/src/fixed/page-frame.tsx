@@ -6,12 +6,14 @@ import { Button } from "../ui/button.tsx";
 
 /**
  * The page's list, under the strip and over the row of places. Beside what is chosen it is as wide
- * as the frame's side; alone, as the page.
+ * as the frame's side; alone, as the page. A sideways scroll over it changes the place: the frame
+ * finds it by its mark.
  */
 export function ListPanel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section
       aria-label={label}
+      data-list
       className="flex min-h-0 min-w-0 flex-1 flex-col wide:pt-[var(--strip)] wide:pb-[var(--foot)] split:w-[var(--side)] split:flex-none"
     >
       {children}
@@ -45,8 +47,8 @@ export function ListHead({ label, add, onAdd }: { label: string; add: string; on
 
 /**
  * A card: what the page shows, on the canvas, with a thin line, 14 px corners and a slight shadow.
- * Beside the list it is 6 from the window's edges and from the next card; alone, it is between the
- * strip and the row of places. On a phone it has the page to its edges, with no line or corners.
+ * Beside the list it is 6 from the window's edges and from the next card; alone, or with the list
+ * put away, it is between the strip and the row of places. On a phone it has the page to its edges, with no line or corners.
  */
 export const PAGE_CARD =
   "min-w-0 overflow-hidden bg-[var(--canvas)] wide:mx-1.5 wide:mt-[var(--strip)] wide:mb-[var(--foot)] wide:rounded-xl wide:border wide:shadow-[var(--card-shadow)] split:my-1.5 split:ml-0";

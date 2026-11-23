@@ -11,7 +11,7 @@ import { Face } from "./face.tsx";
 import { needsOf, useLogin } from "./login.tsx";
 import { ListHead, ListPanel, PAGE_CARD } from "./page-frame.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
-import { useSplit } from "./split.ts";
+import { useCollapsed, useSplit } from "./split.ts";
 import { useAgents } from "./watch.tsx";
 
 /** One agent in the list: its face with its state's mark, its name, and how it stands. */
@@ -64,7 +64,9 @@ export function TeamPage({
   const [ref, split] = useSplit<HTMLDivElement>();
   // Wide, it opens on the first agent; narrower, on the list until one is chosen.
   const chosen = agent ?? (split ? agents.list[0]?.agent : undefined);
-  const listing = split || !chosen;
+  // Put away, the list is shown only while no agent is chosen.
+  const collapsed = useCollapsed();
+  const listing = (split && !collapsed) || !chosen;
   // With nothing to list, it says which nothing it is.
   const nothing = agents.unread
     ? UNREAD

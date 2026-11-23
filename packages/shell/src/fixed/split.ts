@@ -1,5 +1,5 @@
 // Whether a page has room for its list beside what is chosen in it, by the page's own width.
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 /**
  * The width, in pixels, from which a page holds its list and what is chosen side by side: the
@@ -23,3 +23,19 @@ export function useSplit<T extends HTMLElement>() {
   }, []);
   return [ref, split, width] as const;
 }
+
+/** Whether the list is put away, where a page has room for it beside what is chosen: for this page only. */
+let collapsed = false;
+const watching = new Set<() => void>();
+export function setCollapsed(next: boolean) {
+  collapsed = next;
+  for (const told of [...watching]) told();
+}
+export const useCollapsed = () =>
+  useSyncExternalStore(
+    (told) => {
+      watching.add(told);
+      return () => void watching.delete(told);
+    },
+    () => collapsed,
+  );

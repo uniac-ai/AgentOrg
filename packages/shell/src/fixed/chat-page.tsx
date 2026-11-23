@@ -15,7 +15,7 @@ import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { ListHead, ListPanel, PAGE_CARD } from "./page-frame.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
-import { useSplit } from "./split.ts";
+import { useCollapsed, useSplit } from "./split.ts";
 import { Thread } from "./thread.tsx";
 import { useAgents } from "./watch.tsx";
 
@@ -44,7 +44,9 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   const named = agent && agents.byId.has(agent) ? agent : undefined;
   const open = named ?? (split ? (first.current ?? fresh) : back ? undefined : fresh);
   const watched = open ? agents.byId.get(open) : undefined;
-  const listing = split || !watched;
+  // Put away, the list is shown only while nothing is open.
+  const collapsed = useCollapsed();
+  const listing = (split && !collapsed) || !watched;
   // With nothing to list, it says so: the same words whether or not there are agents, and no way to
   // make one here. Agents that can't be read say that.
   const nothing = agents.unread ? UNREAD : listed && chats.length === 0 ? "No chats" : undefined;
@@ -142,7 +144,7 @@ function Beside({ room }: { room: number }) {
       ref={side}
       data-beside={open ? "open" : "closed"}
       style={{ width: open ? wide : 0 }}
-      className={`shrink-0 transition-[width,margin] motion-reduce:duration-0 ${PAGE_CARD} ${open ? "" : "wide:mr-0 border-transparent"} ${motion}`}
+      className={`shrink-0 transition-[width,margin] motion-reduce:duration-0 ${PAGE_CARD} wide:ml-0 ${open ? "" : "wide:mr-0 border-transparent"} ${motion}`}
     >
       <div
         style={{ width: wide }}

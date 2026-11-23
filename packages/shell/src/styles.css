@@ -28,11 +28,13 @@
     @slot;
   }
 }
-/* Wide enough for a page's list beside what is chosen in it: `SPLIT` in fixed/split.ts, which the
-   pages go by. */
+/* A page's list beside what is chosen in it: wide enough for both, `SPLIT` in fixed/split.ts, which
+   the pages go by, and the list not put away. */
 @custom-variant split {
   @container app (width >= 56rem) {
-    @slot;
+    &:where([data-shell]:not([data-collapsed]) *) {
+      @slot;
+    }
   }
 }
 @custom-variant narrow {

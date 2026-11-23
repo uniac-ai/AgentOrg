@@ -106,6 +106,48 @@ test(
 );
 
 test(
+  "the list is put away from the strip, by a button after the 80 left for a window's own buttons: what is chosen then has the page's width between the frame's rows, on Chat and on Team, and the same button brings the list back; narrower than both side by side there is no such button",
+  withGateway(async (gateway) => {
+    let page = await open(gateway, 1440, 900, "#/chat");
+    const button = (name: string) => page.getByRole("button", { name, exact: true });
+    const boxOf = async (name: string) => {
+      const box = await button(name).boundingBox();
+      return box && [box.x, box.y, box.width, box.height];
+    };
+    assert.deepEqual(await boxOf("Hide list"), [80, 4, 44, 44]);
+    assert.equal(await button("Hide list").getAttribute("aria-expanded"), "true");
+    await button("Hide list").click();
+    await button("Show list").waitFor();
+    assert.equal(await button("Show list").getAttribute("aria-expanded"), "false");
+    assert.deepEqual(await boxOf("Show list"), [80, 4, 44, 44]);
+    const away = await frame(page);
+    assert.deepEqual(
+      [away.list, away.card, away.bar],
+      [null, [6, 52, 1428, 792], [0, 0, 300, 900]],
+    );
+    // The conversation is as it is beside its list: it has no way back to one.
+    assert.equal(await button("All chats").count(), 0);
+    // Team's list is away too, and its details have the width.
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Team" })
+      .click();
+    const details = page.getByRole("main").getByRole("heading", { level: 1 });
+    await details.waitFor();
+    assert.equal(await page.locator('main section[aria-label="Team"]').count(), 0);
+    assert.equal(await details.count(), 1, "the agent's own heading alone");
+    await button("Show list").click();
+    const team = page.locator('main section[aria-label="Team"]');
+    await team.waitFor();
+    assert.equal((await team.boundingBox())?.width, 300);
+    await page.close();
+    page = await open(gateway, 800, 900, "#/chat");
+    assert.equal(await page.getByRole("button", { name: /^(Hide|Show) list$/ }).count(), 0);
+    await page.close();
+  }),
+);
+
+test(
   "on a phone there is no card: the conversation runs to the window's edges above the row of places, with no line, corners or shadow, and the row along the foot is on the ground under its 1 px line",
   withGateway(async (gateway) => {
     const page = await open(gateway, 390, 844, "#/chat/a-reviewer");
