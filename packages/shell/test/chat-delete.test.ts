@@ -252,9 +252,13 @@ test(
     const page = await open(gateway, "#/chat");
     const list = chatsOf(page);
     // The store is asked again after five seconds. Until it answers, long after the agents'
-    // conversations are read, nothing is listed or open.
+    // conversations are read, nothing is listed or open: what there is is not known yet, so the
+    // list doesn't say it has none, and no agent's empty conversation is opened as at a first start.
     await page.waitForTimeout(2500);
     assert.equal(await list.count(), 0);
+    const region = page.getByRole("main").getByRole("region", { name: "Chats" });
+    await region.getByRole("button", { name: "Message", exact: true }).waitFor();
+    assert.equal(await region.getByText("No chats").count(), 0);
     const any = page.getByRole("main").getByRole("region", { name: /^Conversation with / });
     assert.equal(await any.count(), 0);
     await until(() => rowNames(list), ["Reviewer"]);
