@@ -1,11 +1,13 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { hubActors, unitProvider } from "@agentorg/interfaces";
+import { capabilityProvider, hubActors, unitProvider } from "@agentorg/interfaces";
 import { type Log, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { Connection, type Timing } from "./connection.js";
 import {
+  CAPABILITIES,
+  fromArguments,
   namedSecrets,
   parseConnection,
   type Secrets,
@@ -21,6 +23,8 @@ const Stored = z.object({
   kind: z.string(),
   params: z.record(z.string(), z.unknown()),
   secrets: z.record(z.string(), z.string()),
+  /** The agent it was mounted on, as a capability: none for one made as a unit. */
+  agent: z.string().optional(),
 });
 const FILE = "connections.json";
 /** What a unit's values come to as a connection's parameters: its name isn't one. */
@@ -46,8 +50,10 @@ export interface McpProvider {
 const quiet: Log = { info() {}, warn() {}, error() {} };
 
 /**
- * Run the built-in MCP provider as an Actor exporting `unit.provider@1` as `provider`. It offers two
- * units, `url` and `command`; a server it starts runs with this process's rights. Connections made earlier are joined again at the start.
+ * Run the built-in MCP provider as an Actor exporting `unit.provider@1` as `provider`, and
+ * `capability.provider@1` as `capabilities`. It offers two kinds, `url` and `command`, as units and
+ * as capabilities an agent may hold any number of; a server it starts runs with this process's
+ * rights. Connections made earlier are joined again at the start.
  */
 export async function startMcpProvider(options: McpProviderOptions): Promise<McpProvider> {
   const log = options.log ?? quiet;
@@ -130,7 +136,7 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors },
-    exports: { provider: unitProvider },
+    exports: { provider: unitProvider, capabilities: capabilityProvider },
     log,
     start(ctx) {
       ctx.exports.provider.implement({
@@ -145,34 +151,13 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
           return { problems: why ? [{ message: why }] : [] };
         },
         async apply({ unit: kind, values, secrets, name }) {
-          const params = paramsOf(values);
-          const named = namedSecrets(secrets);
-          if (!named.secrets) throw new Refused("invalid", named.why ?? "Its secrets don't fit.");
-          const { spec, secrets: hidden, why } = parseConnection(kind, params, named.secrets);
-          if (!spec) throw new Refused("invalid", why);
-          // Said now, as well as at each request.
-          const away = spec.kind === "url" && spec.public ? await notPublic(spec.url) : undefined;
-          if (away) throw new Refused("invalid", away);
-          const { actorId, credential } = await ctx.slots.actors.call.create({ name });
-          let connection: Connection | undefined;
-          try {
-            connection = await open(actorId, credential as string, spec, hidden);
-            if (closing) throw new Refused("unavailable", "This provider is stopping.");
-            stored[actorId] = { credential: credential as string, kind, params, secrets: hidden };
-            save();
-            connection.run();
-          } catch (error) {
-            connections.delete(actorId);
-            delete stored[actorId];
-            await connection?.end();
-            await ctx.slots.actors.call.close({ actorId }).catch(() => {});
-            throw error;
-          }
+          const made = await make(kind, paramsOf(values), secrets, name);
+          if ("why" in made) throw new Refused("invalid", made.why);
           // The instance is the connection: one made before units had no other id.
           return {
-            instance: actorId,
+            instance: made.connection,
             connections: [
-              { slot: String(values.slot), connection: actorId, target: targetOf(spec) },
+              { slot: String(values.slot), connection: made.connection, target: made.target },
             ],
             results: [],
           };
@@ -188,19 +173,114 @@ export async function startMcpProvider(options: McpProviderOptions): Promise<Mcp
         live: () => {
           throw new Refused("unknown", "A connection has nothing to open live.");
         },
-        async remove({ instance: connection }) {
-          const found = held(connection);
-          await ctx.slots.actors.call.close({ actorId: connection });
-          connections.delete(connection);
-          delete stored[connection];
-          try {
-            save();
-          } finally {
-            await found.end();
-          }
-          return {};
+        remove: ({ instance: connection }) => takeOff(connection),
+      });
+
+      /** The mount, if the agent holds it: its connection is the mount. */
+      const mountOf = (agent: string, mounted: string) => {
+        if (stored[mounted]?.agent !== agent)
+          throw new Refused("unknown", `${agent} has nothing mounted as ${mounted} here.`);
+        return held(mounted);
+      };
+      ctx.exports.capabilities.implement({
+        capabilities: () => ({ capabilities: CAPABILITIES }),
+        skill: () => {
+          throw new Refused("unknown", "These capabilities come with no skill.");
+        },
+        async mount({ agent, capability: kind, arguments: given }) {
+          const capability = CAPABILITIES.find((one) => one.id === kind);
+          if (!capability)
+            throw new Refused("unknown", `This provider makes no capability ${kind}.`);
+          const { slot, params, secrets } = fromArguments(kind, given);
+          if (typeof slot !== "string" || !slot)
+            return { problems: [{ path: "/slot", message: "Name must be given." }] };
+          // Named, as its agent is named.
+          const { name: agentName } = await ctx.slots.actors.call.get({ actorId: agent });
+          const made = await make(
+            kind,
+            params,
+            secrets,
+            `${agentName}: ${capability.title}`.slice(0, 128),
+            agent,
+          );
+          if ("why" in made) return { problems: [{ message: made.why }] };
+          return {
+            mounted: made.connection,
+            made: { connections: [{ slot, connection: made.connection, target: made.target }] },
+          };
+        },
+        async status({ agent, mounted }) {
+          const { state, detail } = await mountOf(agent, mounted).status();
+          // Connecting is down for now, with why; down says the server's words.
+          if (state === "connected") return { state: "mounted" };
+          return {
+            state: "down",
+            detail: (detail ?? (state === "connecting" ? "Connecting to its server." : "")).slice(
+              0,
+              2000,
+            ),
+          };
+        },
+        async unmount({ agent, mounted }) {
+          mountOf(agent, mounted);
+          return takeOff(mounted);
         },
       });
+
+      /**
+       * Make a connection to a server of `kind`, kept privately with its secrets: as a unit, or as a
+       * capability on `agent`. What doesn't fit its kind is said, and nothing is made.
+       */
+      const make = async (
+        kind: string,
+        params: Record<string, unknown>,
+        secrets: Secrets,
+        name: string,
+        agent?: string,
+      ): Promise<{ connection: string; target: string } | { why: string }> => {
+        const named = namedSecrets(secrets);
+        if (!named.secrets) return { why: named.why ?? "Its secrets don't fit." };
+        const { spec, secrets: hidden, why } = parseConnection(kind, params, named.secrets);
+        if (!spec) return { why };
+        // Said now, as well as at each request.
+        const away = spec.kind === "url" && spec.public ? await notPublic(spec.url) : undefined;
+        if (away) return { why: away };
+        const { actorId, credential } = await ctx.slots.actors.call.create({ name });
+        let connection: Connection | undefined;
+        try {
+          connection = await open(actorId, credential as string, spec, hidden);
+          if (closing) throw new Refused("unavailable", "This provider is stopping.");
+          stored[actorId] = {
+            credential: credential as string,
+            kind,
+            params,
+            secrets: hidden,
+            ...(agent ? { agent } : {}),
+          };
+          save();
+          connection.run();
+        } catch (error) {
+          connections.delete(actorId);
+          delete stored[actorId];
+          await connection?.end();
+          await ctx.slots.actors.call.close({ actorId }).catch(() => {});
+          throw error;
+        }
+        return { connection: actorId, target: targetOf(spec) };
+      };
+      /** Close a connection's Actor and let its server go; its kept secrets go with it. */
+      const takeOff = async (connection: string) => {
+        const found = held(connection);
+        await ctx.slots.actors.call.close({ actorId: connection });
+        connections.delete(connection);
+        delete stored[connection];
+        try {
+          save();
+        } finally {
+          await found.end();
+        }
+        return {};
+      };
     },
   }).catch(async (error) => {
     await endAll();

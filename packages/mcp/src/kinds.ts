@@ -175,3 +175,49 @@ export function targetOf(spec: Spec): string {
   const line = [spec.command, ...(spec.args ?? [])].join(" ");
   return (spec.cwd ? `${line} (in ${spec.cwd})` : line).slice(0, 4096);
 }
+
+/** A command's secret lines, as a capability's argument: the environment, one NAME=value a line. */
+const ENVIRONMENT = "environment";
+
+/**
+ * Each kind as a capability, by its unit's id: its form as the JSON Schema of its arguments, the
+ * token and the environment marked secret, and the name the agent knows it by. An agent may hold
+ * any number, one for each server. Its description is fixed.
+ */
+export const CAPABILITIES = UNITS.map((unit) => {
+  const properties: Record<string, z.core.util.JSONType> = {};
+  const required: string[] = [];
+  for (const field of unit.form) {
+    const id = field.id === LINES ? ENVIRONMENT : field.id;
+    const description = "description" in field ? field.description : undefined;
+    properties[id] = {
+      type: field.value === "boolean" ? "boolean" : field.value === "strings" ? "array" : "string",
+      title: field.title,
+      ...(description ? { description } : {}),
+      ...(field.value === "strings" ? { items: { type: "string" } } : {}),
+      ...(field.value === "secret" ? { secret: true } : {}),
+    } as z.core.util.JSONType;
+    if ("required" in field && field.required) required.push(id);
+  }
+  return {
+    id: unit.id,
+    title: unit.title,
+    description: unit.description,
+    arguments: { type: "object" as const, properties, required, additionalProperties: false },
+    many: true as const,
+  };
+});
+
+/**
+ * A capability's arguments as its unit's values and secrets: the name the agent knows it by, its
+ * connection's parameters, and its secrets by name. Unknown arguments are left for the kind's own
+ * check to refuse.
+ */
+export function fromArguments(kind: string, given: Record<string, unknown>) {
+  const { slot, token, [ENVIRONMENT]: environment, ...params } = given;
+  const secrets: Secrets = {};
+  if (typeof token === "string" && token) secrets.token = token;
+  if (kind === "command" && typeof environment === "string") secrets[LINES] = environment;
+  else if (environment !== undefined) params[ENVIRONMENT] = environment;
+  return { slot, params, secrets };
+}
