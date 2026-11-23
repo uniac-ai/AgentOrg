@@ -1,7 +1,29 @@
 // What the chat's views share: a conversation's row, your conversations as a list of them, the
-// pinned ones as tiles above the rest, and the control that collapses the chat.
+// pinned ones as tiles above the rest, dragged with dnd-kit, and the control that collapses the chat.
+import {
+  type CollisionDetection,
+  closestCenter,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  type Modifier,
+  MouseSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  rectSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
 import { CircleAlertIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "../ui/button.tsx";
 import {
   ContextMenu,
@@ -97,13 +119,17 @@ function ChatTile({
   chat,
   current,
   onOpen,
+  handle,
 }: {
   chat: ListedChat;
   current: boolean;
   onOpen(): void;
+  /** What makes its button the one the keyboard picks the tile up by. */
+  handle: React.ComponentProps<"button">;
 }) {
   return (
     <button
+      {...handle}
       type="button"
       aria-current={current ? "true" : undefined}
       onClick={onOpen}
@@ -134,11 +160,156 @@ function ChatTile({
   );
 }
 
+/** A conversation's menu, on its tile or its row: Pin, or Unpin. */
+function PinMenu({
+  pinned,
+  onPin,
+  children,
+}: {
+  pinned: boolean;
+  onPin(): void;
+  children: React.ReactElement;
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={onPin}>
+          {pinned ? <PinOffIcon /> : <PinIcon />}
+          {pinned ? "Unpin" : "Pin"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** The tiles' grid as a place to drop on: between the tiles, after them, and while there are none. */
+const PINNED = "pinned";
+/**
+ * The place of the conversation being dragged, where it would land: its room kept, nothing drawn in
+ * it. What is in it stays there unseen, so the keyboard stays on a tile it has picked up.
+ */
+const SLOT = "rounded-xl bg-[var(--hover)] *:opacity-0";
+
+interface Listed {
+  chat: ListedChat;
+  current: boolean;
+  onOpen(): void;
+  onPin(): void;
+}
+
+/** A pinned conversation's tile, which is dragged among the tiles: the others make room as it goes. */
+function PinnedTile({ chat, current, onOpen, onPin }: Listed) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: chat.agent.id });
+  return (
+    <PinMenu pinned onPin={onPin}>
+      <li
+        ref={setNodeRef}
+        data-chat={chat.agent.id}
+        className={isDragging ? SLOT : ""}
+        style={{
+          transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+          transition,
+        }}
+        {...listeners}
+      >
+        <ChatTile
+          chat={chat}
+          current={current}
+          onOpen={onOpen}
+          handle={{ ...attributes, ref: setActivatorNodeRef }}
+        />
+      </li>
+    </PinMenu>
+  );
+}
+
+/** A conversation's row, which is dragged up onto the tiles. */
+function ListedRow({ chat, current, onOpen, onPin }: Listed) {
+  const { listeners, setNodeRef, isDragging } = useDraggable({ id: chat.agent.id });
+  return (
+    <PinMenu pinned={false} onPin={onPin}>
+      <li
+        ref={setNodeRef}
+        data-chat={chat.agent.id}
+        className={isDragging ? SLOT : ""}
+        {...listeners}
+      >
+        <ChatRow chat={chat} current={current} onOpen={onOpen} />
+      </li>
+    </PinMenu>
+  );
+}
+
+/**
+ * The tiles' grid. With nothing pinned it is drawn only while a row is dragged, as the place to
+ * drop it. A tile moved by the keyboard goes from tile to tile, so the grid itself is no place then.
+ */
+function PinnedGrid({
+  tiles,
+  byKeys,
+  children,
+}: {
+  tiles: string[];
+  byKeys: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef } = useDroppable({ id: PINNED, disabled: byKeys });
+  return (
+    <SortableContext items={tiles} strategy={rectSortingStrategy}>
+      <ul
+        ref={setNodeRef}
+        aria-label="Pinned"
+        className={`grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-1 ${tiles.length === 0 ? "min-h-[90px] rounded-xl border border-dashed" : ""}`}
+      >
+        {children}
+      </ul>
+    </SortableContext>
+  );
+}
+
+/**
+ * What a drag is over: under a pointer, the tile it is on, or else the grid if it is in it; moved
+ * by the keyboard, the nearest tile.
+ */
+const overWhat: CollisionDetection = (args) => {
+  if (!args.pointerCoordinates) return closestCenter(args);
+  const under = pointerWithin(args);
+  const tile = under.find(({ id }) => id !== PINNED);
+  return tile ? [tile] : under;
+};
+
+/** Keeps what follows a pointer centred under it, wherever on its tile or row it was picked up. */
+const underPointer: Modifier = ({ activatorEvent, draggingNodeRect, transform }) =>
+  draggingNodeRect && activatorEvent instanceof MouseEvent
+    ? {
+        ...transform,
+        x:
+          transform.x + activatorEvent.clientX - draggingNodeRect.left - draggingNodeRect.width / 2,
+        y:
+          transform.y + activatorEvent.clientY - draggingNodeRect.top - draggingNodeRect.height / 2,
+      }
+    : transform;
+
 /**
  * Your conversations. The pinned ones come first, a tile each in a grid, in the order they were
- * pinned; the rest follow, newest first, a row each. `current` is the agent of the one open beside
+ * put in; the rest follow, newest first, a row each. `current` is the agent of the one open beside
  * them. A right-click on one, a long press, or Shift+F10 while it has the keyboard, opens its menu:
  * Pin, or Unpin.
+ *
+ * With a mouse they are dragged: a tile to another place among the tiles, a row onto the tiles,
+ * which pins it there, and a tile down off them, which unpins it. What follows the pointer is the
+ * agent's face alone, and the place it would land in is kept empty for it as the others make room.
+ * With the keyboard, Space picks a tile up and puts it down, the arrows move it, and Escape puts it
+ * back; Enter opens it. A touch drags nothing: it scrolls, and held still it opens the menu.
  */
 export function ChatList({
   chats,
@@ -164,45 +335,112 @@ export function ChatList({
       ?.focus();
     moved.current = undefined;
   });
-  const pinned = pins.flatMap((id) => chats.find((chat) => chat.agent.id === id) ?? []);
-  const item = (chat: ListedChat, Shown: typeof ChatTile) => {
-    const { id } = chat.agent;
-    const isPinned = pins.includes(id);
+  const sensors = useSensors(
+    // A press that moves is a drag; one that stays is a click.
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] },
+    }),
+  );
+  /** While one is dragged: which, how, and the tiles as they would be were it dropped now. */
+  const [drag, setDrag] = useState<{ id: string; byKeys: boolean; tiles: string[] }>();
+  const byId = new Map(chats.map((chat) => [chat.agent.id, chat]));
+  const kept = pins.filter((id) => byId.has(id));
+  const tiles = drag?.tiles ?? kept;
+  const nameOf = (id: unknown) => byId.get(String(id))?.agent.name ?? "";
+  const shown = (id: string, pinned: boolean) => {
+    const chat = byId.get(id);
+    const Shown = pinned ? PinnedTile : ListedRow;
     return (
-      <ContextMenu key={id}>
-        <ContextMenuTrigger asChild>
-          <li data-chat={id}>
-            <Shown chat={chat} current={id === current} onOpen={() => onOpen(id)} />
-          </li>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem
-            onSelect={() => {
-              moved.current = id;
-              pin(id, !isPinned);
-            }}
-          >
-            {isPinned ? <PinOffIcon /> : <PinIcon />}
-            {isPinned ? "Unpin" : "Pin"}
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      chat && (
+        <Shown
+          key={id}
+          chat={chat}
+          current={id === current}
+          onOpen={() => onOpen(id)}
+          onPin={() => {
+            moved.current = id;
+            pin(id, !pinned);
+          }}
+        />
+      )
     );
   };
   return (
-    <ul ref={list} aria-label="Chats" className={`${CHAT_ROWS} ${className}`}>
-      {pinned.length > 0 && (
-        <li className="pb-2">
-          <ul
-            aria-label="Pinned"
-            className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-1"
-          >
-            {pinned.map((chat) => item(chat, ChatTile))}
-          </ul>
-        </li>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={overWhat}
+      accessibility={{
+        announcements: {
+          onDragStart: ({ active }) => `Picked up ${nameOf(active.id)}.`,
+          onDragOver: ({ active, over }) =>
+            over && over.id !== PINNED && over.id !== active.id
+              ? `${nameOf(active.id)} is in ${nameOf(over.id)}'s place.`
+              : undefined,
+          onDragEnd: ({ active }) => `Put down ${nameOf(active.id)}.`,
+          onDragCancel: ({ active }) => `${nameOf(active.id)} is back where it was.`,
+        },
+      }}
+      onDragStart={({ active, activatorEvent }) =>
+        setDrag({
+          id: String(active.id),
+          byKeys: activatorEvent instanceof KeyboardEvent,
+          tiles: kept,
+        })
+      }
+      // Off the tiles it is a row; on them it is a tile, put before the one it came in over, or last.
+      onDragOver={({ active, over }) =>
+        setDrag((was) => {
+          const id = String(active.id);
+          if (!was || was.tiles.includes(id) === !!over) return was;
+          const rest = was.tiles.filter((one) => one !== id);
+          const at = over ? rest.indexOf(String(over.id)) : -1;
+          return {
+            ...was,
+            tiles: !over
+              ? rest
+              : at < 0
+                ? [...rest, id]
+                : [...rest.slice(0, at), id, ...rest.slice(at)],
+          };
+        })
+      }
+      onDragEnd={({ active, over }) => {
+        setDrag(undefined);
+        if (!drag) return;
+        const id = String(active.id);
+        // Among the tiles, it takes the place of the one it is dropped on.
+        const from = drag.tiles.indexOf(id);
+        const to = over ? drag.tiles.indexOf(String(over.id)) : -1;
+        const now = from >= 0 && to >= 0 ? arrayMove(drag.tiles, from, to) : drag.tiles;
+        const at = now.indexOf(id);
+        if (at >= 0 && now.some((one, i) => one !== kept[i])) pin(id, true, now[at + 1]);
+        if (at < 0 && kept.includes(id)) pin(id, false);
+      }}
+      onDragCancel={() => setDrag(undefined)}
+    >
+      <ul ref={list} aria-label="Chats" className={`${CHAT_ROWS} ${className}`}>
+        {(tiles.length > 0 || drag) && (
+          <li className="pb-2">
+            <PinnedGrid tiles={tiles} byKeys={!!drag?.byKeys}>
+              {tiles.map((id) => shown(id, true))}
+            </PinnedGrid>
+          </li>
+        )}
+        {chats.map(({ agent }) => !tiles.includes(agent.id) && shown(agent.id, false))}
+      </ul>
+      {createPortal(
+        <DragOverlay modifiers={[underPointer]} dropAnimation={null}>
+          {drag && byId.has(drag.id) && (
+            <span data-dragged={drag.id} className="grid size-full place-items-center">
+              <Face agent={(byId.get(drag.id) as ListedChat).agent} size={48} plain />
+            </span>
+          )}
+        </DragOverlay>,
+        document.body,
       )}
-      {chats.filter((chat) => !pins.includes(chat.agent.id)).map((chat) => item(chat, ChatRow))}
-    </ul>
+    </DndContext>
   );
 }
 
