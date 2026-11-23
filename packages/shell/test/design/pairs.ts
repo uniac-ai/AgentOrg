@@ -59,8 +59,6 @@ import {
   SECTIONS,
   SIGN_INS,
   type SignIn,
-  SMALLS,
-  type Small,
   sampleBuild,
   sampleChats,
   sampleLoad,
@@ -70,8 +68,6 @@ import {
   signInAccount,
   signInHash,
   signInState,
-  smallSays,
-  smallState,
   startTerminals,
   TYPING,
   type Typing,
@@ -123,8 +119,6 @@ interface Screen {
   build?: boolean;
   /** A state of New template's window, whose Computer may say a line of its own. */
   create?: Create;
-  /** A state of Create for an agent. */
-  small?: Small;
   /** A state of the unit window, whose Computer its connector states. */
   unitWindow?: UnitWindow;
   /** The design's page is this much taller than its own bar makes it. */
@@ -831,20 +825,6 @@ const SCREENS: Screen[] = [
       },
     }),
   ),
-  // Create for an agent, small: as it opens, from a template, signed out, and refused.
-  ...SMALLS.map(
-    ([state, sizes]): Screen => ({
-      name: `create-${state}`,
-      sizes: [...sizes],
-      themes: ["dark", "light"],
-      build: true,
-      // Centred in an odd height the design's window would sit on a half pixel.
-      taller: 1,
-      small: state,
-      design: (page) => smallState(page, state, true),
-      built: (page) => smallState(page, state, false),
-    }),
-  ),
   // New template's window, which builds a stack in its options.
   ...CREATES.map(
     ([state, sizes]): Screen => ({
@@ -1145,7 +1125,6 @@ for (const screen of SCREENS.filter((one) => wanted(one.name)))
           if (screen.firstStart) firstStart(gateway);
           if (screen.build) sampleBuild(gateway);
           if (screen.create) computerSays(gateway, screen.create);
-          if (screen.small) smallSays(gateway, screen.small);
           if (screen.unitWindow) windowSays(gateway, screen.unitWindow);
           if (screen.settings) sampleSettings(gateway);
           if (screen.signIn) signInAccount(gateway, screen.signIn);

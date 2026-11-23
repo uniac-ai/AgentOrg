@@ -130,10 +130,11 @@ export function BuildDialog() {
         className={
           template
             ? "window flex h-[min(680px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col sm:max-w-[920px]"
-            : // The card is 440 wide, and what it can do 360 beside it: the window widens in the
-              // time a window opens in, and at once with reduced motion. On a phone it is under
-              // the card, and the window scrolls.
-              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col max-sm:overflow-y-auto sm:motion-safe:transition-[max-width] sm:motion-safe:ease-out ${detail ? "sm:max-w-[800px]" : "sm:max-w-[440px]"}`
+            : // The card is 440 wide. Where the page is 768 wide or more, what it can do opens
+              // beside it, up to 360 wide: the window widens in the time a window opens in, at
+              // once with reduced motion, and never past the page less its margins, what it can
+              // do giving up the width. Narrower, it opens under the card, and the window scrolls.
+              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-md:flex-col max-md:overflow-y-auto sm:max-w-[440px] md:motion-safe:transition-[max-width] md:motion-safe:ease-out ${detail ? "md:max-w-[min(800px,calc(100%-2rem))]" : ""}`
         }
       >
         {template ? (
@@ -416,7 +417,7 @@ function CreateCard({ detail, setDetail }: { detail: boolean; setDetail(next: bo
   return (
     <form
       aria-label="Create"
-      className="relative flex w-full shrink-0 flex-col bg-[var(--create-card)] sm:w-[440px]"
+      className="relative flex w-full shrink-0 flex-col bg-[var(--create-card)] md:w-[440px]"
       onSubmit={(event) => {
         event.preventDefault();
         finish();
@@ -469,8 +470,8 @@ function CreateCard({ detail, setDetail }: { detail: boolean; setDetail(next: bo
  * The card's right edge, which opens what the agent can do beside the card and closes it. Under
  * the pointer, or with the keyboard on it, a strip of the window's other ground rises from the
  * card's foot with an arrow in it: a sign there is more, or that it closes. Where nothing hovers,
- * as on a touch screen, the strip stands. On a phone it is a bar along the card's foot, and what
- * it opens is under the card.
+ * as on a touch screen, the strip stands. Where the page is narrower than 768, as on a phone, it
+ * is a bar along the card's foot, and what it opens is under the card.
  */
 function Edge({ detail, setDetail }: { detail: boolean; setDetail(next: boolean): void }) {
   return (
@@ -480,15 +481,15 @@ function Edge({ detail, setDetail }: { detail: boolean; setDetail(next: boolean)
       aria-expanded={detail}
       aria-controls="create-detail"
       onClick={() => setDetail(!detail)}
-      className="group/edge absolute top-14 right-0 bottom-0 flex w-7 items-center justify-center text-muted-foreground outline-none max-sm:relative max-sm:inset-auto max-sm:h-9 max-sm:w-full max-sm:shrink-0"
+      className="group/edge absolute top-14 right-0 bottom-0 flex w-7 items-center justify-center text-muted-foreground outline-none max-md:relative max-md:inset-auto max-md:h-9 max-md:w-full max-md:shrink-0"
     >
       <span
         aria-hidden
-        className="absolute inset-x-0 bottom-0 h-0 rounded-tl-xl bg-[var(--create)] transition-[height] duration-200 ease-out group-hover/edge:h-full group-focus-visible/edge:h-full motion-reduce:transition-none max-sm:h-full max-sm:rounded-none [@media(hover:none)]:h-full"
+        className="absolute inset-x-0 bottom-0 h-0 rounded-tl-xl bg-[var(--create)] transition-[height] duration-200 ease-out group-hover/edge:h-full group-focus-visible/edge:h-full motion-reduce:transition-none max-md:h-full max-md:rounded-none [@media(hover:none)]:h-full"
       />
       <ChevronRightIcon
         aria-hidden
-        className={`relative size-4 opacity-0 transition-opacity duration-200 group-hover/edge:opacity-100 group-focus-visible/edge:opacity-100 motion-reduce:transition-none max-sm:opacity-100 [@media(hover:none)]:opacity-100 ${detail ? "rotate-180 max-sm:-rotate-90" : "max-sm:rotate-90"}`}
+        className={`relative size-4 opacity-0 transition-opacity duration-200 group-hover/edge:opacity-100 group-focus-visible/edge:opacity-100 motion-reduce:transition-none max-md:opacity-100 [@media(hover:none)]:opacity-100 ${detail ? "rotate-180 max-md:-rotate-90" : "max-md:rotate-90"}`}
       />
     </button>
   );
@@ -497,7 +498,7 @@ function Edge({ detail, setDetail }: { detail: boolean; setDetail(next: boolean)
 /**
  * What the agent will be able to do, as the template gives it, beside the card on the window's
  * other ground: each unit with its logo, its title, its own line and what it gives. Shown, not
- * asked. Closed, it is out of the window's width, and of reach; on a phone it isn't drawn.
+ * asked. Closed, it is out of the window's width, and of reach; under the card, it isn't drawn.
  */
 function Detail({ shown }: { shown: boolean }) {
   const { draft } = useBuilding();
@@ -507,7 +508,7 @@ function Detail({ shown }: { shown: boolean }) {
       aria-label="What it can do"
       aria-hidden={!shown}
       inert={!shown}
-      className={`no-bar flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5 sm:absolute sm:inset-y-0 sm:left-[440px] sm:flex sm:w-[360px] ${shown ? "flex" : "max-sm:hidden"}`}
+      className={`no-bar flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5 md:absolute md:inset-y-0 md:left-[440px] md:flex md:w-[min(360px,calc(100vw-2rem-440px))] ${shown ? "flex" : "max-md:hidden"}`}
     >
       <h3 className="flex h-6 shrink-0 items-center text-[13px] font-medium text-muted-foreground">
         What it can do

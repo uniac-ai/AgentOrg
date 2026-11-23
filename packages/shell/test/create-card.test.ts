@@ -507,6 +507,70 @@ test(
 );
 
 test(
+  "the window is always whole on the page: at 1024 wide what it can do is 360 beside the card, at 800 it gives up width to the page's margins, and narrower than 768 it opens under the card",
+  withGateway(async (gateway) => {
+    const HEIGHT = 720;
+    for (const [width, across, beside] of [
+      [1024, 800, true],
+      [800, 768, true],
+      [700, 440, false],
+    ] as const) {
+      const page = await browser().newPage({ viewport: { width, height: HEIGHT } });
+      page.setDefaultTimeout(8000);
+      await page.addInitScript((s) => localStorage.setItem("agentorg.session", s), SESSION);
+      await page.goto(`${gateway.url}/#/team`);
+      const window_ = await create(page);
+      /** The window's box, none of it off the page. */
+      const whole = async (when: string) => {
+        const box = await boxOf(window_);
+        assert.ok(
+          box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= HEIGHT,
+          `${when}, at ${width}: ${JSON.stringify(box)}`,
+        );
+        return box;
+      };
+      assert.equal((await whole("the card alone")).width, 440);
+      await edge(page).click();
+      await wide(page, across);
+      const open = await whole("with what it can do");
+      assert.ok(Math.abs(open.x + open.width / 2 - width / 2) < 1, "in the page's middle");
+      const card = await boxOf(window_.getByRole("form", { name: "Create" }));
+      const shown = await boxOf(detail(page));
+      assert.ok(
+        shown.x >= open.x - 0.5 &&
+          shown.x + shown.width <= open.x + open.width + 0.5 &&
+          shown.y + shown.height <= open.y + open.height + 0.5,
+        `what it can do is inside the window, at ${width}`,
+      );
+      if (beside) {
+        assert.ok(Math.abs(shown.x - (card.x + card.width)) < 1, "beside the card");
+        assert.equal(card.width, 440, "the card keeps its width");
+        assert.equal(shown.width, across - 440);
+        assert.ok(open.x >= 16, "the page's margin");
+      } else {
+        assert.ok(shown.y >= card.y + card.height - 1, "under the card");
+        assert.equal(shown.width, card.width);
+      }
+      // None of its words run past it.
+      assert.equal(
+        await detail(page).evaluate((e) =>
+          [...e.querySelectorAll("li, h3")].some(
+            (one) => one.getBoundingClientRect().right > e.getBoundingClientRect().right + 0.5,
+          ),
+        ),
+        false,
+        `cut at ${width}`,
+      );
+      await edge(page).click();
+      await wide(page, 440);
+      assert.equal(await detail(page).count(), 0);
+      await whole("closed again");
+      await page.close();
+    }
+  }),
+);
+
+test(
   "on a phone the edge is a bar along the card's foot, there without a pointer over it, and what the agent can do opens under the card",
   withGateway(async (gateway) => {
     const page = await browser().newPage({
