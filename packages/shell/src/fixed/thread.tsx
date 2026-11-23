@@ -63,7 +63,6 @@ import {
 } from "./data.ts";
 import { Face } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
-import { useReducedMotion } from "./motion.ts";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
 import { useAgents } from "./watch.tsx";
@@ -367,16 +366,17 @@ const corners = (side: "start" | "end", above: boolean, below: boolean) =>
 /**
  * The agent typing in this conversation, as a messenger shows the other end typing: three dots in a
  * muted bubble on its side, heard as "<agent> is typing". The dots rise in turn, and stay still for
- * a person who asks for less motion.
+ * a person who asks for less motion. Under a message that came while the conversation was open, it
+ * comes in as that message did.
  */
-const TypingSign = ({ name }: { name: string }) => (
+const TypingSign = ({ name, came }: { name: string; came: boolean }) => (
   <Message>
     <MessageContent>
       <Bubble
         variant="muted"
         role="status"
         aria-label={`${name} is typing`}
-        className="max-w-[80%]"
+        className={`max-w-[80%] ${came ? "message-in" : ""}`}
       >
         <BubbleContent
           className={`flex h-10 items-center gap-1 px-4 ${corners("start", false, false)}`}
@@ -501,7 +501,6 @@ export function Thread({
   const { byId } = useAgents();
   const { read } = useAllChats();
   const connection = useConnection();
-  const reduced = useReducedMotion();
   const entry = chat?.entry;
   const watched = byId.get(agent.id);
   const slot = watched?.slot;
@@ -520,6 +519,11 @@ export function Thread({
   const [progress, setProgress] = useState<ReadonlyMap<string, Progress>>(new Map());
   /** The messages whose emoji came while the conversation was open: it grows in. One read with it is simply there. */
   const reacted = useRef(new Set<string>());
+  /**
+   * What came while the conversation was open, either side's, by the id it is drawn under: it
+   * rises in. What was read with the conversation, or read in above it, is simply there.
+   */
+  const came = useRef(new Set<string>());
   /** Whether the agent works, in this chat or another. */
   const [working, setWorking] = useState(false);
   /** A message was sent from here and the agent hasn't gone idle since: its reply may be coming. */
@@ -613,6 +617,7 @@ export function Thread({
         (payload) => {
           if (!here(payload)) return;
           const message = payload as ChatMessage;
+          came.current.add(message.id);
           setStreaming((was) => {
             if (!was.has(message.id)) return was;
             const next = new Map(was);
@@ -644,6 +649,7 @@ export function Thread({
           const { id: reply, text: piece } = payload as { id: string; text: string };
           // A late piece of a reply already settled changes nothing.
           if (shown.current.some((m) => m.id === reply)) return;
+          came.current.add(reply);
           setStreaming((was) => new Map(was).set(reply, (was.get(reply) ?? "") + piece));
         },
         { again: load },
@@ -765,6 +771,7 @@ export function Thread({
     setFailure(undefined);
     setSentHere(true);
     const key = `sending-${++sends.current}`;
+    came.current.add(key);
     setSending((was) => [...was, { id: key, text, images, ...(answer ? { answer } : {}) }]);
     try {
       const { messageId } = await api.call<{ messageId: string }>(
@@ -856,7 +863,10 @@ export function Thread({
                   className={`[content-visibility:visible] ${after === undefined ? "" : after === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-5" : ""}`}
                 >
                   {turn.kind === "user" ? (
-                    <Message align="end">
+                    <Message
+                      align="end"
+                      className={came.current.has(turn.id) ? "message-in" : undefined}
+                    >
                       <MessageContent className="gap-1">
                         {/* Between two agents, who said it. */}
                         {other && (
@@ -909,7 +919,7 @@ export function Thread({
                         text={turn.text}
                         at={turn.at}
                         streaming={!!turn.streaming}
-                        reduced={reduced}
+                        came={came.current.has(turn.id)}
                         above={after === "agent"}
                         below={before === "agent"}
                         isLast={turn === lastTurn}
@@ -940,7 +950,7 @@ export function Thread({
                   the sign comes is the end it keeps. */}
               {typing && (
                 <MessageScrollerItem className={`[content-visibility:visible] ${SIDE_CHANGES}`}>
-                  <TypingSign name={agent.name} />
+                  <TypingSign name={agent.name} came={!!newest && came.current.has(newest.id)} />
                 </MessageScrollerItem>
               )}
               {/* The conversation's own problem never shows with the sign (see `typing`), and the
@@ -1021,13 +1031,15 @@ function Room({
  * person's is, at the start side, as wide as its words up to 80%, 4 px apart; a code block keeps the
  * conversation's whole width and the frame code has, with no fill, and its own Copy. Nothing is
  * under the last. A bubble is known by its place in the message: as the message is written, bubbles
- * are only added at its end, and only the last one's words change.
+ * are only added at its end, and only the last one's words change. Its words are there as they
+ * come; each bubble of a message that came while the conversation was open rises in as it first
+ * appears.
  */
 function Reply({
   text,
   at,
   streaming,
-  reduced,
+  came,
   above,
   below,
   isLast,
@@ -1038,7 +1050,8 @@ function Reply({
   at: string | undefined;
   /** Still being written. */
   streaming: boolean;
-  reduced: boolean;
+  /** It came while the conversation was open. */
+  came: boolean;
   /** The agent's own message is just above it, or just under it: their bubbles meet. */
   above: boolean;
   below: boolean;
@@ -1064,25 +1077,13 @@ function Reply({
                 // biome-ignore lint/suspicious/noArrayIndexKey: a message's bubbles only grow at its end.
                 key={n}
                 code={code}
+                came={came}
                 text={text}
                 at={settled ? at : undefined}
               >
                 {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
                 <BubbleContent className={`prose-chat text-[15px] leading-[1.6] ${shape}`}>
-                  <Streamdown
-                    controls={{ table: false, code: true }}
-                    animated={{
-                      animation: "reveal",
-                      duration: 260,
-                      easing: "ease-out",
-                      stagger: 14,
-                      maxBacklogMs: 420,
-                    }}
-                    // Only the last is being written.
-                    isAnimating={streaming && !reduced && n === bubbles.length - 1}
-                  >
-                    {bubble}
-                  </Streamdown>
+                  <Streamdown controls={{ table: false, code: true }}>{bubble}</Streamdown>
                 </BubbleContent>
               </ReplyBubble>
             );
@@ -1103,11 +1104,14 @@ const LONG_PRESS_MS = 500;
  */
 function ReplyBubble({
   code,
+  came,
   text,
   at,
   children,
 }: {
   code: boolean;
+  /** Its message came while the conversation was open: it rises in. */
+  came: boolean;
   /** The whole message's words, which its Copy copies. */
   text: string;
   /** When the message was sent; none while it isn't settled, which has no menu yet. */
@@ -1124,7 +1128,7 @@ function ReplyBubble({
   return (
     <Bubble
       variant={code ? "ghost" : "muted"}
-      className={code ? "w-full" : "max-w-[80%]"}
+      className={`${code ? "w-full" : "max-w-[80%]"} ${came ? "message-in" : ""}`}
       {...(menu
         ? {
             onPointerDown: (event: React.PointerEvent) => {

@@ -1,9 +1,10 @@
-// The chat's replies in a real browser, over the stand-in gateway: how one reveals and settles, earlier
-// messages read on asking, the thread's room, a long reply followed to its end, and the latest
-// message at the room's foot.
+// The chat's replies in a real browser, over the stand-in gateway: how one is written and settles,
+// how a message that comes rises in, earlier messages read on asking, the thread's room, a long
+// reply followed to its end, and the latest message at the room's foot.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { withBrowser } from "./build-kit.ts";
+import type { Page } from "@playwright/test";
+import { browser, SESSION, withBrowser } from "./build-kit.ts";
 import {
   input,
   mine,
@@ -19,7 +20,7 @@ import {
 withBrowser();
 
 test(
-  "a reply reveals word by word, then settles as one message with no spans",
+  "a reply's words are there as they come, none of them revealed apart, and it settles as one message",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     // The agent works, and the newest thing said here is the person's: the chat awaits a reply.
@@ -33,15 +34,134 @@ test(
     await mine(page, "Why did it fail?").waitFor();
     // While it works on it, the chat shows the message and nothing under it.
     await nothingUnder(page, "Why did it fail?");
+    /** The reply's words: what they say, how many parts they are in, and what of them moves. */
+    const words = () =>
+      panel(page)
+        .locator(".prose-chat")
+        .last()
+        .evaluate((written) => ({
+          said: (written.textContent ?? "").trim(),
+          parts: written.querySelectorAll("span").length,
+          moving: written.getAnimations({ subtree: true }).length,
+        }));
     gateway.delta("a-reviewer", "r1", "Three causes ");
-    await panel(page).locator("[data-sd-animate]").first().waitFor();
+    await panel(page).getByText("Three causes").waitFor();
+    assert.deepEqual(await words(), { said: "Three causes", parts: 0, moving: 0 });
     gateway.delta("a-reviewer", "r1", "explain it.");
     await panel(page).getByText("explain it.").waitFor();
+    assert.deepEqual(await words(), { said: "Three causes explain it.", parts: 0, moving: 0 });
     gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
-    await panel(page).getByText("Three causes explain it.").waitFor();
+    await panel(page).getByRole("button", { name: "More" }).last().waitFor();
     assert.equal(await panel(page).getByText("Three causes explain it.").count(), 1);
-    assert.equal(await panel(page).locator("[data-sd-animate]").count(), 0);
+    assert.deepEqual(await words(), { said: "Three causes explain it.", parts: 0, moving: 0 });
+    await page.close();
+  }),
+);
+
+/**
+ * How each thing said in the chat comes in, top to bottom: the person's messages, and the agent's
+ * bubbles with its typing sign marked. "message-in 0.16s" rises in; "none" is simply there.
+ */
+const comingIn = (page: Page) =>
+  panel(page).evaluate((root) => {
+    const how = (one: Element) => {
+      const style = getComputedStyle(one);
+      return style.animationName === "none"
+        ? "none"
+        : `${style.animationName} ${style.animationDuration}`;
+    };
+    return {
+      mine: [...root.querySelectorAll('[data-slot="message"][data-align="end"]')].map(how),
+      theirs: [
+        ...root.querySelectorAll('[data-slot="bubble"]:not([data-variant="secondary"])'),
+      ].map((bubble) => `${how(bubble)}${bubble.querySelector(".typing-dot") ? ", the sign" : ""}`),
+    };
+  });
+
+test(
+  "what comes while the conversation is open rises in with a fade, in 160 ms: the person's message, the sign under it, and each bubble of the reply as it first appears; what was there as it opened, and earlier messages read in, are simply there",
+  withGateway(async (gateway) => {
+    const chat = gateway.agents.get("a-reviewer");
+    assert.ok(chat);
+    chat.chat.messages.unshift(
+      ...Array.from({ length: 120 }, (_, i) => ({
+        ...reply(`old${i}`, `Old note ${i}`),
+        ...(i % 2 ? {} : { role: "user" as const }),
+      })),
+    );
+    const page = await open(gateway);
+    const opened = await comingIn(page);
+    assert.ok(opened.mine.length > 0 && opened.theirs.length > 0);
+    assert.deepEqual([...new Set([...opened.mine, ...opened.theirs])], ["none"], "as it opens");
+
+    await input(page).fill("Why did it fail?");
+    await input(page).press("Enter");
+    await panel(page).getByRole("status", { name: "Reviewer is typing" }).waitFor();
+    let now = await comingIn(page);
+    assert.deepEqual(now.mine, [...opened.mine, "message-in 0.16s"], "the person's message");
+    assert.deepEqual(
+      now.theirs,
+      [...opened.theirs, "message-in 0.16s, the sign"],
+      "the sign under a message that came",
+    );
+
+    // Its bubbles as they first appear, one and then the next, and the same once it is recorded.
+    gateway.delta("a-reviewer", "r1", "Three causes explain it.\n\n");
+    await panel(page).getByText("Three causes explain it.").waitFor();
+    assert.deepEqual((await comingIn(page)).theirs, [...opened.theirs, "message-in 0.16s"]);
+    gateway.delta("a-reviewer", "r1", "The first is the lock file.");
+    await panel(page).getByText("The first is the lock file.").waitFor();
+    const written = [...opened.theirs, "message-in 0.16s", "message-in 0.16s"];
+    assert.deepEqual((await comingIn(page)).theirs, written);
+    gateway.addMessage(
+      "a-reviewer",
+      reply("r1", "Three causes explain it.\n\nThe first is the lock file."),
+    );
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    await panel(page).getByRole("button", { name: "More" }).last().waitFor();
+    assert.deepEqual((await comingIn(page)).theirs, written, "recorded");
+
+    // Earlier messages read in above: they, and all that was there, are simply there.
+    await panel(page).getByRole("button", { name: "Earlier messages" }).click();
+    await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
+    now = await comingIn(page);
+    assert.deepEqual(
+      [now.mine.filter((one) => one !== "none"), now.theirs.filter((one) => one !== "none")],
+      [["message-in 0.16s"], ["message-in 0.16s", "message-in 0.16s"]],
+      "only what came",
+    );
+    assert.deepEqual([now.mine.at(-1), ...now.theirs.slice(-2)], Array(3).fill("message-in 0.16s"));
+    await page.close();
+  }),
+);
+
+test(
+  "for a person who asks for less motion, a message that comes is simply there",
+  withGateway(async (gateway) => {
+    const page = await browser().newPage({
+      viewport: { width: 1440, height: 900 },
+      reducedMotion: "reduce",
+    });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    await page.goto(`${gateway.url}/#/a/a-reviewer`);
+    await page.getByRole("button", { name: /^Chats/ }).click();
+    await panel(page)
+      .getByRole("list", { name: "Chats" })
+      .getByRole("button")
+      .filter({ hasText: "Reviewer" })
+      .click();
+    await input(page).fill("Why did it fail?");
+    await input(page).press("Enter");
+    await panel(page).getByRole("status", { name: "Reviewer is typing" }).waitFor();
+    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    await panel(page).getByText("Three causes explain it.").waitFor();
+    const now = await comingIn(page);
+    assert.deepEqual([...new Set([...now.mine, ...now.theirs])], ["none"]);
     await page.close();
   }),
 );
@@ -152,7 +272,7 @@ test(
     await atEnd("the end is in view while it is written");
     gateway.addMessage("a-reviewer", reply("long", lines(0, 60).join("\n\n")));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
-    await panel(page).locator("[data-sd-animate]").first().waitFor({ state: "detached" });
+    await panel(page).getByRole("button", { name: "More" }).last().waitFor({ state: "attached" });
     await atEnd("and when it is done");
     assert.ok(await panel(page).getByText("Finding 59 is").isVisible());
 

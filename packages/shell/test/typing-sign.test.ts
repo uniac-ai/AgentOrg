@@ -254,8 +254,9 @@ test(
     const { page, thread } = await conversation(gateway);
     const box = page.getByRole("textbox", { name: "Message" }).last();
     await box.fill("One more thing");
-    // Where the message is drawn in each frame from the first it is in, until the sign has been
-    // there ten frames. The agent says it works as soon as the message is sent.
+    // Where the message's place in the room is in each frame from the first it is in, until the
+    // sign has been there ten frames: its place, not the few pixels it rises through as it comes
+    // in. The agent says it works as soon as the message is sent.
     const drawnAt = page.evaluate(
       () =>
         new Promise<number[]>((done) => {
@@ -264,7 +265,7 @@ test(
           let signed = 0;
           const frame = () => {
             const message = [
-              ...document.querySelectorAll('main [data-slot="message"][data-align="end"]'),
+              ...document.querySelectorAll('main [data-slot="message-scroller-item"]'),
             ].find((one) => one.textContent?.includes("One more thing"));
             if (message) seen.push(Math.round(message.getBoundingClientRect().top));
             if (document.querySelector('[aria-label="Research is typing"]')) signed++;
@@ -289,8 +290,8 @@ test(
       .locator('[data-slot="message-scroller-viewport"]')
       .evaluate((room) => Math.round(room.getBoundingClientRect().bottom));
     const sent = await thread
-      .locator('[data-slot="message"][data-align="end"]')
-      .last()
+      .locator('[data-slot="message-scroller-item"]')
+      .filter({ hasText: "One more thing" })
       .evaluate((message) => Math.round(message.getBoundingClientRect().bottom));
     assert.equal(foot - sent, 72, "the sign under it, then the room's 16 px");
     await page.close();

@@ -177,10 +177,13 @@ test(
     const { page, thread } = await conversation(gateway, "floating");
     await ask(gateway, thread, "Why did it fail?");
     gateway.delta("a-reviewer", "r1", "Three causes ");
-    await thread.locator("[data-sd-animate]").first().waitFor();
+    await message(thread, "Three causes").waitFor();
     gateway.delta("a-reviewer", "r1", "explain it.");
     await message(thread, "explain it.").waitFor();
-    await message(thread, "explain it.").evaluate((e) => {
+    // Once its bubble has come in: that is the one time it moves.
+    await message(thread, "explain it.").evaluate(async (e) => {
+      const bubble = e.querySelector('[data-slot="bubble"]') as Element;
+      await Promise.all(bubble.getAnimations().map((one) => one.finished));
       (e as HTMLElement & { kept?: true }).kept = true;
     });
     gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
@@ -188,13 +191,13 @@ test(
     await message(thread, "Three causes explain it.")
       .getByRole("button", { name: "More" })
       .waitFor();
-    await thread.locator("[data-sd-animate]").waitFor({ state: "detached" });
-    // Its words: what its "⋯" does as it appears is its own.
+    // Its bubble and its words: what its "⋯" does as it appears is its own.
     const after = await message(thread, "Three causes explain it.").evaluate((e) => ({
       kept: !!(e as HTMLElement & { kept?: true }).kept,
-      moving: (e.querySelector(".prose-chat") as Element)
-        .getAnimations({ subtree: true })
-        .filter((one) => one.playState === "running").length,
+      moving: [
+        ...(e.querySelector('[data-slot="bubble"]') as Element).getAnimations(),
+        ...(e.querySelector(".prose-chat") as Element).getAnimations({ subtree: true }),
+      ].filter((one) => one.playState === "running").length,
     }));
     assert.deepEqual(after, { kept: true, moving: 0 });
     assert.equal(await message(thread, "Three causes explain it.").count(), 1);
