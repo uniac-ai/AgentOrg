@@ -6,6 +6,7 @@ import test from "node:test";
 import type { Page } from "@playwright/test";
 import { browser, SESSION, withBrowser } from "./build-kit.ts";
 import {
+  earlier,
   input,
   mine,
   nothingUnder,
@@ -134,7 +135,7 @@ test(
     assert.equal(now.apart, 0, "its bubbles together");
 
     // Earlier messages read in above: they, and all that was there, are simply there.
-    await panel(page).getByRole("button", { name: "Earlier messages" }).click();
+    await earlier(panel(page));
     await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
     now = await comingIn(page);
     assert.deepEqual(
@@ -198,7 +199,7 @@ test(
       .locator(".prose-chat")
       .last()
       .evaluate((e) => e.setAttribute("data-kept", ""));
-    await panel(page).getByRole("button", { name: "Earlier messages" }).click();
+    await earlier(panel(page));
     await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
     assert.equal(await panel(page).getByRole("button", { name: "Earlier messages" }).count(), 0);
     assert.equal(await panel(page).locator("[data-kept]").count(), 1);

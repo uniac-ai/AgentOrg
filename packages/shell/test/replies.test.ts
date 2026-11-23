@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
 import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
+import { earlier } from "./chat-kit.ts";
 
 withBrowser();
 
@@ -221,7 +222,7 @@ test(
         .slice(-2))
         (item as HTMLElement & { kept?: true }).kept = true;
     });
-    await thread.getByRole("button", { name: "Earlier messages" }).click();
+    await earlier(thread);
     await thread.getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
     assert.deepEqual(await marked(), [true, true]);
     await page.close();
