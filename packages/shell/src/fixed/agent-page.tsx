@@ -21,7 +21,7 @@ import { Overview } from "./overview.tsx";
 import { Section } from "./parts.tsx";
 import { Setup } from "./setup.tsx";
 import { replaceUnit, UnitWindow } from "./unit-window.tsx";
-import { useAgents } from "./watch.tsx";
+import { facedOf, useAgents } from "./watch.tsx";
 
 const big = "h-10 rounded-full px-4 text-[15px]";
 
@@ -97,7 +97,12 @@ export function AgentPage({
     const party = chat.agent.id === id ? chat.with : chat.with === id ? chat.agent.id : undefined;
     const other = party === undefined ? undefined : byId.get(party);
     return party && other
-      ? [{ chat, other: { id: party, name: other.entry.name, tone: other.now.tone } }]
+      ? [
+          {
+            chat,
+            other: facedOf(other),
+          },
+        ]
       : [];
   });
   // How it stands, and no more. What it did, and what went wrong in a chat, is read in its chats.
@@ -108,7 +113,7 @@ export function AgentPage({
     <div className="no-bar h-full overflow-y-auto">
       <div className="mx-auto max-w-[1080px] px-6 pb-28 tight:px-4">
         <header className="flex items-center gap-5 pt-8 tight:flex-wrap tight:gap-x-4 tight:gap-y-5 phone:pt-2">
-          <Face agent={{ id, name: entry.name, tone: now.tone }} size={88} plain />
+          <Face agent={facedOf(watched)} size={88} plain />
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-[30px] leading-9 font-semibold tracking-tight">
               {entry.name}
@@ -185,7 +190,7 @@ export function AgentPage({
           {tab?.id === "computer" && (
             <div className="grid grid-cols-[minmax(0,1fr)_200px] gap-8 tight:grid-cols-1">
               <Computer
-                agent={{ id, name: entry.name, tone: now.tone }}
+                agent={facedOf(watched)}
                 surfaces={surfaces}
                 onStart={() => api.call("agents", "start", { agent: id })}
                 {...(watched.held?.windows ? { down: watched.held.detail ?? "", mend } : {})}
@@ -218,7 +223,7 @@ export function AgentPage({
                       onClick={() => openChat(id)}
                       className="flex h-16 w-full items-center gap-3 rounded-xl px-2.5 text-left hover:bg-[var(--hover)]"
                     >
-                      <Face agent={{ id, name: entry.name, tone: now.tone }} size={40} plain />
+                      <Face agent={facedOf(watched)} size={40} plain />
                       <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
                         Message {entry.name}
                       </span>

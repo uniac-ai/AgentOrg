@@ -76,6 +76,7 @@ function To({ onPicked }: { onPicked(): void }) {
                 id: entry.agent,
                 name: entry.name,
                 tone: agents.byId.get(entry.agent)?.now.tone ?? "idle",
+                avatar: entry.avatar,
               }}
               size={32}
               plain

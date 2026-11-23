@@ -7,13 +7,13 @@ import { go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { useCreatables } from "./data.ts";
 import { Face } from "./face.tsx";
-import { useAgents } from "./watch.tsx";
+import { facedOf, useAgents } from "./watch.tsx";
 
 export function AgentDetails({ agent: id, onClose }: { agent: string; onClose(): void }) {
   const watched = useAgents().byId.get(id);
   const creatables = useCreatables();
   if (!watched) return null;
-  const { entry, now } = watched;
+  const { entry } = watched;
   // What it is for: its own words, or else what it was made from says.
   const purpose =
     entry.purpose ??
@@ -42,7 +42,7 @@ export function AgentDetails({ agent: id, onClose }: { agent: string; onClose():
           className="flex max-w-full flex-col items-center rounded-xl"
           onClick={() => go({ screen: "team", agent: id })}
         >
-          <Face agent={{ id, name: entry.name, tone: now.tone }} size={80} plain />
+          <Face agent={facedOf(watched)} size={80} plain live />
           <span className="mt-4 max-w-full text-[22px] leading-8 font-semibold tracking-tight">
             {entry.name}
           </span>

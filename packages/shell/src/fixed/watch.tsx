@@ -16,6 +16,7 @@ import {
   useHeldDown,
   useWorking,
 } from "./data.ts";
+import type { Faced } from "./face.tsx";
 
 export interface Watched {
   entry: AgentEntry;
@@ -28,6 +29,14 @@ export interface Watched {
   held?: DownCapability;
   now: Now;
 }
+
+/** A watched agent as its face needs it. */
+export const facedOf = ({ entry, now }: Watched): Faced => ({
+  id: entry.agent,
+  name: entry.name,
+  tone: now.tone,
+  avatar: entry.avatar,
+});
 
 interface Agents {
   list: AgentEntry[];

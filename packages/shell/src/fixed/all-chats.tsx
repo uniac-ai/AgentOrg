@@ -13,12 +13,13 @@ import {
   useState,
 } from "react";
 import { api, useConnection } from "../data.ts";
-import type { ChatMessage, Conversation, Tone } from "./data.ts";
-import { useAgents } from "./watch.tsx";
+import type { ChatMessage, Conversation } from "./data.ts";
+import type { Faced } from "./face.tsx";
+import { facedOf, useAgents } from "./watch.tsx";
 
 export interface ListedChat {
   /** The agent whose conversation it is. */
-  agent: { id: string; name: string; tone: Tone };
+  agent: Faced;
   /** Who it is with: you, or another agent by its id. */
   with: string;
   entry: Conversation;
@@ -415,7 +416,7 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
           const { latest } = entry;
           return [
             {
-              agent: { id: agent, name: watched.entry.name, tone: watched.now.tone },
+              agent: facedOf(watched),
               with: party,
               entry,
               words,

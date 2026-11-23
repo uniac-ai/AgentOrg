@@ -20,7 +20,7 @@ import { ListHead, ListPanel, PAGE_CARD } from "./page-frame.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
 import { useCollapsed, useSplit } from "./split.ts";
 import { Thread } from "./thread.tsx";
-import { useAgents } from "./watch.tsx";
+import { facedOf, useAgents } from "./watch.tsx";
 
 export function ChatPage({ agent }: { agent?: string | undefined }) {
   const { chats, hidden, listed } = useAllChats();
@@ -102,7 +102,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
           >
             <Thread
               key={open}
-              agent={{ id: open, name: watched.entry.name, tone: watched.now.tone }}
+              agent={facedOf(watched)}
               chat={chats.find((chat) => chat.agent.id === open)}
               page={
                 split
@@ -212,7 +212,7 @@ function Beside({
           <AgentDetails agent={drawn.agent} onClose={onClose} />
         ) : (
           <Computer
-            agent={{ id: drawn.agent, name: agent.entry.name, tone: agent.now.tone }}
+            agent={facedOf(agent)}
             surfaces={surfacesOf(agent.detail)}
             onStart={() => api.call("agents", "start", { agent: drawn.agent })}
             {...(agent.held?.windows ? { down: agent.held.detail ?? "" } : {})}

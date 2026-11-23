@@ -179,7 +179,7 @@ test(
     await others("Reviewer").getByRole("button").nth(1).waitFor();
     assert.deepEqual(
       (await others("Reviewer").getByRole("button").allInnerTexts()).map((row) =>
-        row.split("\n").filter(Boolean).slice(1, 3),
+        row.split("\n").filter(Boolean).slice(0, 2),
       ),
       [
         ["Research", "28 of the 62."],
