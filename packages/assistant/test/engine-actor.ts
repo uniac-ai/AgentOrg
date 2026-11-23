@@ -8,7 +8,7 @@ import type { KvStore } from "../src/bundled.ts";
 import { connections } from "../src/capabilities/connections.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
 import { skills } from "../src/capabilities/skills.ts";
-import type { AgentHub } from "../src/connector.ts";
+import { type AgentHub, model } from "../src/connector.ts";
 import { startEngine } from "../src/engine.ts";
 import { type AgentContext, type AgentPlugins, createPluginHost } from "../src/plugins.ts";
 
@@ -34,7 +34,12 @@ const quiet = { info() {}, warn() {}, error() {} };
  * What an executor gives every agent, on the Actor's own channel, in `opened`, or in a context of
  * its own: ready once its connections are mounted.
  */
-function everyAgent(hub: AgentHub, store: KvStore, opened?: AgentContext) {
+function everyAgent(
+  hub: AgentHub,
+  store: KvStore,
+  chosen: () => Promise<string | undefined>,
+  opened?: AgentContext,
+) {
   let context: AgentContext | undefined;
   const ready = (async () => {
     const one =
@@ -42,7 +47,7 @@ function everyAgent(hub: AgentHub, store: KvStore, opened?: AgentContext) {
       (await createPluginHost(quiet, [
         instructions({ now: () => INSTRUCTIONS, earlier: EARLIER }),
         skills(),
-      ]).open("agent", { store, provides: ["hub"] }));
+      ]).open("agent", { store, provides: ["hub", "model"] }));
     await one.mount({
       name: "connector",
       title: "Hub connector",
@@ -50,6 +55,7 @@ function everyAgent(hub: AgentHub, store: KvStore, opened?: AgentContext) {
       provide: "hub",
       apply: (ctx: Context) => void ctx.provide("hub", hub),
     });
+    await one.mount(model(() => chosen()));
     await one.mount(connections());
     context = one;
     return one;
@@ -62,6 +68,7 @@ function everyAgent(hub: AgentHub, store: KvStore, opened?: AgentContext) {
     close: async () => (await ready).close(),
     pass: (request) => (context ? context.pass(request) : request),
     turn: async (loop) => (await ready).turn(loop),
+    service: (name) => context?.service?.(name),
   };
   return { plugins, ready };
 }
@@ -71,14 +78,16 @@ export default defineActor({
   exports: { chat, capability, tools },
   start(ctx) {
     const store = ctx.slots.store.call;
-    const agent = everyAgent(ctx as unknown as AgentHub, store, given.plugins);
-    engines.push(
-      startEngine(ctx, {
-        store,
-        instructions: () => INSTRUCTIONS,
-        self: SELF,
-        ...agent,
-      }),
-    );
+    // Its model capability asks with the model its engine has chosen.
+    let engine: ReturnType<typeof startEngine> | undefined;
+    const chosen = async () => engine?.chosen();
+    const agent = everyAgent(ctx as unknown as AgentHub, store, chosen, given.plugins);
+    engine = startEngine(ctx, {
+      store,
+      instructions: () => INSTRUCTIONS,
+      self: SELF,
+      ...agent,
+    });
+    engines.push(engine);
   },
 });

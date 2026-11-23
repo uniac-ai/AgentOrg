@@ -1247,7 +1247,7 @@ test("a plugin's function is offered under its name, and its block follows the a
   const quiet = { info() {}, warn() {}, error() {} };
   given.plugins = await createPluginHost(quiet, [notes]).open("assistant", {
     store: memory().handlers as never,
-    provides: ["hub"],
+    provides: ["hub", "model"],
   });
   await given.plugins.hold([{ name: "notes" }]);
   t.after(() => {
@@ -1284,7 +1284,7 @@ test("a plugin's function the agent calls runs, and what it gives is read back",
   const quiet = { info() {}, warn() {}, error() {} };
   given.plugins = await createPluginHost(quiet, [notes]).open("assistant", {
     store: memory().handlers as never,
-    provides: ["hub"],
+    provides: ["hub", "model"],
   });
   await given.plugins.hold([{ name: "notes" }]);
   t.after(() => {
@@ -1317,7 +1317,7 @@ test("a plugin hears the agent stopped last, once the turn it was in was cut", a
   const quiet = { info() {}, warn() {}, error() {} };
   given.plugins = await createPluginHost(quiet, [listening]).open("assistant", {
     store: memory().handlers as never,
-    provides: ["hub"],
+    provides: ["hub", "model"],
   });
   await given.plugins.hold([{ name: "listening" }]);
   t.after(() => {
@@ -1353,7 +1353,7 @@ test("a plugin that gives nothing changes no byte of what a request carries: the
   const silent: AgentPlugin = { name: "silent", inject: ["agent"], apply() {} };
   given.plugins = await createPluginHost(quiet, [silent]).open("assistant", {
     store: memory().handlers as never,
-    provides: ["hub"],
+    provides: ["hub", "model"],
   });
   await given.plugins.hold([{ name: "silent" }]);
   t.after(() => {
@@ -2912,7 +2912,7 @@ test("a hold never applies settings older than one already held: what a later re
   const quiet = { info() {}, warn() {}, error() {} };
   const plugins = await createPluginHost(quiet, [saying("notes", said)]).open("assistant", {
     store: memory().handlers as never,
-    provides: ["hub"],
+    provides: ["hub", "model"],
   });
   given.plugins = plugins;
   t.after(() => {

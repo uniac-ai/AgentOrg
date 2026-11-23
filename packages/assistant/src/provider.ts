@@ -29,6 +29,7 @@ import { type Log, NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { connections } from "./capabilities/connections.js";
+import { control } from "./capabilities/control.js";
 import { instructions } from "./capabilities/instructions.js";
 import { skills } from "./capabilities/skills.js";
 import { type AgentHub, type Channel, connector, model } from "./connector.js";
@@ -160,6 +161,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   const host = createPluginHost(log, [
     instructions({ now: () => ASSISTANT_INSTRUCTIONS, earlier: EARLIER_INSTRUCTIONS }),
     skills(),
+    control(),
     ...(options.plugins ?? []),
   ]);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
