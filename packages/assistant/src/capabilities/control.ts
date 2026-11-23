@@ -74,8 +74,9 @@ export const control = (): Capability => ({
       ctx.hub.exposed().find((one) => one.slot === SLOT && one.described.id === AGENTS_ID)
         ?.call as unknown as Agents | undefined;
     /**
-     * What is on offer, held: read at the first turn, then again behind each turn, so a turn waits
-     * on management at most once. What it holds it reads from itself, which asks no provider.
+     * What is on offer, held: read as control mounts, and as management's slot appears, then again
+     * behind each turn. A turn waits only while the first read is still under way. What it holds
+     * it reads from itself, which asks no provider.
      */
     let onOffer: { id: string; title: string; description: string }[] | undefined;
     let reading: Promise<void> | undefined;
@@ -99,6 +100,13 @@ export const control = (): Capability => ({
         });
       return reading;
     };
+    // Read before any turn needs it: now, and when management's slot comes.
+    const early = () => {
+      const calls = management();
+      if (calls && onOffer === undefined) void readOnOffer(calls);
+    };
+    early();
+    ctx.effect(() => ctx.hub.onExposed(early));
     // What it can mount, told in each of its requests; while management can't be reached, nothing.
     let offered: string | undefined;
     ctx.context.turn(async () => {
