@@ -51,6 +51,7 @@ import {
   type Access,
   BROWSER_SLOT,
   COMPUTER,
+  COMPUTER_DESCRIPTION,
   CONTAINER,
   computerUnit,
   type Found,
@@ -1755,11 +1756,17 @@ export async function startComputerProvider(
           capabilities: await Promise.all(
             [COMPUTER, WEB].map(async (id) => {
               const unit = await unitOf(id);
+              const schema = argumentsOf(unit);
+              // The description is told in every request of an agent holding control, so it is
+              // fixed. How this machine stands now, and why a part of it can't be had, is the
+              // stated computer's line, which goes in its arguments, read when they are listed.
+              const live = id === COMPUTER && unit.description !== COMPUTER_DESCRIPTION;
               return {
                 id,
                 title: unit.title,
-                description: unit.description ?? "",
-                arguments: argumentsOf(unit),
+                description: id === COMPUTER ? COMPUTER_DESCRIPTION : (unit.description ?? ""),
+                arguments:
+                  live && unit.description ? { ...schema, description: unit.description } : schema,
               };
             }),
           ),

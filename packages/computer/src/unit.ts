@@ -220,6 +220,9 @@ const onlyWhere = (field: string, off: string | undefined) =>
  * makes is there, and the form asks which computer, a new one among them, as it always has.
  * Without, it states this computer and asks only its own.
  */
+/** What a computer is, whichever it is and however this machine stands. */
+export const COMPUTER_DESCRIPTION = "Where it runs commands, keeps files and acts on a screen.";
+
 export const computerUnit = (found: Found, which = true): z.input<typeof Unit> => {
   const screenOff = partOff(found, "screen");
   const ownOff = partOff(found, "browser");
@@ -227,7 +230,7 @@ export const computerUnit = (found: Found, which = true): z.input<typeof Unit> =
   return {
     id: COMPUTER,
     title: "Computer",
-    description: "Where it runs commands, keeps files and acts on a screen.",
+    description: COMPUTER_DESCRIPTION,
     capability: { id: COMPUTER, title: "Computer" },
     once: true,
     form: [

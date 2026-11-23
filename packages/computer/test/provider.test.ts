@@ -2104,6 +2104,32 @@ test("where no provider that makes is there, the form states this computer, refu
   assert.deepEqual(made.capability?.rows?.where, [{ label: "Computer", value: "This computer" }]);
 });
 
+test("the computer capability's description is fixed, whatever this machine has now: how it stands, and why a part can't be had, are in its arguments", async (t) => {
+  const { capabilities, data } = await setup(t, { service: false, makes: false });
+  const here = await standIn(t);
+  here.info.machine = "Studio Mac";
+  here.thisComputer.capabilities.push(
+    { capability: "files", ready: true },
+    { capability: "screen", ready: true },
+  );
+  recordHere(t, data, here);
+  const listed = async () => {
+    const offered = (await capabilities.capabilities({})).capabilities;
+    const computer = offered.find((one) => one.id === "computer");
+    return { description: computer?.description, line: computer?.arguments.description };
+  };
+  const withScreen = await listed();
+  assert.equal(withScreen.description, "Where it runs commands, keeps files and acts on a screen.");
+  assert.match(String(withScreen.line), /^Studio Mac, whole: your files and apps and its screen\./);
+  // Its screen gone, and the machine named otherwise: the same description, another line.
+  here.info.machine = "Other Mac";
+  here.thisComputer.capabilities = [{ capability: "files", ready: true }];
+  const withoutScreen = await listed();
+  assert.equal(withoutScreen.description, withScreen.description);
+  assert.notEqual(withoutScreen.line, withScreen.line);
+  assert.match(String(withoutScreen.line), /^Other Mac, whole: your files and apps\./);
+});
+
 test("from a home with one agent on this computer and one in a container, the form asks which while the container is there, a change keeps it one, and once its agent is gone the form states this computer", async (t) => {
   const { units, data, workspace, dir, hub, restart, connected } = await setup(t, {
     service: false,
