@@ -327,6 +327,14 @@ export const agents = defineInterface({
          * mounted under it. Absent, as `capabilities` is, only from something written before this.
          */
         mounted: z.array(MountedCapability).max(HELD_MAX).optional(),
+        /**
+         * Everything it is made of, as the agent says it: each capability it holds, from those
+         * every agent holds to those mounted on it, and each plugin a capability loaded, in order,
+         * each naming the part it is under. Those mounted through management are in `mounted` too,
+         * with who mounted them. Absent while the agent can't be asked, or from something written
+         * before this.
+         */
+        composition: z.array(HeldCapability).max(HELD_MAX).optional(),
       }),
     }),
     /** What every connected capability provider lists, each naming its provider. */
