@@ -15,6 +15,7 @@ import {
   FactRow,
   FieldValues,
   type LiveSurface,
+  type Made,
   type OwnCapability,
   type Problem,
   ResultKind,
@@ -145,6 +146,17 @@ export const MountRecord = z.object({
   title: z.string(),
   arguments: z.record(z.string(), z.json()),
   by: z.string(),
+  /**
+   * What management wired of what the provider made for it: its connections, exposed to the agent
+   * at their slots, and the skills it exposed to the agent for it. Its capability, if it made one, is
+   * the agent's capability `from` this mount.
+   */
+  made: z
+    .object({
+      connections: z.array(z.object({ slot: z.string(), connection: z.string() })),
+      skills: z.array(z.string()),
+    })
+    .optional(),
 });
 /** What only management knows of an agent: where it came from, what it is told, and its skills. */
 export const AgentRecord = z.object({
@@ -1475,6 +1487,131 @@ export function createStacks(parts: StackParts) {
     save();
   };
 
+  /**
+   * Wire what a provider made in mounting a capability, as an applied unit's is: its connections
+   * exposed to the agent at their slots, with their origins; its skills copied, as a unit's are, and
+   * exposed to the agent; and its capability held for the person, reached by slots of theirs. All or
+   * none. What it wired is given back, to be taken off with the mount.
+   */
+  const wireMade = async (
+    agent: string,
+    record: TheAgent,
+    mount: { mounted: string; provider: string; capability: string; by: string },
+    made: z.infer<typeof Made>,
+    skillOf: (name: string, path: string) => Promise<string>,
+  ) => {
+    const undo: (() => unknown)[] = [];
+    const wired = {
+      connections: [] as { slot: string; connection: string }[],
+      skills: [] as string[],
+    };
+    try {
+      for (const { slot, connection, target } of made.connections ?? []) {
+        await parts.exposeConnection(agent, connection, slot);
+        undo.push(() => hub.grants.unexpose({ to: agent, slot }).catch(() => {}));
+        records.connections[connection] = {
+          provider: mount.provider,
+          kind: mount.capability,
+          target,
+          madeBy: mount.by,
+          madeFor: agent,
+          at: new Date().toISOString(),
+        };
+        undo.push(() => delete records.connections[connection]);
+        wired.connections.push({ slot, connection });
+      }
+      for (const { name, files } of made.skills ?? []) {
+        if (!library.has(name)) {
+          const copied: SkillFiles = {};
+          for (const path of files) copied[path] = await skillOf(name, path);
+          library.add(copied, name);
+          records.copies[name] = {
+            provider: mount.provider,
+            unit: mount.capability,
+            files: hashesOf(copied),
+          };
+          undo.push(() => {
+            library.remove(name);
+            delete records.copies[name];
+          });
+        }
+        if (!record.skills.includes(name)) {
+          record.skills.push(name);
+          wired.skills.push(name);
+          undo.push(() => {
+            record.skills = record.skills.filter((skill) => skill !== name);
+          });
+        }
+      }
+      const built = made.capability;
+      if (built) {
+        const worked = {
+          slots: [],
+          skills: [],
+          surfaces: built.surfaces,
+          views: built.views,
+        } as unknown as Worked;
+        const rows = built.rows ?? {};
+        const wrong = rowsProblem(built.title, worked, rows);
+        if (wrong) throw new Refused("failed", wrong);
+        const reach = async (provider: string, exported: string) => {
+          const slot = await parts.reachPerson(provider, exported);
+          undo.push(() => parts.unreachPerson(slot, provider));
+          return slot;
+        };
+        const person = {
+          capability: await reach(built.actor, CAPABILITY_EXPORT),
+          operations: {} as Record<string, string>,
+        };
+        for (const { slot, connection } of wired.connections)
+          person.operations[slot] = await reach(connection, TOOLS_EXPORT);
+        record.capabilities.push({
+          id: mount.capability,
+          title: built.title,
+          from: mount.mounted,
+          actor: built.actor,
+          slots: wired.connections.map(({ slot }) => slot),
+          surfaces: built.surfaces,
+          views: withRows(worked, rows),
+          person,
+        });
+      }
+      save();
+      return wired;
+    } catch (error) {
+      for (const one of undo.reverse()) await one();
+      throw error;
+    }
+  };
+  /** Take off what was wired of a mount: its capability, its skills and its connections. */
+  const unwireMade = async (
+    agent: string,
+    record: TheAgent,
+    mount: {
+      mounted: string;
+      made?: { connections: { slot: string; connection: string }[]; skills: string[] };
+    },
+  ) => {
+    const { made } = mount;
+    for (const held of record.capabilities.filter((one) => one.from === mount.mounted)) {
+      const { actor, person } = held;
+      if (actor && person) await parts.unreachPerson(person.capability, actor).catch(() => {});
+      for (const { slot, connection } of made?.connections ?? []) {
+        const reached = person?.operations[slot];
+        if (reached) await parts.unreachPerson(reached, connection).catch(() => {});
+      }
+    }
+    record.capabilities = record.capabilities.filter((one) => one.from !== mount.mounted);
+    for (const { slot, connection } of made?.connections ?? []) {
+      await hub.grants.unexpose({ to: agent, slot }).catch((error) => {
+        if (!alreadyGone(error)) throw error;
+      });
+      delete records.connections[connection];
+    }
+    record.skills = record.skills.filter((skill) => !(made?.skills ?? []).includes(skill));
+    save();
+  };
+
   /** Expose management's `agents@1` to an agent, at `AGENTS_REACH`: it is there already, or made. */
   const reachManagement = (agent: string) =>
     hub.grants.expose({ provider: self, export: AGENTS_EXPORT, to: agent, as: AGENTS_REACH });
@@ -1659,6 +1796,8 @@ export function createStacks(parts: StackParts) {
     fromUnit,
     reachHeld,
     reachControl,
+    wireMade,
+    unwireMade,
     reachManagement,
     unreachManagement,
     holdOwns,

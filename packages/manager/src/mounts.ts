@@ -24,6 +24,7 @@ import { CONTROL_ROOT, holdsControl, OWN_ROOTS, unitControls } from "./settings.
 import type { AgentRecord, MountRecord } from "./stack.js";
 
 type Provider = Slot<typeof capabilityProvider>["call"];
+type Made = Awaited<ReturnType<Provider["mount"]>>;
 type TheAgent = z.infer<typeof AgentRecord>;
 type Root = z.infer<typeof MountRecord>;
 type Held = z.infer<typeof HeldCapability>;
@@ -44,6 +45,16 @@ export interface MountParts {
   changed(agent: string): void;
   /** Have an agent holding control reach management's `agents@1`, or no longer. */
   reachControl(agent: string, reach: boolean): Promise<void>;
+  /** Wire what a provider made for a mount, all or none; what it wired is kept on the mount. */
+  wire(
+    agent: string,
+    record: TheAgent,
+    root: Root,
+    made: NonNullable<Extract<Made, { mounted: string }>["made"]>,
+    skillOf: (name: string, path: string) => Promise<string>,
+  ): Promise<NonNullable<Root["made"]>>;
+  /** Take off what was wired of a mount. */
+  unwire(agent: string, record: TheAgent, root: Root): Promise<void>;
 }
 
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
@@ -181,6 +192,23 @@ export function createMounts(parts: MountParts) {
         }
         root.providerMounted = made.mounted;
         save();
+        // What it made outside the agent is wired as an applied unit's is: if it can't be, the
+        // mount is undone whole.
+        if (made.made)
+          try {
+            root.made = await parts.wire(
+              agent,
+              record,
+              root,
+              made.made,
+              async (name, path) => (await provider.call.skill({ capability, name, path })).text,
+            );
+            save();
+          } catch (error) {
+            await takeOff(agent, root).catch(() => {});
+            unkeep();
+            throw redacted(error, echoed);
+          }
         // Control reaches management's agents@1, as the control unit's does.
         if (capability === CONTROL_ROOT) await parts.reachControl(agent, true);
         return { mounted: root.mounted };
@@ -212,6 +240,7 @@ export function createMounts(parts: MountParts) {
           changed(agent);
           throw error;
         }
+        await parts.unwire(agent, record, root);
         if (root.capability === CONTROL_ROOT && !holdsControl(record, self))
           await parts.reachControl(agent, false);
         return {};
@@ -243,6 +272,7 @@ export function createMounts(parts: MountParts) {
             mounted: root.mounted,
           });
         }
+        await parts.unwire(agent, record, root);
       }
     },
 
@@ -251,7 +281,7 @@ export function createMounts(parts: MountParts) {
      * agent says them. With no word from the agent, a root has no state and no children.
      */
     tree(record: TheAgent, held: Held[] | undefined) {
-      return record.mounted.map(({ providerMounted: _, ...root }) => {
+      return record.mounted.map(({ providerMounted: _, made: __, ...root }) => {
         const own = held?.find((one) => one.name === root.capability && !one.parent);
         return {
           ...root,

@@ -1563,3 +1563,98 @@ test("the person's get and the agent's capability_list give one tree of what the
   assert.deepEqual(parts.get("nest-watcher-#")?.added?.functions, ["nest__look"]);
   assert.ok(parts.get("control")?.added?.functions.includes("control__capability_list"));
 });
+
+test("a computer mounted on agents@2 gives the agent and the person what the same answers give as a unit, through management: its capability's title, slots, surfaces and views, its skills, its connection and the same functions; unmounted, all of it goes", async (t) => {
+  const root = newFolder("agentorg-mount-");
+  const data = join(root, "service");
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const s = await open(t, {
+    dataFolder: data,
+    webUrl: "http://127.0.0.1:9/mcp",
+    agentsFolder: join(root, "Agents"),
+  });
+  await startService(t, data);
+  const { person } = await s.start();
+  const answers = { workspace, access: "terminal", ...NEITHER };
+  type Held = {
+    id: string;
+    from?: string;
+    actor?: string;
+    person?: { capability: string; operations: Record<string, string> };
+  };
+  type Got = {
+    capabilities?: Held[];
+    skills: { name: string }[];
+    mcp: { slot: string; origin?: { kind?: string; target?: string } }[];
+  };
+  // As a unit, on agents@1.
+  const [assistant] = (
+    await person.call<{ creatables: { provider: string; id: string }[] }>("agents", "creatable")
+  ).creatables;
+  const units = (
+    await person.call<{ units: { id: string; provider: string }[] }>("agents", "units")
+  ).units;
+  const computers = units.find((one) => one.id === "computer")?.provider;
+  const byUnit = (
+    await person.call<{ agent: string }>("agents", "create", {
+      stack: {
+        base: { provider: assistant?.provider, creatable: assistant?.id },
+        units: [{ provider: computers, unit: "computer", values: answers }],
+      },
+      name: "By a unit",
+    })
+  ).agent;
+  // The same answers, mounted on an agent made empty on agents@2.
+  const byMount = (
+    await person.call<{ agent: string }>("agents2", "create", { name: "By a mount" })
+  ).agent;
+  const offered = (
+    await person.call<{ capabilities: { id: string; provider: string }[] }>(
+      "agents2",
+      "capabilities",
+    )
+  ).capabilities;
+  const computer = offered.find((one) => one.id === "computer");
+  assert.equal(computer?.provider, computers);
+  const made = await person.call<{ mounted?: string }>("agents2", "mount", {
+    agent: byMount,
+    provider: computers,
+    capability: "computer",
+    arguments: answers,
+  });
+  assert.ok(made.mounted, JSON.stringify(made));
+  const got = (agent: string) => person.call<Got>("agents2", "get", { agent });
+  const [unitGot, mountGot] = [await got(byUnit), await got(byMount)];
+  const held = (one: Got) => one.capabilities?.find(({ id }) => id === "computer");
+  const own = (one: Held | undefined) => {
+    const { from: _, actor: __, person: ___, ...rest } = one ?? { id: "" };
+    return rest;
+  };
+  // The capability the page draws: the same title, slots, surfaces, views and fixed rows.
+  assert.ok(held(unitGot));
+  assert.deepEqual(own(held(mountGot)), own(held(unitGot)));
+  // The same skills given to the agent, and the same connection, from the same provider.
+  assert.deepEqual(
+    mountGot.skills.map(({ name }) => name),
+    unitGot.skills.map(({ name }) => name),
+  );
+  const connected = (one: Got) =>
+    one.mcp.map(({ slot, origin }) => [slot, origin?.kind, origin?.target]);
+  assert.deepEqual(connected(mountGot), connected(unitGot));
+  // The same functions, listed through the person's own slot to each one's connection.
+  const listed = async (one: Got) =>
+    (
+      await person.call<{ tools: unknown[] }>(
+        held(one)?.person?.operations.computer as string,
+        "list",
+      )
+    ).tools;
+  assert.deepEqual(await listed(mountGot), await listed(unitGot));
+  // Unmounted, with no restart: its capability, its skills and its connection go.
+  await person.call("agents2", "unmount", { agent: byMount, mounted: made.mounted });
+  const after = await got(byMount);
+  assert.equal(held(after), undefined);
+  assert.deepEqual(after.skills, []);
+  assert.deepEqual(after.mcp, []);
+});
