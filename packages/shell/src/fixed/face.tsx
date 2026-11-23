@@ -1,8 +1,8 @@
 // An agent's face: its avatar, drawn from the string it was given, or else from its id, so each
 // agent keeps one face. A still picture, or live where it is asked to be. Its state is on it: a
 // mark while it works or has a problem, a spinner while it starts, faded when it's stopped.
-import { avatarFromSeed, toSvg } from "2dlivebot";
-import { Avatar } from "2dlivebot/react";
+import { avatarFromSeed, toSvg } from "@agentorg/2dlivebot";
+import { Avatar } from "@agentorg/2dlivebot/react";
 import { LoaderCircleIcon } from "lucide-react";
 import { type Tone, WORD } from "./data.ts";
 

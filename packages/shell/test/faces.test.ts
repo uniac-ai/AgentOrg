@@ -3,8 +3,8 @@
 // In a real browser over the stand-in gateway.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { avatarFromSeed, toSvg } from "@agentorg/2dlivebot";
 import type { Page } from "@playwright/test";
-import { avatarFromSeed, toSvg } from "2dlivebot";
 import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
 import { noted, sampleAgents } from "./design/samples.ts";
 import type { Agent } from "./stand-in.ts";
