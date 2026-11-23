@@ -111,18 +111,8 @@ export const placeholderOf = (field: Field, name: string | undefined) =>
   name ? field.placeholder?.replaceAll("{name}", name) : field.placeholder;
 
 /**
- * The names an agent is offered, the first that no agent has, in any case: a name is also its
- * workspace's folder, and a folder's name is one in any case. One typed is used instead.
- */
-export const OFFERED = ["Scout", "Wren", "Juniper", "Cedar", "Maple", "Sage"];
-export function offeredName(taken: readonly string[]) {
-  const had = new Set(taken.map((name) => name.toLowerCase()));
-  return OFFERED.find((name) => !had.has(name.toLowerCase())) ?? "";
-}
-
-/**
- * What an agent or a template is called: what was typed, or for an agent the name it is offered.
- * A template has to be named.
+ * What an agent or a template is called: what was typed, or for an agent the name it is offered,
+ * which comes with the avatar chosen for it (`names.ts`). A template has to be named.
  */
 export const nameOf = (draft: Draft, offered: string) =>
   draft.name.trim() || (draft.mode === "agent" ? offered : "");

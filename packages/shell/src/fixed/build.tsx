@@ -1,15 +1,18 @@
-// Creating an agent, and building a template. An agent is made in one small window: where it starts
-// from, its name and what it's for, and what that gives it, shown and not asked; its details are
-// built in a chat. A template is built in one window of two parts. At the left, the identity card:
-// its face, its name and what it's for, typed in place, and what it can do, following the options as
-// they change. At the right, a row of what to start from, then the options in sections: its base,
-// each unit with its questions, and the way to add one. Finished, a stack comes to MCP exposures and
-// skills.
+// Creating an agent, and building a template. An agent is made on one card: the template it starts
+// from, as a badge; its avatar, chosen from a row of them, each with a name; its name and what it's
+// for, typed in place; and Create. What the template gives it is opened beside the card from the
+// card's right edge, shown and not asked: an agent's details are built in a chat. A template is
+// built in one window of two parts. At the left, the identity card: its face, its name and what
+// it's for, typed in place, and what it can do, following the options as they change. At the
+// right, a row of what to start from, then the options in sections: its base, each unit with its
+// questions, and the way to add one. Finished, a stack comes to MCP exposures and skills.
 import {
   BotIcon,
   BoxIcon,
   ChevronRightIcon,
+  CircleDashedIcon,
   CpuIcon,
+  LayersIcon,
   type LucideIcon,
   PlugIcon,
   PlusIcon,
@@ -31,11 +34,15 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Field, FieldDescription, FieldLabel } from "../ui/field.tsx";
 import { Input } from "../ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
+import type { Pair } from "./avatar-ring.ts";
+import { AvatarRow } from "./avatar-row.tsx";
 import { useBuilding } from "./building.tsx";
 import { useAct } from "./data.ts";
 import { Face } from "./face.tsx";
@@ -50,7 +57,6 @@ import {
   isShown,
   missingNeeds,
   nameOf,
-  offeredName,
   type Secrets,
   type StackProblem,
   toStack,
@@ -59,15 +65,15 @@ import {
 import { useAgents } from "./watch.tsx";
 
 /**
- * The name an agent is offered: the first of the shell's names that no agent has. None is offered
- * until the agents are read, and a name read while the window is open stays taken, so a read that
- * fails, which lists none, doesn't offer one an agent has.
+ * The names agents have, which a new agent isn't offered, and whether they have been read. A name
+ * read while the window is open stays taken, so a read that fails, which lists none, doesn't offer
+ * one an agent has.
  */
-function useOffered() {
+function useTaken() {
   const { list, loaded } = useAgents();
   const taken = useRef(new Set<string>());
   for (const agent of list) taken.current.add(agent.name);
-  return loaded ? offeredName([...taken.current]) : "";
+  return { taken: taken.current, loaded };
 }
 
 /**
@@ -98,12 +104,19 @@ function Tile({ logo: Logo, small = false }: { logo: LucideIcon; small?: boolean
 
 /**
  * Create, in one window. A click outside closes it, and it opens clean, with the keyboard in the
- * name. An agent's is small: where it starts from, its name and what it's for, and what that gives.
- * A template's is the card on the left and the options on the right.
+ * name. An agent's opens as its card alone, and widens to show what it can do beside the card. A
+ * template's is the card on the left and the options on the right.
  */
 export function BuildDialog() {
   const { open, hide, draft, choosing } = useBuilding();
   const template = (draft?.mode ?? choosing?.mode) === "template";
+  // Whether what an agent can do is open beside its card: closed each time the window opens.
+  const [detail, setDetail] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) setDetail(false);
+  }
   return (
     <Dialog open={open} onOpenChange={(next) => !next && hide()}>
       <DialogContent
@@ -117,7 +130,10 @@ export function BuildDialog() {
         className={
           template
             ? "window flex h-[min(680px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col sm:max-w-[920px]"
-            : "window flex max-h-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 sm:max-w-[480px]"
+            : // The card is 440 wide, and what it can do 360 beside it: the window widens in the
+              // time a window opens in, and at once with reduced motion. On a phone it is under
+              // the card, and the window scrolls.
+              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col max-sm:overflow-y-auto sm:motion-safe:transition-[max-width] sm:motion-safe:ease-out ${detail ? "sm:max-w-[800px]" : "sm:max-w-[440px]"}`
         }
       >
         {template ? (
@@ -137,7 +153,10 @@ export function BuildDialog() {
             <Options />
           </>
         ) : (
-          <SmallCreate />
+          <>
+            <CreateCard detail={detail} setDetail={setDetail} />
+            <Detail shown={detail} />
+          </>
         )}
       </DialogContent>
     </Dialog>
@@ -145,30 +164,34 @@ export function BuildDialog() {
 }
 
 /**
- * What is typed on the card: its name, offered for an agent until one is typed, and what it's for,
- * which until then says what the template or the base is. The face's letters follow the name.
+ * What is typed on the card: its name, and what it's for, which until one is typed says what the
+ * template or the base is. An agent is offered a name, `offered`, used if none is typed; a
+ * template has to be named. The face's letters follow the name.
  */
-function useCardWords() {
+function useCardWords(offered = "") {
   const { catalog, choosing, draft, setText } = useBuilding();
-  const offered = useOffered();
-  const mode = draft?.mode ?? choosing?.mode ?? "agent";
-  // An agent is offered a name no agent has, used if none is typed. A template has to be named.
-  const shown = mode === "template" ? "" : offered;
   const name = draft?.name ?? "";
-  const named = name.trim() || shown;
+  const named = name.trim() || offered;
   const from = catalog.templates.find((t) => t.id === (draft ?? choosing)?.from?.id);
   const says = from?.description || draft?.base?.description || "";
   // A face of its own: its colour stays while its letters follow the name.
   const face = { id: "a-new-agent", name: named || "?", tone: "idle" as const };
-  return { draft, setText, shown, name, named, says, face };
+  return { draft, setText, name, named, says, face };
 }
 
 /**
- * The name and what it's for, typed in place: no box, only a faint tint under the pointer. On the
- * card, narrow, they sit at the left of a smaller face, compact.
+ * The name and what it's for, typed in place: no box, only a faint tint under the pointer. The
+ * name `offered` reads as a name until one is typed. On a template's card, narrow, they sit at the
+ * left of a smaller face, compact.
  */
-function TypedInPlace({ compact = false }: { compact?: boolean }) {
-  const { draft, setText, shown, name, says } = useCardWords();
+function TypedInPlace({
+  offered: shown = "",
+  compact = false,
+}: {
+  offered?: string;
+  compact?: boolean;
+}) {
+  const { draft, setText, name, says } = useCardWords(shown);
   const inPlace = `block w-full min-w-0 rounded-md border-0 bg-transparent p-0 text-center outline-none hover:bg-[var(--hover)] ${compact ? "max-sm:text-left" : ""}`;
   return (
     <>
@@ -245,21 +268,19 @@ function IdentityCard() {
 }
 
 /**
- * What to start from: Empty or a template, a row that scrolls sideways. For a template, small cards
- * of a title and what it is; for an agent, titles alone, what each is read out with it.
+ * What a template starts from: Empty or a template, small cards of a title and what it is, in a
+ * row that scrolls sideways.
  */
-function StartFrom({ titles = false }: { titles?: boolean }) {
+function StartFrom() {
   const { catalog, choosing, start } = useBuilding();
   const isEmpty = !!choosing && !choosing.from;
   const tile = (on: boolean) =>
-    titles
-      ? `h-8 rounded-full px-3.5 text-[13px] ${on ? "bg-[var(--selected)] font-medium ring-1 ring-[var(--line-strong)] ring-inset" : "bg-[var(--create-card)] text-muted-foreground hover:text-foreground"}`
-      : `flex h-[60px] w-[184px] flex-col justify-center rounded-xl px-3 text-left ${on ? "bg-[var(--selected)] ring-1 ring-[var(--line-strong)] ring-inset" : "bg-[var(--create-card)] hover:brightness-110"}`;
+    `flex h-[60px] w-[184px] flex-col justify-center rounded-xl px-3 text-left ${on ? "bg-[var(--selected)] ring-1 ring-[var(--line-strong)] ring-inset" : "bg-[var(--create-card)] hover:brightness-110"}`;
   return (
     // No heading: the row says what it is.
     <ul
       aria-label="Start from"
-      className={`no-bar flex shrink-0 overflow-x-auto px-5 ${titles ? "gap-1.5" : "gap-2 pb-4 max-sm:pt-3"}`}
+      className="no-bar flex shrink-0 gap-2 overflow-x-auto px-5 pb-4 max-sm:pt-3"
     >
       <li className="shrink-0">
         <button
@@ -268,7 +289,7 @@ function StartFrom({ titles = false }: { titles?: boolean }) {
           className={tile(isEmpty)}
           onClick={() => start(undefined, choosing?.mode)}
         >
-          <span className={titles ? "" : "text-[15px] font-medium"}>Empty</span>
+          <span className="text-[15px] font-medium">Empty</span>
         </button>
       </li>
       {catalog.templates.map((t) => (
@@ -279,10 +300,8 @@ function StartFrom({ titles = false }: { titles?: boolean }) {
             className={tile(choosing?.from?.id === t.id)}
             onClick={() => start(t, choosing?.mode)}
           >
-            <span className={titles ? "" : "truncate text-[15px] font-medium"}>{t.title}</span>
-            <span className={titles ? "sr-only" : "truncate text-[13px] text-muted-foreground"}>
-              {titles ? `: ${t.description}` : t.description}
-            </span>
+            <span className="truncate text-[15px] font-medium">{t.title}</span>
+            <span className="truncate text-[13px] text-muted-foreground">{t.description}</span>
           </button>
         </li>
       ))}
@@ -291,16 +310,76 @@ function StartFrom({ titles = false }: { titles?: boolean }) {
 }
 
 /**
- * Create for an agent, one small window. Where it starts from is chosen in the row of templates;
- * its name and what it's for are typed, in place; what that gives is shown, each unit by its logo
- * and its name, and isn't asked: an agent's details are built in a chat. It sends the template's
- * stack as saved. What Create's check refuses, of the whole stack or of a unit, is said above
- * Create in the service's words: the only place a unit's state shows.
+ * The template an agent starts from, a small badge at the card's top left: its sign and its title,
+ * a shade darker under the pointer. Pressed, a card opens over it with Empty and the templates,
+ * each with what it is; choosing one starts the agent from it and keeps what was typed.
  */
-function SmallCreate() {
+function TemplateBadge() {
+  const { catalog, choosing, start } = useBuilding();
+  const from = choosing?.from;
+  const Sign = from ? LayersIcon : CircleDashedIcon;
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Template: ${from?.title ?? "Empty"}`}
+          className="flex h-7 max-w-[60%] min-w-0 items-center gap-1.5 rounded-full bg-[var(--hover)] pr-3 pl-2 text-[13px] text-muted-foreground outline-none hover:bg-[var(--selected)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-[var(--selected)] aria-expanded:text-foreground"
+        >
+          <Sign aria-hidden className="size-3.5 shrink-0" />
+          <span className="truncate">{from?.title ?? "Empty"}</span>
+        </button>
+      </DropdownMenuTrigger>
+      {/* In place: its top left on the badge's, and its heading where the badge is, so the press
+          that opens it lets go on the heading and chooses nothing. */}
+      <DropdownMenuContent align="start" sideOffset={-28} className="w-64 rounded-xl p-0 pb-1.5">
+        <DropdownMenuLabel className="flex h-7 items-center px-3 text-xs font-normal text-muted-foreground">
+          Start from
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={from?.id ?? ""}
+          onValueChange={(id) =>
+            start(
+              catalog.templates.find((t) => t.id === id),
+              "agent",
+            )
+          }
+        >
+          <DropdownMenuRadioItem value="" className="mx-1.5 flex-col items-start gap-0 rounded-lg">
+            <span>Empty</span>
+            <span className="text-xs text-muted-foreground">Nothing to start with</span>
+          </DropdownMenuRadioItem>
+          {catalog.templates.map((t) => (
+            <DropdownMenuRadioItem
+              key={t.id}
+              value={t.id}
+              className="mx-1.5 flex-col items-start gap-0 rounded-lg"
+            >
+              <span>{t.title}</span>
+              <span className="text-xs text-muted-foreground">{t.description}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Create for an agent, one card. At its top left, the template it starts from; then its avatar,
+ * chosen from a row of them, each with a name, the one in the middle being the choice; its name
+ * and what it's for, typed in place, the name offered being the avatar's until one is typed; and
+ * Create, which sends the template's stack as saved with the name, what it's for and the avatar.
+ * What Create's check refuses, of the whole stack or of a unit, is said above Create in the
+ * service's words: the only place a unit's state shows. At its right edge, what opens and closes
+ * what it can do.
+ */
+function CreateCard({ detail, setDetail }: { detail: boolean; setDetail(next: boolean): void }) {
   const { draft, hide, refreshUnits, setProblems } = useBuilding();
-  const { named, face } = useCardWords();
-  const offered = useOffered();
+  const { taken, loaded } = useTaken();
+  // The avatar in the middle of the row, with its name: none until the agents are read.
+  const [chosen, setChosen] = useState<Pair>();
+  const { named } = useCardWords(chosen?.name);
   const act = useAct();
   // Made while signed out of the model account, an agent can't work yet: the foot says so.
   const needs = needsOf(useLogin());
@@ -308,7 +387,7 @@ function SmallCreate() {
   const ready = !!draft?.base && !!named && draft.units.every((u) => u.unit);
   const finish = () => {
     if (!draft || !ready) return;
-    const name = nameOf(draft, offered);
+    const name = nameOf(draft, chosen?.name ?? "");
     const purpose = draft.purpose.trim();
     const stack = toStack(draft);
     act.run(async () => {
@@ -325,6 +404,7 @@ function SmallCreate() {
         stack,
         name,
         ...(purpose ? { purpose } : {}),
+        ...(chosen ? { avatar: chosen.avatar } : {}),
       });
       // It closes, and Settings too if it was opened over it: the new agent is shown in Team.
       hide();
@@ -336,68 +416,126 @@ function SmallCreate() {
   return (
     <form
       aria-label="Create"
-      className="flex min-h-0 flex-col"
+      className="relative flex w-full shrink-0 flex-col bg-[var(--create-card)] sm:w-[440px]"
       onSubmit={(event) => {
         event.preventDefault();
         finish();
       }}
     >
-      <header className="flex h-14 shrink-0 items-center gap-1 pr-3 pl-5">
-        <DialogTitle className="min-w-0 flex-1 truncate text-[17px] font-semibold">
-          Create New Agent
-        </DialogTitle>
+      <DialogTitle className="sr-only">Create New Agent</DialogTitle>
+      <DialogDescription className="sr-only">
+        The template it starts from, its avatar and name, and what it's for
+      </DialogDescription>
+      <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-3">
+        <TemplateBadge />
         <DialogClose asChild>
           <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
             <XIcon />
           </Button>
         </DialogClose>
       </header>
-      <DialogDescription className="sr-only">
-        Where it starts from, its name and what it's for, and what it can do
-      </DialogDescription>
-      <StartFrom titles />
-      <div className="no-bar flex min-h-0 flex-col items-center overflow-y-auto px-8 pt-8 pb-2 text-center max-sm:px-5 max-sm:pt-6">
-        <Face agent={face} size={80} plain />
-        <div className="mt-4 w-full min-w-0">
-          <TypedInPlace />
-        </div>
-        {/* What it can do, as where it starts from gives it: shown, not asked, with no heading. */}
-        {!!draft?.units.length && (
-          <ul aria-label="What it can do" className="mt-6 flex flex-wrap justify-center gap-1.5">
-            {draft.units.map((unit) => (
-              <li
-                key={unit.key}
-                className="flex h-8 items-center gap-2 rounded-full bg-[var(--create-card)] pr-3.5 pl-1.5 text-[13px]"
-              >
-                <Tile logo={logoOf(unit.unit)} small />
-                {unit.unit?.title ?? unit.id}
-              </li>
-            ))}
-          </ul>
-        )}
-        {refused && (
-          <p role="alert" className="mt-4 text-[13px] text-[var(--bad)]">
-            {refused}
-          </p>
-        )}
+      {/* The row's height is kept while the agents, whose names it must not offer, are read. */}
+      <div className="h-[120px] shrink-0">
+        {loaded && <AvatarRow taken={taken} onChoose={setChosen} />}
       </div>
-      {draft && (
-        <footer className="flex shrink-0 items-center justify-end gap-4 px-5 pt-4 pb-5">
-          {needs && (
-            <span className="min-w-0 flex-1 truncate text-left text-[13px] text-muted-foreground">
-              {needs}
-            </span>
-          )}
+      <div className="mt-3 w-full min-w-0 px-10 text-center">
+        <TypedInPlace offered={chosen?.name} />
+      </div>
+      {refused && (
+        <p role="alert" className="mt-4 px-10 text-center text-[13px] text-[var(--bad)]">
+          {refused}
+        </p>
+      )}
+      <footer className="flex min-h-[92px] shrink-0 flex-col items-center gap-3 px-10 pt-6 pb-7">
+        {draft && needs && (
+          <span className="text-center text-[13px] text-muted-foreground">{needs}</span>
+        )}
+        {draft && (
           <Button
             type="submit"
             disabled={!ready || act.busy}
-            className="h-10 rounded-full px-5 text-[15px]"
+            className="h-10 rounded-full px-6 text-[15px]"
           >
             Create
           </Button>
-        </footer>
-      )}
+        )}
+      </footer>
+      <Edge detail={detail} setDetail={setDetail} />
     </form>
+  );
+}
+
+/**
+ * The card's right edge, which opens what the agent can do beside the card and closes it. Under
+ * the pointer, or with the keyboard on it, a strip of the window's other ground rises from the
+ * card's foot with an arrow in it: a sign there is more, or that it closes. Where nothing hovers,
+ * as on a touch screen, the strip stands. On a phone it is a bar along the card's foot, and what
+ * it opens is under the card.
+ */
+function Edge({ detail, setDetail }: { detail: boolean; setDetail(next: boolean): void }) {
+  return (
+    <button
+      type="button"
+      aria-label="What it can do"
+      aria-expanded={detail}
+      aria-controls="create-detail"
+      onClick={() => setDetail(!detail)}
+      className="group/edge absolute top-14 right-0 bottom-0 flex w-7 items-center justify-center text-muted-foreground outline-none max-sm:relative max-sm:inset-auto max-sm:h-9 max-sm:w-full max-sm:shrink-0"
+    >
+      <span
+        aria-hidden
+        className="absolute inset-x-0 bottom-0 h-0 rounded-tl-xl bg-[var(--create)] transition-[height] duration-200 ease-out group-hover/edge:h-full group-focus-visible/edge:h-full motion-reduce:transition-none max-sm:h-full max-sm:rounded-none [@media(hover:none)]:h-full"
+      />
+      <ChevronRightIcon
+        aria-hidden
+        className={`relative size-4 opacity-0 transition-opacity duration-200 group-hover/edge:opacity-100 group-focus-visible/edge:opacity-100 motion-reduce:transition-none max-sm:opacity-100 [@media(hover:none)]:opacity-100 ${detail ? "rotate-180 max-sm:-rotate-90" : "max-sm:rotate-90"}`}
+      />
+    </button>
+  );
+}
+
+/**
+ * What the agent will be able to do, as the template gives it, beside the card on the window's
+ * other ground: each unit with its logo, its title, its own line and what it gives. Shown, not
+ * asked. Closed, it is out of the window's width, and of reach; on a phone it isn't drawn.
+ */
+function Detail({ shown }: { shown: boolean }) {
+  const { draft } = useBuilding();
+  return (
+    <section
+      id="create-detail"
+      aria-label="What it can do"
+      aria-hidden={!shown}
+      inert={!shown}
+      className={`no-bar flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5 sm:absolute sm:inset-y-0 sm:left-[440px] sm:flex sm:w-[360px] ${shown ? "flex" : "max-sm:hidden"}`}
+    >
+      <h3 className="flex h-6 shrink-0 items-center text-[13px] font-medium text-muted-foreground">
+        What it can do
+      </h3>
+      {draft?.units.length === 0 && (
+        <p className="text-[13px] text-muted-foreground">Nothing yet.</p>
+      )}
+      <ul className="flex flex-col gap-4 empty:hidden">
+        {draft?.units.map((entry) => (
+          <li key={entry.key} className="flex min-w-0 gap-3">
+            <Tile logo={logoOf(entry.unit)} />
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <span className="flex h-7 items-center truncate text-[15px] font-medium">
+                {entry.unit?.title ?? entry.id}
+              </span>
+              {entry.unit ? (
+                <>
+                  <UnitLine unit={entry.unit} />
+                  <Gives unit={entry.unit} values={entry.values} />
+                </>
+              ) : (
+                <p className="text-xs text-[var(--bad)]">Not available here.</p>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -664,7 +802,6 @@ function UnitPart({
   problems: StackProblem[];
 }) {
   const { catalog, draft, addUnit, removeUnit, setSecret, setValue } = useBuilding();
-  const offered = useOffered();
   const [unfolded, setUnfolded] = useState(true);
   // Something found wrong with it opens it, each time the stack is checked.
   const found = problems.length > 0;
@@ -722,7 +859,6 @@ function UnitPart({
               <UnitForm
                 unit={unit}
                 id={`unit-${key}`}
-                agentName={draft?.mode === "agent" ? nameOf(draft, offered) : undefined}
                 values={values}
                 secrets={secrets}
                 problems={problems}
@@ -783,7 +919,6 @@ export function UnitForm({
   onSecret(field: string, value: string): void;
   children?: React.ReactNode;
 }) {
-  const gives = givesOf(unit, values);
   return (
     <>
       {unit.form.map(
@@ -803,29 +938,36 @@ export function UnitForm({
           ),
       )}
       {children}
-      {(gives.slots.length > 0 || gives.skills.length > 0) && (
-        <p
-          data-gives
-          className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-[var(--faint)]"
-        >
-          {gives.slots.length > 0 && (
-            <>
-              <PlugIcon role="img" aria-label="MCP" className="size-3 shrink-0" />
-              <span className="shrink-0">{gives.slots.join(", ")}</span>
-            </>
-          )}
-          {gives.skills.length > 0 && (
-            <>
-              <SparklesIcon
-                role="img"
-                aria-label="Skills"
-                className={`size-3 shrink-0 ${gives.slots.length > 0 ? "ml-1.5" : ""}`}
-              />
-              <span className="truncate">{gives.skills.join(", ")}</span>
-            </>
-          )}
-        </p>
-      )}
+      <Gives unit={unit} values={values} />
     </>
+  );
+}
+
+/** What a unit gives with these answers: the slots of its connections, and its skills. */
+function Gives({ unit, values }: { unit: CatalogUnit; values: Values }) {
+  const gives = givesOf(unit, values);
+  if (gives.slots.length === 0 && gives.skills.length === 0) return null;
+  return (
+    <p
+      data-gives
+      className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-[var(--faint)]"
+    >
+      {gives.slots.length > 0 && (
+        <>
+          <PlugIcon role="img" aria-label="MCP" className="size-3 shrink-0" />
+          <span className="shrink-0">{gives.slots.join(", ")}</span>
+        </>
+      )}
+      {gives.skills.length > 0 && (
+        <>
+          <SparklesIcon
+            role="img"
+            aria-label="Skills"
+            className={`size-3 shrink-0 ${gives.slots.length > 0 ? "ml-1.5" : ""}`}
+          />
+          <span className="truncate">{gives.skills.join(", ")}</span>
+        </>
+      )}
+    </p>
   );
 }

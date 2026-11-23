@@ -403,7 +403,6 @@ test(
     await place(page, "Team").click();
     await page.getByRole("main").getByRole("button", { name: "Create" }).click();
     const stack = page.getByRole("dialog", { name: "Create" });
-    await stack.getByRole("button", { name: /^Assistant/ }).click();
     await stack.getByLabel("Name").fill("Foreman");
     await page.waitForTimeout(250);
     const box = await stack.boundingBox();

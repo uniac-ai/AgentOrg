@@ -104,7 +104,6 @@ test(
       .first()
       .click();
     const create = page.getByRole("dialog", { name: "Create" });
-    await create.getByRole("button", { name: /^Assistant/ }).click();
     await create.getByText(SENTENCE).waitFor();
     await page.keyboard.press("Escape");
     // The line has no way in of its own: the banner over the page is the one.

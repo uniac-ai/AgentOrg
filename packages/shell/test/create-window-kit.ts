@@ -24,6 +24,14 @@ export const opened = (page: Page) =>
     ).then(() => undefined),
   );
 
+/** The Create window has come to this width, as it does when what it can do opens or closes. */
+export const wide = (page: Page, width: number) =>
+  page.waitForFunction(
+    (to) =>
+      document.querySelector('[data-slot="dialog-content"]')?.getBoundingClientRect().width === to,
+    width,
+  );
+
 /** New template's identity card, at the window's left. */
 export const identity = (page: Page) =>
   panel(page).getByRole("complementary", { name: /as it will be$/ });

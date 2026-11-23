@@ -1,20 +1,25 @@
 // The Create window itself: how it opens, what it offers, and what it shows first. An agent's is
-// small: where it starts from, its name and what it's for.
+// one card: the template it starts from, its avatar, its name and what it's for.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
+import { NAMES } from "../src/fixed/names.ts";
 import {
   agentsRead,
+  badge,
   browser,
+  detail,
+  edge,
   open,
   panel,
   plus,
   SESSION,
   settingsWindow,
+  startFrom,
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
-import { boxOf, chosen, named, opened } from "./create-window-kit.ts";
+import { boxOf, named, opened, wide } from "./create-window-kit.ts";
 
 withBrowser();
 
@@ -33,8 +38,16 @@ const middle = async (part: Locator) => {
   return Math.round((box.y + box.height / 2) * 10) / 10;
 };
 
+/** The name offered: the one that comes with the avatar in the middle of the row. */
+const offered = async (page: Page) => {
+  await page.waitForFunction(
+    () => document.querySelector("#build-name")?.getAttribute("placeholder") !== "Name",
+  );
+  return (await panel(page).locator("#build-name").getAttribute("placeholder")) ?? "";
+};
+
 test(
-  "Create is one small window, open on Empty: where it starts from, the face, its name and what it's for, and what that gives, clean each time",
+  "Create is one card, open on the Assistant: its template's badge, the row of avatars, its name and what it's for, and Create, clean each time",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await agentsRead(page);
@@ -42,29 +55,37 @@ test(
     const window_ = panel(page);
     const name = window_.locator("#build-name");
     await name.waitFor();
-    assert.equal(await chosen(page, "Empty"), "true", "nothing is chosen for the person");
+    assert.equal(await badge(page).textContent(), "Assistant");
     assert.equal(await name.inputValue(), "");
     await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
     const box = await boxOf(window_);
-    assert.equal(box.width, 480);
-    // Top to bottom: where it starts from, the name, and nothing it can do with nothing chosen.
-    const from = await boxOf(window_.getByRole("list", { name: "Start from" }));
-    assert.ok((await boxOf(name)).y > from.y + from.height, "the name under where it starts from");
-    const can = window_.getByRole("list", { name: "What it can do" });
-    assert.equal(await can.count(), 0, "nothing in its place");
-    assert.equal(await window_.locator("section").count(), 0, "no options");
+    assert.equal(box.width, 440);
+    // Top to bottom: the badge, the avatars, the name, what it's for, and Create.
+    const parts = [
+      badge(page),
+      window_.getByRole("region", { name: "Avatar" }),
+      name,
+      window_.getByLabel("What it's for"),
+      window_.getByRole("button", { name: "Create", exact: true }),
+    ];
+    const tops = await Promise.all(parts.map(async (part) => (await boxOf(part)).y));
+    assert.deepEqual(
+      tops,
+      [...tops].sort((a, b) => a - b),
+    );
+    // No row of templates, no options, and what it can do is closed.
+    assert.equal(await window_.getByRole("list", { name: "Start from" }).count(), 0);
+    assert.equal(await window_.locator('form[aria-label="Build"]').count(), 0);
+    assert.equal(await detail(page).count(), 0);
 
     await name.fill("Foreman");
     await window_.getByLabel("What it's for").fill("Keeps things current");
-    await named(page, /^Assistant/).click();
-    assert.deepEqual(await can.getByRole("listitem").allInnerTexts(), ["Computer", "Web"]);
-    assert.equal(await chosen(page, /^Assistant/), "true");
-    assert.equal(await chosen(page, "Empty"), null);
-    assert.equal((await boxOf(window_)).width, 480, "the same window");
+    await startFrom(page, "Empty");
+    assert.equal(await badge(page).textContent(), "Empty");
+    assert.equal((await boxOf(window_)).width, 440, "the same window");
     assert.equal(await name.inputValue(), "Foreman", "choosing again keeps what was typed");
     assert.equal(await window_.getByLabel("What it's for").inputValue(), "Keeps things current");
-    await named(page, "Empty").click();
-    await can.waitFor({ state: "detached" });
+    await startFrom(page, "Assistant");
     assert.equal(await name.inputValue(), "Foreman");
 
     for (const close of [
@@ -76,29 +97,32 @@ test(
       await plus(page).click();
       await name.waitFor();
       assert.equal(await name.inputValue(), "", "the plus starts clean");
-      assert.equal(await chosen(page, "Empty"), "true");
-      assert.equal(await can.count(), 0);
-      await named(page, /^Assistant/).click();
+      assert.equal(await badge(page).textContent(), "Assistant");
+      assert.equal(await edge(page).getAttribute("aria-expanded"), "false");
+      await startFrom(page, "Empty");
       await name.fill("Again");
+      await edge(page).click();
     }
-    // Opened from a template on its page, it is as clean.
+    // Opened from a template on its page, it is as clean, and on that template.
     await page.keyboard.press("Escape");
     await window_.waitFor({ state: "detached" });
     await page
       .getByRole("navigation", { name: "Main" })
       .getByRole("button", { name: "Settings" })
       .click();
-    await settingsWindow(page).getByRole("button", { name: "Use" }).first().click();
-    await can.getByText("Computer", { exact: true }).waitFor();
+    await settingsWindow(page).getByRole("button", { name: "Use" }).nth(1).click();
+    await name.waitFor();
+    assert.equal(await badge(page).textContent(), "From elsewhere");
     assert.equal(await name.inputValue(), "", "what was typed went with the window");
+    assert.equal(await edge(page).getAttribute("aria-expanded"), "false");
     await page.close();
   }),
 );
 
 test(
-  "an agent is offered a name no agent has, used when none is typed; a template has to be named; what it's for is optional",
+  "an agent is offered the name that comes with its avatar, one no agent has, used when none is typed; a template has to be named; what it's for is optional",
   withGateway(async (gateway) => {
-    // An agent already has the first name, in another case: the next is offered.
+    // An agent already has a name of the list, in another case: it isn't offered.
     const research = gateway.agents.get("a-research");
     assert.ok(research);
     research.name = "scout";
@@ -108,19 +132,22 @@ test(
     await plus(page).click();
     const name = panel(page).locator("#build-name");
     await name.waitFor();
-    // Not a name: what the field is, greyed.
+    // Not a name: what the field is, greyed. And no avatars yet, in the room kept for them.
     assert.equal(await name.getAttribute("placeholder"), "Name");
     assert.equal(await named(page, "Create").isDisabled(), true);
+    assert.equal(await panel(page).getByRole("region", { name: "Avatar" }).count(), 0);
+    await opened(page);
+    const before = (await boxOf(name)).y;
     release();
     await agentsRead(page);
-    await page.waitForFunction(
-      () => document.querySelector("#build-name")?.getAttribute("placeholder") === "Wren",
-    );
+    const first = await offered(page);
+    assert.ok(NAMES.includes(first) && first !== "Scout", first);
+    assert.equal((await boxOf(name)).y, before, "the row comes into room kept for it");
     // A read that fails lists none: the name offered is still one no agent has.
     gateway.refuseNext("agents.list", "unavailable", "Not now.");
     gateway.setAccount("signed_in");
     await page.locator('ul[aria-label="Agents"] li').first().waitFor({ state: "detached" });
-    assert.equal(await name.getAttribute("placeholder"), "Wren", "greyed, the name it is offered");
+    assert.equal(await name.getAttribute("placeholder"), first, "the name it is offered");
     assert.equal(await name.evaluate((e) => e === document.activeElement), true, "the keyboard");
     const create = named(page, "Create");
     assert.equal(await create.isDisabled(), false, "it can be made at once");
@@ -140,12 +167,13 @@ test(
     await panel(page).waitFor({ state: "detached" });
     await plus(page).click();
     await name.waitFor();
+    const second = await offered(page);
     await named(page, "Create").click();
     await page.waitForURL(/#\/team\/a-7$/);
     assert.equal(
       (gateway.calls.findLast((c) => c.method === "create")?.input as { name?: string } | undefined)
         ?.name,
-      "Wren",
+      second,
     );
     // A template is offered none, and waits for one.
     await page
@@ -167,16 +195,16 @@ test(
     await agentsRead(page);
     const release = gateway.hold("agents.units");
     await plus(page).click();
-    await panel(page)
-      .getByRole("button", { name: /^Assistant/ })
-      .click();
+    await edge(page).click();
+    await startFrom(page, "From elsewhere");
     // No stack until its units are read, so none is drawn from what was read before.
     await page.waitForTimeout(300);
-    const can = panel(page).getByRole("list", { name: "What it can do" });
+    const can = detail(page).getByRole("listitem");
     assert.equal(await can.count(), 0);
+    assert.equal(await badge(page).textContent(), "From elsewhere");
     release();
-    await can.getByText("Computer", { exact: true }).waitFor();
-    await can.getByText("Web", { exact: true }).waitFor();
+    await can.getByText("mystery", { exact: true }).waitFor();
+    assert.equal(await can.count(), 1);
     await page.close();
   }),
 );
@@ -191,7 +219,6 @@ test(
     const page = await open(gateway);
     await agentsRead(page);
     await plus(page).click();
-    await named(page, /^Assistant/).click();
     const foot = panel(page).locator("footer");
     const sentence = "Agents can't work until you sign in with ChatGPT.";
     await foot.getByText(sentence).waitFor();
@@ -216,13 +243,13 @@ test(
 );
 
 test(
-  "Create has no menu: a template is made in New template, which has none either and waits for a name",
+  "Create builds nothing: a template is made in New template, which has no menu and waits for a name",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await agentsRead(page);
     await plus(page).click();
     const window_ = panel(page);
-    await named(page, /^Assistant/).click();
+    await window_.getByRole("button", { name: "Create", exact: true }).waitFor();
     assert.equal(await window_.getByRole("button", { name: "Build options" }).count(), 0);
     assert.equal(await window_.getByRole("button", { name: /Save as template/ }).count(), 0);
     await page.keyboard.press("Escape");
@@ -250,59 +277,52 @@ test(
 );
 
 test(
-  "the window is Create New Agent, its title and close on one line; it is rgb(38, 38, 38), or white in the light theme, what it can do a little lighter",
+  "the window is Create New Agent; its card is rgb(46, 46, 46) on the window's rgb(38, 38, 38), a little lighter, and in the light theme rgb(246, 246, 246) on white, a little darker; the badge and the close are on one line",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const window_ = await openCreate(page);
-    const line = await middle(window_.getByRole("heading", { name: "Create New Agent" }));
+    await window_.getByRole("heading", { name: "Create New Agent" }).waitFor({ state: "attached" });
     assert.equal(
       await middle(window_.getByRole("button", { name: "Close" }).filter({ visible: true })),
-      line,
+      await middle(badge(page)),
     );
-    await named(page, /^Assistant/).click();
+    await edge(page).click();
+    await wide(page, 800);
     const colours = async () => [
       await window_.evaluate((e) => getComputedStyle(e).backgroundColor),
-      await window_
-        .getByRole("list", { name: "What it can do" })
-        .getByRole("listitem")
-        .first()
-        .evaluate((e) => getComputedStyle(e).backgroundColor),
+      await window_.getByRole("form").evaluate((e) => getComputedStyle(e).backgroundColor),
+      // What it can do stands on the window's own ground.
+      await detail(page).evaluate((e) => getComputedStyle(e).backgroundColor),
     ];
-    assert.deepEqual(await colours(), ["rgb(38, 38, 38)", "rgb(46, 46, 46)"]);
+    assert.deepEqual(await colours(), ["rgb(38, 38, 38)", "rgb(46, 46, 46)", "rgba(0, 0, 0, 0)"]);
     await page.evaluate(() => {
       document.documentElement.dataset.theme = "light";
     });
     // Once the window's own change of colour has run.
     await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
-    assert.deepEqual(await colours(), ["rgb(255, 255, 255)", "rgb(246, 246, 246)"]);
+    assert.deepEqual(await colours(), [
+      "rgb(255, 255, 255)",
+      "rgb(246, 246, 246)",
+      "rgba(0, 0, 0, 0)",
+    ]);
     await page.close();
   }),
 );
 
 test(
-  "Create shows the face, the name offered and what the base or the template is; what is typed is its name, the face's letters and its line; the keyboard starts in the name",
+  "Create shows the name offered and what the template or the base is; what is typed is its name and its line, typed in place; the keyboard starts in the name",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const window_ = await openCreate(page);
     const name = window_.locator("#build-name");
     const line = window_.getByLabel("What it's for");
     assert.equal(await name.evaluate((e) => e === document.activeElement), true, "the keyboard");
-    assert.equal(await name.getAttribute("placeholder"), "Scout");
-    // The face, with its letters.
-    const disc = window_
-      .locator('span[aria-hidden="true"][style*="linear-gradient(140deg"]')
-      .first();
-    assert.equal(await disc.innerText(), "S");
-    assert.equal((await boxOf(disc)).width, 80);
-    assert.equal(await line.getAttribute("placeholder"), "Chats and uses what you connect");
-    await named(page, /^Assistant/).click();
-    await window_.getByRole("list", { name: "What it can do" }).waitFor();
+    assert.ok(NAMES.includes(await offered(page)));
     assert.equal(await line.getAttribute("placeholder"), "Does what you ask on a computer");
-    const colour = () => disc.evaluate((e) => getComputedStyle(e).backgroundImage);
-    const was = await colour();
+    await startFrom(page, "Empty");
+    assert.equal(await line.getAttribute("placeholder"), "Chats and uses what you connect");
     await name.fill("Foreman");
-    assert.equal(await disc.innerText(), "F");
-    assert.equal(await colour(), was, "its colour stays");
+    assert.equal(await name.inputValue(), "Foreman");
     await line.fill("Keeps dependencies current");
     assert.equal(await line.inputValue(), "Keeps dependencies current");
     // Typed in place: no box around either.
