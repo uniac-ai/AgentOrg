@@ -141,9 +141,10 @@ test(
     // Its conversation with another agent speaks last, then yours streams: by then both readers
     // have heard it.
     gateway.sayWith("a-reviewer", "a-research", reply("x1", "Said to Research."));
-    gateway.delta("a-reviewer", "x2", "Writing to Research", "a-research");
-    gateway.delta("a-reviewer", "r4", "Still writing");
-    await panel(page).getByText("Still writing").waitFor();
+    // A paragraph of each, whole once the next has begun.
+    gateway.delta("a-reviewer", "x2", "Writing to Research.\n\nAnd", "a-research");
+    gateway.delta("a-reviewer", "r4", "Still writing.\n\nAnd");
+    await panel(page).getByText("Still writing.").waitFor();
     assert.equal(await panel(page).getByText("Said to Research.").count(), 0);
     assert.equal(await panel(page).getByText("Writing to Research").count(), 0);
     await panel(page).getByRole("button", { name: "All chats" }).click();
@@ -212,8 +213,8 @@ test(
     const read = gateway.calls.find((c) => c.method === "history" && c.input.with);
     assert.equal(read?.input.with, "a-research");
     // What comes in it shows as it comes; what is said to you doesn't.
-    gateway.delta("a-reviewer", "q4", "Three touch the retry path.", "a-research");
-    gateway.delta("a-reviewer", "r9", "Said to you.");
+    gateway.delta("a-reviewer", "q4", "Three touch the retry path.\n\nAnd", "a-research");
+    gateway.delta("a-reviewer", "r9", "Said to you.\n\nAnd");
     await panel(page).getByText("Three touch the retry path.").waitFor();
     assert.equal(await panel(page).getByText("Said to you.").count(), 0);
     // Reading it marks nothing of yours as read.

@@ -181,7 +181,11 @@ test(
     await thread.getByText("Glad it helped.").waitFor();
     // Once the reply has come in: it rises through a few pixels as it does.
     await thread.evaluate((root) =>
-      Promise.all(root.getAnimations({ subtree: true }).map((one) => one.finished)),
+      Promise.all(
+        [...root.querySelectorAll('[data-slot="bubble"]')]
+          .flatMap((bubble) => bubble.getAnimations())
+          .map((one) => one.finished),
+      ),
     );
     const changes = await read(thread);
     assert.equal(changes.next && changes.next.top - changes.pill.bottom, 16);

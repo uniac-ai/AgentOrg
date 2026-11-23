@@ -20,7 +20,7 @@ import {
 withBrowser();
 
 test(
-  "a reply's words are there as they come, none of them revealed apart, and it settles as one message",
+  "a reply's words are never seen part written: none of it shows until a bubble of it is whole, none of its words is revealed apart, and it settles as one message",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     // The agent works, and the newest thing said here is the person's: the chat awaits a reply.
@@ -34,27 +34,42 @@ test(
     await mine(page, "Why did it fail?").waitFor();
     // While it works on it, the chat shows the message and nothing under it.
     await nothingUnder(page, "Why did it fail?");
-    /** The reply's words: what they say, how many parts they are in, and what of them moves. */
+    /**
+     * The words of the bubbles drawn after the person's message: what each says, how many parts
+     * it is in, and what of it moves.
+     */
     const words = () =>
-      panel(page)
-        .locator(".prose-chat")
-        .last()
-        .evaluate((written) => ({
+      panel(page).evaluate((root) => {
+        const all = [...root.querySelectorAll(".prose-chat, .whitespace-pre-wrap")];
+        const asked = all.findLastIndex((one) => one.classList.contains("whitespace-pre-wrap"));
+        return all.slice(asked + 1).map((written) => ({
           said: (written.textContent ?? "").trim(),
           parts: written.querySelectorAll("span").length,
           moving: written.getAnimations({ subtree: true }).length,
         }));
+      });
+    const typing = panel(page).getByRole("status", { name: "Reviewer is typing" });
     gateway.delta("a-reviewer", "r1", "Three causes ");
-    await panel(page).getByText("Three causes").waitFor();
-    assert.deepEqual(await words(), { said: "Three causes", parts: 0, moving: 0 });
-    gateway.delta("a-reviewer", "r1", "explain it.");
-    await panel(page).getByText("explain it.").waitFor();
-    assert.deepEqual(await words(), { said: "Three causes explain it.", parts: 0, moving: 0 });
-    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    await page.waitForTimeout(300);
+    assert.deepEqual(await words(), [], "its first words may still be written");
+    assert.equal(await typing.count(), 1, "the sign says it is being written");
+    // Its second paragraph begun, its first is whole.
+    gateway.delta("a-reviewer", "r1", "explain it.\n\nThe first ");
+    await panel(page).getByText("Three causes explain it.").waitFor();
+    assert.deepEqual(await words(), [{ said: "Three causes explain it.", parts: 0, moving: 0 }]);
+    assert.equal(await typing.count(), 1, "and the rest is still being written");
+    gateway.addMessage(
+      "a-reviewer",
+      reply("r1", "Three causes explain it.\n\nThe first is the lock file."),
+    );
     gateway.setChatStatus("a-reviewer", { state: "idle" });
     await panel(page).getByRole("button", { name: "More" }).last().waitFor();
     assert.equal(await panel(page).getByText("Three causes explain it.").count(), 1);
-    assert.deepEqual(await words(), { said: "Three causes explain it.", parts: 0, moving: 0 });
+    assert.deepEqual(await words(), [
+      { said: "Three causes explain it.", parts: 0, moving: 0 },
+      { said: "The first is the lock file.", parts: 0, moving: 0 },
+    ]);
+    assert.equal(await typing.count(), 0);
     await page.close();
   }),
 );
@@ -80,7 +95,7 @@ const comingIn = (page: Page) =>
   });
 
 test(
-  "what comes while the conversation is open rises in with a fade, in 160 ms: the person's message, the sign under it, and each bubble of the reply as it first appears; what was there as it opened, and earlier messages read in, are simply there",
+  "what comes while the conversation is open rises in with a fade, in 160 ms: the person's message, the sign under it, and each bubble of the reply as it comes whole; what was there as it opened, and earlier messages read in, are simply there",
   withGateway(async (gateway) => {
     const chat = gateway.agents.get("a-reviewer");
     assert.ok(chat);
@@ -106,14 +121,15 @@ test(
       "the sign under a message that came",
     );
 
-    // Its bubbles as they first appear, one and then the next, and the same once it is recorded.
-    gateway.delta("a-reviewer", "r1", "Three causes explain it.\n\n");
+    // Its bubbles as each comes whole: the first above the sign, then the last as it is recorded.
+    gateway.delta("a-reviewer", "r1", "Three causes explain it.\n\nThe first ");
     await panel(page).getByText("Three causes explain it.").waitFor();
-    assert.deepEqual((await comingIn(page)).theirs, [...opened.theirs, "message-in 0.16s"]);
-    gateway.delta("a-reviewer", "r1", "The first is the lock file.");
-    await panel(page).getByText("The first is the lock file.").waitFor();
+    assert.deepEqual((await comingIn(page)).theirs, [
+      ...opened.theirs,
+      "message-in 0.16s",
+      "message-in 0.16s, the sign",
+    ]);
     const written = [...opened.theirs, "message-in 0.16s", "message-in 0.16s"];
-    assert.deepEqual((await comingIn(page)).theirs, written);
     gateway.addMessage(
       "a-reviewer",
       reply("r1", "Three causes explain it.\n\nThe first is the lock file."),
@@ -266,9 +282,11 @@ test(
     await input(page).press("Enter");
     await mine(page, "List every finding.").waitFor();
 
-    // Its words pass the foot of the room as they come: what is shown stays at the last of them.
+    // Its bubbles pass the foot of the room as each comes whole: what is shown stays at the last
+    // of them, with the one still being written not yet there.
     await write("long", lines(0, 60));
-    await panel(page).getByText("Finding 59 is").waitFor();
+    await panel(page).getByText("Finding 58 is").waitFor();
+    assert.equal(await panel(page).getByText("Finding 59 is").count(), 0);
     await atEnd("the end is in view while it is written");
     gateway.addMessage("a-reviewer", reply("long", lines(0, 60).join("\n\n")));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
@@ -285,7 +303,7 @@ test(
     );
     const left = await short();
     await write("more", lines(60, 80));
-    await panel(page).getByText("Finding 79 is").waitFor({ state: "attached" });
+    await panel(page).getByText("Finding 78 is").waitFor({ state: "attached" });
     await page.waitForTimeout(400);
     assert.ok((await short()) >= left, "nothing pulled it back to the end");
     // The way back is theirs to press, and from the end it is followed again.
@@ -295,7 +313,7 @@ test(
       await room.elementHandle(),
     );
     await write("more", lines(80, 100));
-    await panel(page).getByText("Finding 99 is").waitFor();
+    await panel(page).getByText("Finding 98 is").waitFor();
     await atEnd("followed again from the end");
     await page.close();
   }),

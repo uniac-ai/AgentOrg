@@ -113,6 +113,15 @@ type Turn =
     }
   | { kind: "agent"; id: string; text: string; at?: string; streaming?: boolean; ask?: Ask };
 
+/**
+ * What of a message is drawn: every bubble of one that is settled; of one still being written, the
+ * bubbles that are complete, each once the next has begun. Words are never drawn part written.
+ */
+const wholeOf = (text: string, writing: boolean) => {
+  const bubbles = bubblesOf(text, writing);
+  return writing ? bubbles.slice(0, -1) : bubbles;
+};
+
 function turnsOf(
   messages: readonly ChatMessage[],
   unrecorded: readonly Sending[],
@@ -151,7 +160,9 @@ function turnsOf(
       images,
       ...(answer ? { answer } : {}),
     });
-  for (const [id, text] of streaming) turns.push({ kind: "agent", id, text, streaming: true });
+  // One being written is a turn once it has a bubble to draw.
+  for (const [id, text] of streaming)
+    if (wholeOf(text, true).length > 0) turns.push({ kind: "agent", id, text, streaming: true });
   return turns;
 }
 
@@ -366,35 +377,40 @@ const corners = (side: "start" | "end", above: boolean, below: boolean) =>
 /**
  * The agent typing in this conversation, as a messenger shows the other end typing: three dots in a
  * muted bubble on its side, heard as "<agent> is typing". The dots rise in turn, and stay still for
- * a person who asks for less motion. Under a message that came while the conversation was open, it
- * comes in as that message did.
+ * a person who asks for less motion. Where it comes once something has come while the conversation
+ * was open, it rises in as a message does; one there as the conversation opens is simply there.
+ * Under the agent's own bubbles it is one of their run.
  */
-const TypingSign = ({ name, came }: { name: string; came: boolean }) => (
-  <Message>
-    <MessageContent>
-      <Bubble
-        variant="muted"
-        role="status"
-        aria-label={`${name} is typing`}
-        className={`max-w-[80%] ${came ? "message-in" : ""}`}
-      >
-        <BubbleContent
-          className={`flex h-10 items-center gap-1 px-4 ${corners("start", false, false)}`}
+function TypingSign({ name, came, above }: { name: string; came: boolean; above: boolean }) {
+  // As it was when the sign came: what comes later doesn't bring the sign in again.
+  const [rises] = useState(came);
+  return (
+    <Message>
+      <MessageContent>
+        <Bubble
+          variant="muted"
+          role="status"
+          aria-label={`${name} is typing`}
+          className={`max-w-[80%] ${rises ? "message-in" : ""}`}
         >
-          <span className="sr-only">{name} is typing</span>
-          {[0, 1, 2].map((n) => (
-            <span
-              key={n}
-              aria-hidden
-              className="typing-dot size-1.5 rounded-full bg-current"
-              style={{ animationDelay: `${n * 160}ms` }}
-            />
-          ))}
-        </BubbleContent>
-      </Bubble>
-    </MessageContent>
-  </Message>
-);
+          <BubbleContent
+            className={`flex h-10 items-center gap-1 px-4 ${corners("start", above, false)}`}
+          >
+            <span className="sr-only">{name} is typing</span>
+            {[0, 1, 2].map((n) => (
+              <span
+                key={n}
+                aria-hidden
+                className="typing-dot size-1.5 rounded-full bg-current"
+                style={{ animationDelay: `${n * 160}ms` }}
+              />
+            ))}
+          </BubbleContent>
+        </Bubble>
+      </MessageContent>
+    </Message>
+  );
+}
 
 /**
  * Where a conversation is drawn: the chat page rather than the chat, and what its way back to the
@@ -617,7 +633,7 @@ export function Thread({
         (payload) => {
           if (!here(payload)) return;
           const message = payload as ChatMessage;
-          came.current.add(message.id);
+          if (!shown.current.some((m) => m.id === message.id)) came.current.add(message.id);
           setStreaming((was) => {
             if (!was.has(message.id)) return was;
             const next = new Map(was);
@@ -728,15 +744,19 @@ export function Thread({
     turn.kind === "user" && turn.message && turn.text
       ? progress.get(turn.message)?.reaction
       : undefined;
-  // The agent types here, one sign at the conversation's end, while all four hold: it works; the
-  // newest thing said here is the party's, just sent or recorded; that message is taken or not yet
-  // heard of; and the conversation has no problem. So a message from the agent (a receipt counts),
-  // one closed with no reply, or its turn's end takes it away, and its first streamed piece takes
-  // its place. Two messages sent show one sign. A call of this page's own that failed is said at
-  // once, and the sign gives way to it: one or the other, never both.
+  // The agent types here, one sign at the conversation's end, while the conversation has no
+  // problem and either holds: a message of the agent's is being written, whose complete bubbles
+  // are above the sign; or the agent works, the newest thing said here is the party's, just sent
+  // or recorded, and that message is taken or not yet heard of. So a message from the agent once
+  // it is whole (a receipt counts), one closed with no reply, or its turn's end takes it away. Two
+  // messages sent show one sign. A call of this page's own that failed is said at once, and the
+  // sign gives way to it: one or the other, never both.
   const newest = lastTurn?.kind === "user" ? lastTurn : undefined;
   const where = newest?.message === undefined ? undefined : progress.get(newest.message);
-  const typing = working && !!newest && (!where || taken(where)) && !entry?.problem && !failure;
+  const typing =
+    (streaming.size > 0 || (working && !!newest && (!where || taken(where)))) &&
+    !entry?.problem &&
+    !failure;
   // What became of each card. Answered: a message of the party's names it, recorded or just sent.
   // Passed over: the party sent anything after it, or a newer card came. Open: the newest, once
   // the agent's turn has ended; until then it isn't drawn.
@@ -921,7 +941,7 @@ export function Thread({
                         streaming={!!turn.streaming}
                         came={came.current.has(turn.id)}
                         above={after === "agent"}
-                        below={before === "agent"}
+                        below={before === "agent" || (typing && turn === lastTurn)}
                         isLast={turn === lastTurn}
                         awaiting={awaiting}
                       />
@@ -949,8 +969,14 @@ export function Thread({
                   scroller's stand-in height for an item not yet drawn: the end the room goes to as
                   the sign comes is the end it keeps. */}
               {typing && (
-                <MessageScrollerItem className={`[content-visibility:visible] ${SIDE_CHANGES}`}>
-                  <TypingSign name={agent.name} came={!!newest && came.current.has(newest.id)} />
+                <MessageScrollerItem
+                  className={`[content-visibility:visible] ${lastTurn?.kind === "agent" ? SAME_SIDE : SIDE_CHANGES}`}
+                >
+                  <TypingSign
+                    name={agent.name}
+                    came={came.current.size > 0}
+                    above={lastTurn?.kind === "agent"}
+                  />
                 </MessageScrollerItem>
               )}
               {/* The conversation's own problem never shows with the sign (see `typing`), and the
@@ -978,8 +1004,8 @@ export function Thread({
 
 /**
  * The room between two messages, in place of the list's 24 px between its items: 4 px between two
- * of one side's, as between one message's bubbles, and 16 px where the side changes and before the
- * agent's typing sign.
+ * of one side's, as between one message's bubbles and before the agent's typing sign under its own
+ * bubbles, and 16 px where the side changes, the sign under the person's message included.
  */
 const SAME_SIDE = "-mt-5";
 const SIDE_CHANGES = "-mt-2";
@@ -1031,9 +1057,9 @@ function Room({
  * person's is, at the start side, as wide as its words up to 80%, 4 px apart; a code block keeps the
  * conversation's whole width and the frame code has, with no fill, and its own Copy. Nothing is
  * under the last. A bubble is known by its place in the message: as the message is written, bubbles
- * are only added at its end, and only the last one's words change. Its words are there as they
- * come; each bubble of a message that came while the conversation was open rises in as it first
- * appears.
+ * are only added at its end. One still being written draws only its bubbles that are complete, so
+ * no words are seen part written; each bubble of a message that came while the conversation was
+ * open rises in as it first appears.
  */
 function Reply({
   text,
@@ -1060,9 +1086,8 @@ function Reply({
   awaiting: boolean;
 }) {
   const settled = !(isLast && (awaiting || streaming));
-  // What is still being written may hold back a last paragraph that isn't yet a list or words.
   // The menu and whether it is settled are the message's, not what is drawn of it.
-  const bubbles = useMemo(() => bubblesOf(text, streaming), [text, streaming]);
+  const bubbles = useMemo(() => wholeOf(text, streaming), [text, streaming]);
   return (
     <Message>
       <MessageContent className="gap-2">

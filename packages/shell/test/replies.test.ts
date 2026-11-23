@@ -113,17 +113,16 @@ async function receiptThenResult(gateway: Gateway, page: Page, thread: Locator) 
   await ask(gateway, thread, "Is #482 ready to merge?");
   gateway.addMessage("a-reviewer", reply("r-receipt", "Looking at #482 now."));
   await message(thread, "Looking at #482 now.").waitFor();
-  // While the result is being written, it offers no menu; the receipt, settled, does.
+  // While the result is being written, none of it is drawn: the agent's sign is under the receipt,
+  // which, settled, offers its menu.
   gateway.delta("a-reviewer", "r-result", "It is ready: ");
-  await message(thread, "It is ready:").waitFor();
+  await thread.getByRole("status", { name: "Reviewer is typing" }).waitFor();
   let now = await said(thread);
   assert.deepEqual(
-    now.agent.slice(-2).map(({ text, more }) => [text, more]),
-    [
-      ["Looking at #482 now.", true],
-      ["It is ready:", false],
-    ],
+    now.agent.slice(-1).map(({ text, more }) => [text, more]),
+    [["Looking at #482 now.", true]],
   );
+  assert.equal(await thread.getByText("It is ready:").count(), 0);
   gateway.addMessage("a-reviewer", reply("r-result", "It is ready: the tests pass."));
   gateway.setChatStatus("a-reviewer", { state: "idle" });
   await message(thread, "the tests pass.").getByRole("button", { name: "More" }).waitFor();
@@ -176,20 +175,23 @@ test(
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "floating");
     await ask(gateway, thread, "Why did it fail?");
-    gateway.delta("a-reviewer", "r1", "Three causes ");
-    await message(thread, "Three causes").waitFor();
-    gateway.delta("a-reviewer", "r1", "explain it.");
-    await message(thread, "explain it.").waitFor();
+    // Its first paragraph is drawn once its second has begun.
+    gateway.delta("a-reviewer", "r1", "Three causes explain it.\n\nThe first ");
+    await message(thread, "Three causes explain it.").waitFor();
     // Once its bubble has come in: that is the one time it moves.
-    await message(thread, "explain it.").evaluate(async (e) => {
+    await message(thread, "Three causes explain it.").evaluate(async (e) => {
       const bubble = e.querySelector('[data-slot="bubble"]') as Element;
       await Promise.all(bubble.getAnimations().map((one) => one.finished));
       (e as HTMLElement & { kept?: true }).kept = true;
     });
-    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    gateway.addMessage(
+      "a-reviewer",
+      reply("r1", "Three causes explain it.\n\nThe first is the lock file."),
+    );
     gateway.setChatStatus("a-reviewer", { state: "idle" });
-    await message(thread, "Three causes explain it.")
+    await message(thread, "The first is the lock file.")
       .getByRole("button", { name: "More" })
+      .first()
       .waitFor();
     // Its bubble and its words: what its "⋯" does as it appears is its own.
     const after = await message(thread, "Three causes explain it.").evaluate((e) => ({
