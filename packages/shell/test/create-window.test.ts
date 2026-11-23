@@ -277,7 +277,7 @@ test(
 );
 
 test(
-  "the window is Create New Agent; its card is rgb(46, 46, 46) on the window's rgb(38, 38, 38), a little lighter, and in the light theme rgb(246, 246, 246) on white, a little darker; the badge and the close are on one line",
+  "the window is Create New Agent; its name card is rgb(46, 46, 46) and what it can do, the card under it, rgb(38, 38, 38), darker; in the light theme rgb(246, 246, 246) over white; the badge and the close are on one line",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const window_ = await openCreate(page);
@@ -289,22 +289,16 @@ test(
     await edge(page).click();
     await wide(page, 800);
     const colours = async () => [
-      await window_.evaluate((e) => getComputedStyle(e).backgroundColor),
       await window_.getByRole("form").evaluate((e) => getComputedStyle(e).backgroundColor),
-      // What it can do stands on the window's own ground.
       await detail(page).evaluate((e) => getComputedStyle(e).backgroundColor),
     ];
-    assert.deepEqual(await colours(), ["rgb(38, 38, 38)", "rgb(46, 46, 46)", "rgba(0, 0, 0, 0)"]);
+    assert.deepEqual(await colours(), ["rgb(46, 46, 46)", "rgb(38, 38, 38)"]);
     await page.evaluate(() => {
       document.documentElement.dataset.theme = "light";
     });
     // Once the window's own change of colour has run.
     await window_.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
-    assert.deepEqual(await colours(), [
-      "rgb(255, 255, 255)",
-      "rgb(246, 246, 246)",
-      "rgba(0, 0, 0, 0)",
-    ]);
+    assert.deepEqual(await colours(), ["rgb(246, 246, 246)", "rgb(255, 255, 255)"]);
     await page.close();
   }),
 );

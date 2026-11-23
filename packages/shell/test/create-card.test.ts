@@ -457,30 +457,47 @@ test(
   }),
 );
 
-/** The card, and its Close, as they stand on the page. */
+/** The name card, and its Close, as they stand on the page. */
 const card = (page: Page) => panel(page).getByRole("form", { name: "Create" });
 const close = (page: Page) => card(page).getByRole("button", { name: "Close" });
-/** The bar drawn at the window's right edge, and the one along the card's foot. */
-const bar = (page: Page) => edge(page).locator("span").first();
-const footBar = (page: Page) => edge(page).locator("span").last();
 /**
- * Watches, frame by frame from now on, every box the card and its Close have, and every width
- * the window has; `watched` reads what was seen.
+ * The bar: a tab under the name card that comes out at its right edge. Its first part is the
+ * name card's shadow on it, its second what comes out, with the arrow.
+ */
+const tab = (page: Page) => panel(page).locator("[data-edge-bar]");
+/** The bar under the card, along the card's foot. */
+const footBar = (page: Page) => edge(page).locator("span").first();
+/** The bar has stopped sliding. */
+const still = (page: Page) =>
+  tab(page).evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+/** Which way the bar's arrow points. */
+const arrow = (page: Page) =>
+  tab(page)
+    .locator("svg")
+    .evaluate((e) => (getComputedStyle(e).rotate === "180deg" ? "back" : "out"));
+/** A colour the window's tokens name, as an element would be painted in it. */
+const token = (page: Page, name: string) =>
+  page.evaluate((variable) => {
+    const probe = document.createElement("i");
+    probe.style.backgroundColor = `var(${variable})`;
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return colour;
+  }, name);
+/**
+ * Watches, frame by frame from now on, every box the name card has and every width the window
+ * has; `watched` reads what was seen.
  */
 const watch = (page: Page) =>
   page.evaluate(() => {
     const window_ = document.querySelector('[data-slot="dialog-content"]') as Element;
     const form = window_.querySelector('form[aria-label="Create"]') as Element;
-    const button = form.querySelector('button[aria-label="Close"]') as Element;
-    const seen = { card: new Set<string>(), close: new Set<string>(), widths: new Set<number>() };
+    const seen = { card: new Set<string>(), widths: new Set<number>() };
     (window as unknown as { seen: typeof seen }).seen = seen;
-    const boxOf = (e: Element) => {
-      const { x, y, width, height } = e.getBoundingClientRect();
-      return [x, y, width, height].join(" ");
-    };
     const look = () => {
-      seen.card.add(boxOf(form));
-      seen.close.add(boxOf(button));
+      const { x, y, width, height } = form.getBoundingClientRect();
+      seen.card.add([x, y, width, height].join(" "));
       seen.widths.add(window_.getBoundingClientRect().width);
       requestAnimationFrame(look);
     };
@@ -488,24 +505,17 @@ const watch = (page: Page) =>
   });
 const watched = (page: Page) =>
   page.evaluate(() => {
-    const { card, close, widths } = (
-      window as unknown as {
-        seen: { card: Set<string>; close: Set<string>; widths: Set<number> };
-      }
+    const { card, widths } = (
+      window as unknown as { seen: { card: Set<string>; widths: Set<number> } }
     ).seen;
-    return { card: [...card], close: [...close], widths: [...widths] };
+    return { card: [...card], widths: [...widths] };
   });
-const settled = (page: Page) =>
-  edge(page).evaluate((e) =>
-    Promise.all(e.getAnimations({ subtree: true }).map((moving) => moving.finished)),
-  );
 
 test(
-  "the window opens as the card alone and grows to the right: the bar that opens it slides out at the card's right, the card and its Close never move, what the agent can do opens at the card's right under the card's light shadow, and the bar that closes it is at the window's far edge",
+  "the bar that opens what the agent can do is a second card's edge under the name card: with the pointer or the keyboard on the card's right edge it slides out to the right with the card's light shadow on it, and the name card keeps its box and its outline",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const window_ = await create(page);
-    assert.equal((await boxOf(window_)).width, 440);
     assert.equal(await detail(page).count(), 0, "what it can do is closed");
     assert.equal(await edge(page).getAttribute("aria-expanded"), "false");
     const [whole, was, side] = [
@@ -513,77 +523,137 @@ test(
       await boxOf(card(page)),
       await boxOf(edge(page)),
     ];
-    assert.ok(Math.abs(whole.x + whole.width / 2 - 720) < 1, "in the page's middle");
-    assert.ok(Math.abs(side.x + side.width - (was.x + was.width)) < 1, "at the card's right edge");
-    assert.equal(side.width, 24, "what is pressed");
-    assert.ok(side.height > was.height / 2, "most of its height");
-    // At rest the bar is under the card's edge, out of the window. With the pointer on the edge
-    // it slides out to the right: the window is 14 wider, the card and its Close where they
-    // were at every frame, and the bar stands beside the card in the window's other ground.
-    assert.ok((await boxOf(bar(page))).x >= whole.x + whole.width, "out of sight at rest");
-    assert.equal(await window_.locator("#create-detail > span[aria-hidden]").count(), 0);
+    const right = was.x + was.width;
+    assert.deepEqual(whole, was, "the window is the name card");
+    assert.equal(was.width, 440);
+    assert.ok(Math.abs(was.x + 220 - 720) < 1, "in the page's middle");
+    // What is pressed: the card's last 24 below its head row.
+    assert.deepEqual([side.x, side.width], [right - 24, 24]);
+    assert.ok(side.y >= was.y + 56 && side.height > was.height / 2);
+
+    // The bar is its own surface under the name card: not part of it, and painted beneath it.
+    const beneath = await tab(page).evaluate((e) => {
+      const form = document.querySelector('form[aria-label="Create"]') as Element;
+      return {
+        apart: !form.contains(e) && e.parentElement === form.parentElement,
+        under: Number(getComputedStyle(e).zIndex) < Number(getComputedStyle(form).zIndex),
+        corners: getComputedStyle(e).borderTopRightRadius,
+        outline: getComputedStyle(form).borderRadius,
+      };
+    });
+    assert.deepEqual(beneath, { apart: true, under: true, corners: "24px", outline: "24px" });
+    assert.equal(await ground(tab(page)), await token(page, "--create"), "the other ground");
+    assert.notEqual(await ground(tab(page)), await ground(card(page)));
+    // At rest all of it, with the card's shadow on it, is behind the card.
+    const shade = tab(page).locator("span").first();
+    const hidden = await boxOf(tab(page));
+    assert.ok(hidden.x >= was.x && hidden.x + hidden.width <= right + 0.5, "behind the card");
+    assert.ok((await boxOf(shade)).x + 14 <= right + 0.5, "its shadow too");
+
+    // With the pointer on the edge it slides out to the right, 14 of it, as the card's own
+    // height and with the card's corners: the name card's box and outline are as they were,
+    // and the window is no wider.
     await watch(page);
     await edge(page).hover();
-    await wide(page, 454);
-    await page.waitForTimeout(100);
-    const out = await watched(page);
-    assert.ok(
-      out.widths.some((width) => width > 440 && width < 454),
-      "it slides, not jumps",
+    await still(page);
+    await page.waitForTimeout(50);
+    const out = await boxOf(tab(page));
+    assert.ok(Math.abs(out.x + out.width - (right + 14)) < 0.5, "14 beyond the card's edge");
+    assert.deepEqual([out.y, out.height], [was.y, was.height], "the card's height");
+    const seen = await watched(page);
+    assert.equal(seen.card.length, 1, `the card moved or grew: ${seen.card.join(" | ")}`);
+    assert.deepEqual(seen.widths, [440], "the window is no wider");
+    assert.equal(
+      await card(page).evaluate((e) => getComputedStyle(e).borderRadius),
+      "24px",
+      "the card's outline",
     );
-    assert.equal(out.card.length, 1, `the card moved: ${out.card.join(" | ")}`);
-    assert.equal(out.close.length, 1, `Close moved: ${out.close.join(" | ")}`);
-    const [wider, slid_, pressed] = [
-      await boxOf(window_),
-      await boxOf(bar(page)),
-      await boxOf(edge(page)),
-    ];
-    assert.deepEqual(
-      [wider.x, wider.y, wider.width, wider.height],
-      [whole.x, whole.y, 454, whole.height],
-      "wider to the right, by the bar",
-    );
-    assert.ok(Math.abs(slid_.x - (was.x + was.width)) < 1, "beside the card");
-    assert.deepEqual([slid_.width, slid_.height], [14, side.height], "thin, the edge's height");
-    assert.equal(await bar(page).locator("svg").count(), 1, "with its arrow");
-    assert.equal(await ground(bar(page)), await ground(window_), "the window's other ground");
-    assert.notEqual(await ground(bar(page)), await ground(card(page)));
-    // What is pressed keeps its left edge, 10 into the card, so the pointer stays on it.
+    // Its arrow points out, in the part that is out; the card's shadow lies on that part,
+    // from the card's edge.
+    const part = await boxOf(tab(page).locator("span").nth(1));
+    assert.ok(Math.abs(part.x - right) < 0.5 && part.width === 14);
+    assert.equal(await arrow(page), "out");
+    const lit = await shade.evaluate((e) => {
+      const { x, width } = e.getBoundingClientRect();
+      return { x, width, image: getComputedStyle(e).backgroundImage };
+    });
+    assert.ok(Math.abs(lit.x - right) < 0.5 && lit.width === 14, "on the part that is out");
+    assert.match(lit.image, /^linear-gradient\(to right/);
+    assert.match(lit.image, /0\.14\)/, "very light");
+    // What is pressed keeps its left edge and reaches the bar's end.
+    const pressed = await boxOf(edge(page));
     assert.deepEqual([pressed.x, pressed.width], [side.x, 38]);
     await page.mouse.move(8, 8);
-    await wide(page, 440);
+    await still(page);
+    assert.ok((await boxOf(tab(page))).x + hidden.width <= right + 0.5, "back under the card");
 
-    // With the keyboard: the bar is out while the keyboard is on it, and Enter opens.
+    // With the keyboard on it, the same.
     await window_.getByRole("button", { name: "Create", exact: true }).focus();
     await page.keyboard.press("Tab");
     assert.equal(await edge(page).evaluate((e) => e === document.activeElement), true);
-    await wide(page, 454);
+    await still(page);
+    assert.ok(Math.abs((await boxOf(tab(page))).x + hidden.width - (right + 14)) < 0.5);
+    await page.close();
+  }),
+);
+
+test(
+  "pressed, the window opens as two cards in the page's middle: the name card, moved left with its Close, lying over what the agent can do, on which its light shadow falls; the bar that closes it is at the same place, the name card's right edge, with its arrow pointing back",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await create(page);
+    const [was, button, side] = [
+      await boxOf(card(page)),
+      await boxOf(close(page)),
+      await boxOf(edge(page)),
+    ];
     await watch(page);
-    await page.keyboard.press("Enter");
+    await edge(page).click();
     assert.equal(await edge(page).getAttribute("aria-expanded"), "true");
     await wide(page, 800);
     await page.waitForTimeout(100);
-    // The window grew to the right, through every width between: the card and its Close are
-    // where they were at every frame.
-    const grown = await watched(page);
     assert.ok(
-      grown.widths.some((width) => width > 440 && width < 800),
+      (await watched(page)).widths.some((width) => width > 440 && width < 800),
       "it grows, not jumps",
     );
-    assert.equal(grown.card.length, 1, `the card moved: ${grown.card.join(" | ")}`);
-    assert.equal(grown.close.length, 1, `Close moved: ${grown.close.join(" | ")}`);
-    assert.deepEqual(await boxOf(card(page)), was);
-    const open_ = await boxOf(window_);
-    assert.deepEqual([open_.x, open_.y, open_.height], [whole.x, whole.y, whole.height]);
-
-    // At the card's right, on the window's other ground: each unit, its line and what it gives.
-    const shown = detail(page);
-    assert.equal(await edge(page).getAttribute("aria-controls"), await shown.getAttribute("id"));
-    const beside = await boxOf(shown);
-    assert.ok(Math.abs(beside.x - (was.x + was.width)) < 1, "at the card's right");
-    assert.equal(beside.width, 360);
+    // Both together in the page's middle: the name card has moved left by half of what opened.
+    const [whole, now, shown] = [
+      await boxOf(window_),
+      await boxOf(card(page)),
+      await boxOf(detail(page)),
+    ];
+    assert.ok(Math.abs(whole.x + whole.width / 2 - 720) < 1, "in the page's middle");
     assert.deepEqual(
-      (await shown.getByRole("listitem").allInnerTexts()).map((text) =>
+      [now.x, now.y, now.width, now.height],
+      [was.x - 180, was.y, 440, was.height],
+      "the name card, moved left",
+    );
+    const moved_ = await boxOf(close(page));
+    assert.deepEqual(
+      [moved_.x - now.x, moved_.y - now.y],
+      [button.x - was.x, button.y - was.y],
+      "Close is where it was on the card",
+    );
+    // What it can do is a card of its own under the name card: it starts under the card's edge
+    // and ends at the window's, with its own corners, on the window's other ground.
+    const right = now.x + now.width;
+    assert.ok(shown.x < right && shown.x >= right - 40, "tucked under the card's edge");
+    assert.ok(Math.abs(shown.x + shown.width - (whole.x + whole.width)) < 0.5);
+    assert.equal(shown.x + shown.width - right, 360, "360 of it at the card's right");
+    assert.deepEqual(
+      await detail(page).evaluate((e) => {
+        const form = document.querySelector('form[aria-label="Create"]') as Element;
+        return [
+          getComputedStyle(e).borderRadius,
+          Number(getComputedStyle(e).zIndex) < Number(getComputedStyle(form).zIndex),
+        ];
+      }),
+      ["24px", true],
+    );
+    assert.equal(await ground(detail(page)), await token(page, "--create"));
+    assert.equal(await edge(page).getAttribute("aria-controls"), "create-detail");
+    assert.deepEqual(
+      (await detail(page).getByRole("listitem").allInnerTexts()).map((text) =>
         text.split("\n").filter(Boolean),
       ),
       [
@@ -596,35 +666,28 @@ test(
         ["Web", "Search and fetch", "web", "web-research"],
       ],
     );
-    assert.equal(await shown.getByRole("listitem").first().locator("svg").count(), 3);
+    assert.equal(await detail(page).getByRole("listitem").first().locator("svg").count(), 3);
     assert.equal(
-      await shown
+      await detail(page)
         .locator("input, textarea, select, button, [role=combobox], [role=switch]")
         .count(),
       0,
       "shown, not asked",
     );
-    // The card lies over it: its shadow is on what it can do, at the card's edge, darkest
-    // there and gone toward the right.
-    const shade = await shown
-      .locator("span[aria-hidden]")
-      .first()
-      .evaluate((e) => {
-        const { x, width } = e.getBoundingClientRect();
-        return { x, width, image: getComputedStyle(e).backgroundImage };
-      });
-    assert.ok(Math.abs(shade.x - beside.x) < 1 && shade.width === 20, "at the card's edge");
-    assert.match(shade.image, /^linear-gradient\(to right/, shade.image);
-    // Very light: black at 14 in a hundred where it is strongest, in the dark theme.
-    assert.match(shade.image, /0\.14\)/, shade.image);
+    // The name card's shadow on it: from the card's edge, 20 wide, very light.
+    const shade = detail(page).locator("span[aria-hidden]").first();
+    const lit = await shade.evaluate((e) => {
+      const { x, width } = e.getBoundingClientRect();
+      return { x, width, image: getComputedStyle(e).backgroundImage };
+    });
+    assert.ok(Math.abs(lit.x - right) < 0.5 && lit.width === 20, "at the card's edge");
+    assert.match(lit.image, /^linear-gradient\(to right/);
+    assert.match(lit.image, /0\.14\)/, "black at 14 in a hundred, in the dark theme");
     await page.evaluate(() => {
       document.documentElement.dataset.theme = "light";
     });
     assert.match(
-      await shown
-        .locator("span[aria-hidden]")
-        .first()
-        .evaluate((e) => getComputedStyle(e).backgroundImage),
+      await shade.evaluate((e) => getComputedStyle(e).backgroundImage),
       /0\.04\)/,
       "and at 4 in the light one",
     );
@@ -632,28 +695,38 @@ test(
       document.documentElement.dataset.theme = "dark";
     });
 
-    // The bar that closes it is at the window's far edge: out of the window at rest, and under
-    // the pointer it slides in over what it can do, thin, in the card's colour.
-    const far = await boxOf(edge(page));
-    assert.ok(Math.abs(far.x + far.width - (open_.x + open_.width)) < 1, "the window's right");
-    assert.equal(far.width, 24);
+    // The bar that closes it: what is pressed is where it was on the name card, and nothing is
+    // at the window's far edge. At rest it is behind the card.
     await page.mouse.move(8, 8);
     await window_.locator("#build-name").focus();
-    await settled(page);
-    assert.ok((await boxOf(bar(page))).x >= open_.x + open_.width, "out of the window");
+    await still(page);
+    const again = await boxOf(edge(page));
+    assert.deepEqual(
+      [again.x - now.x, again.y - now.y, again.width, again.height],
+      [side.x - was.x, side.y - was.y, 24, side.height],
+      "at the same place on the name card",
+    );
+    assert.equal(await window_.locator("[data-edge]").count(), 1, "the one control");
+    assert.ok(again.x + again.width < whole.x + whole.width - 300, "none at the far edge");
+    assert.ok((await boxOf(tab(page))).x + 56 <= right + 0.5, "behind the card at rest");
+    // Under the pointer it slides out the same way, over the start of what it can do, and its
+    // arrow points back; nothing of the list is under it, and nothing moves or changes size.
     await edge(page).hover();
-    await settled(page);
-    const slid = await boxOf(bar(page));
-    assert.equal(slid.width, 14);
-    assert.ok(Math.abs(slid.x + slid.width - (open_.x + open_.width)) < 1, "slid in");
-    assert.ok(slid.x >= beside.x, "over what it can do");
-    assert.equal(await ground(bar(page)), await ground(card(page)), "the card's colour");
-    assert.deepEqual(await boxOf(window_), open_, "the window's size does not change");
+    await still(page);
+    const out = await boxOf(tab(page));
+    assert.ok(Math.abs(out.x + out.width - (right + 14)) < 0.5, "14 beyond the card's edge");
+    assert.equal(await arrow(page), "back");
+    assert.equal(await edge(page).getAttribute("aria-expanded"), "true");
+    const first = await boxOf(detail(page).getByRole("listitem").first());
+    assert.ok(first.x >= right + 14, "the list is clear of it");
+    assert.ok((await boxOf(detail(page).getByRole("heading"))).x >= right + 14);
+    assert.deepEqual(await boxOf(window_), whole, "the window as it was");
+    assert.deepEqual(await boxOf(card(page)), now, "the name card as it was");
 
     // A unit nobody offers here is named by its id, and holds Create back.
     await startFrom(page, "From elsewhere");
     assert.deepEqual(
-      (await shown.getByRole("listitem").allInnerTexts()).map((text) =>
+      (await detail(page).getByRole("listitem").allInnerTexts()).map((text) =>
         text.split("\n").filter(Boolean),
       ),
       [["mystery", "Not available here."]],
@@ -663,118 +736,297 @@ test(
       true,
     );
     await startFrom(page, "Empty");
-    assert.equal(await shown.getByRole("listitem").count(), 0);
-    await shown.getByText("Nothing yet.").waitFor();
+    assert.equal(await detail(page).getByRole("listitem").count(), 0);
+    await detail(page).getByText("Nothing yet.").waitFor();
 
-    // The bar closes it back toward the card, which has not moved.
-    await watch(page);
+    // Pressed again it closes: the name card alone, back in the page's middle, no shadow left.
     await edge(page).click();
     assert.equal(await edge(page).getAttribute("aria-expanded"), "false");
     await wide(page, 440);
-    await page.waitForTimeout(100);
-    const back = await watched(page);
-    assert.equal(back.card.length, 1, "the card moved");
-    assert.equal(back.close.length, 1, "Close moved");
-    assert.deepEqual(await boxOf(window_), whole);
+    await page.waitForTimeout(500);
+    assert.deepEqual(await boxOf(card(page)), was);
     assert.equal(await detail(page).count(), 0);
+    assert.equal(await window_.locator("#create-detail > span[aria-hidden]").count(), 0);
+    assert.equal(
+      await window_.locator("#create-detail").evaluate((e) => getComputedStyle(e).visibility),
+      "hidden",
+      "not drawn behind the card",
+    );
     // Opened again, the window starts as the card alone.
     await edge(page).click();
     await page.keyboard.press("Escape");
     await window_.waitFor({ state: "detached" });
     await create(page);
     assert.equal(await edge(page).getAttribute("aria-expanded"), "false");
-    assert.deepEqual(await boxOf(window_), whole);
+    assert.deepEqual(await boxOf(window_), was);
+    await page.close();
+  }),
+);
+
+/** The page's sizes the window is looked at in: its widths, then three of them on short pages. */
+const WIDTHS = [
+  [1920, 1080],
+  [1440, 900],
+  [1280, 800],
+  [1100, 800],
+  [1024, 768],
+  [900, 800],
+  [800, 800],
+  [700, 800],
+  [560, 800],
+  [430, 900],
+  [390, 844],
+] as const;
+const SHORT = [
+  [1280, 720],
+  [1280, 600],
+  [1280, 480],
+  [800, 720],
+  [800, 600],
+  [800, 480],
+  [390, 720],
+  [390, 600],
+  [390, 480],
+] as const;
+
+/**
+ * The window at one size of the page, closed and open: whole on the page with its margins and in
+ * its middle, nothing in the card's head row or its row of avatars over another, Create in view,
+ * and what it can do where the page's width says: beside the card from 768, as wide as the page
+ * leaves it up to 360, and under the card below that.
+ */
+async function looksRight(page: Page, width: number, height: number) {
+  const at = `at ${width} by ${height}`;
+  await page.setViewportSize({ width, height });
+  const window_ = await create(page);
+  const inside = async (when: string) => {
+    const box = await boxOf(window_);
+    assert.ok(
+      box.x >= 16 - 0.5 &&
+        box.y >= 16 - 0.5 &&
+        box.x + box.width <= width - 16 + 0.5 &&
+        box.y + box.height <= height - 16 + 0.5,
+      `${when}, ${at}: ${JSON.stringify(box)}`,
+    );
+    assert.ok(Math.abs(box.x + box.width / 2 - width / 2) < 1, `in the middle across, ${at}`);
+    assert.ok(Math.abs(box.y + box.height / 2 - height / 2) < 1, `in the middle down, ${at}`);
+    return box;
+  };
+  /** Nothing of the head row or the row of avatars is over another, and Create is in view. */
+  const tidy = async (when: string) => {
+    const said = await window_.evaluate((e) => {
+      const over = (a: DOMRect, b: DOMRect) =>
+        a.left < b.right - 0.5 &&
+        b.left < a.right - 0.5 &&
+        a.top < b.bottom - 0.5 &&
+        b.top < a.bottom - 0.5;
+      const boxOf = (part: Element | null) => (part as Element).getBoundingClientRect();
+      const form = e.querySelector('form[aria-label="Create"]') as Element;
+      const badge = boxOf(form.querySelector('[aria-label^="Template:"]'));
+      const shut = boxOf(form.querySelector('button[aria-label="Close"]'));
+      const places = [...form.querySelectorAll('[data-slot="carousel-item"]')];
+      const chosen = places.findIndex((one) => one.getAttribute("aria-current") === "true");
+      const faces = [-1, 0, 1].map((step) =>
+        boxOf(
+          (places[(chosen + step + places.length) % places.length] as Element).firstElementChild,
+        ),
+      );
+      const turns = [
+        boxOf(form.querySelector('[data-slot="carousel-previous"]')),
+        boxOf(form.querySelector('[data-slot="carousel-next"]')),
+      ];
+      const make = boxOf(
+        [...form.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Create") ??
+          null,
+      );
+      const name = form.querySelector("#build-name") as HTMLElement;
+      const card = boxOf(form);
+      return {
+        head: over(badge, shut),
+        row: turns.some((turn) => faces.some((face) => over(turn, face))),
+        faces:
+          over(faces[0] as DOMRect, faces[1] as DOMRect) ||
+          over(faces[1] as DOMRect, faces[2] as DOMRect),
+        largest: (faces[1] as DOMRect).width > (faces[0] as DOMRect).width,
+        whole: faces.every((face) => face.left >= card.left && face.right <= card.right),
+        create: make.top >= 0 && make.bottom <= innerHeight && make.bottom <= card.bottom + 0.5,
+        name: name.tagName === "INPUT" && name.offsetHeight <= 34,
+      };
+    });
+    assert.deepEqual(
+      said,
+      {
+        head: false,
+        row: false,
+        faces: false,
+        largest: true,
+        whole: true,
+        create: true,
+        name: true,
+      },
+      `${when}, ${at}`,
+    );
+  };
+  const alone = await inside("the card alone");
+  assert.equal(alone.width, Math.min(440, width - 32), `the card's width, ${at}`);
+  await tidy("closed");
+  const [was, button] = [await boxOf(card(page)), await boxOf(close(page))];
+  // The avatars: 104 across, or 88 on a card narrower than 440.
+  assert.equal(
+    (await boxOf(panel(page).locator('[data-slot="carousel-item"][aria-current="true"] > div')))
+      .width,
+    width < 480 ? 88 : 104,
+    `the chosen avatar, ${at}`,
+  );
+
+  await edge(page).click();
+  const beside = width >= 768;
+  const across = beside ? Math.min(360, width - 472) : 0;
+  await wide(page, alone.width + across);
+  await page.waitForTimeout(450);
+  const open_ = await inside("with what it can do");
+  await tidy("open");
+  const [now, moved_, shown] = [
+    await boxOf(card(page)),
+    await boxOf(close(page)),
+    await boxOf(detail(page)),
+  ];
+  assert.deepEqual(
+    [moved_.x - now.x, moved_.y - now.y],
+    [button.x - was.x, button.y - was.y],
+    `Close is where it was on the card, ${at}`,
+  );
+  assert.equal(now.width, was.width, `the card's width, ${at}`);
+  if (beside) {
+    assert.ok(across >= 296, `room for what it can do, ${at}`);
+    assert.equal(shown.x + shown.width - (now.x + now.width), across, `its width, ${at}`);
+    assert.ok(Math.abs(shown.x + shown.width - (open_.x + open_.width)) < 0.5);
+    assert.deepEqual([shown.y, shown.height], [now.y, now.height], `as tall as the card, ${at}`);
+  } else {
+    assert.ok(shown.y >= now.y + now.height - 0.5, `under the card, ${at}`);
+    assert.equal(shown.width, now.width, `as wide as the card, ${at}`);
+    // What does not fit under the card is reached by scrolling the window.
+    const reached = await window_.evaluate((e) => {
+      e.scrollTop = e.scrollHeight;
+      const within = e.getBoundingClientRect().bottom;
+      const end = (e.querySelector("#create-detail") as Element).getBoundingClientRect().bottom;
+      e.scrollTop = 0;
+      return end <= within + 0.5;
+    });
+    assert.equal(reached, true, `its end is reached, ${at}`);
+  }
+  // None of its words run past it, and the page does not scroll sideways.
+  assert.deepEqual(
+    await detail(page).evaluate((e) => [
+      [...e.querySelectorAll("li, h3")].some(
+        (one) => one.getBoundingClientRect().right > e.getBoundingClientRect().right + 0.5,
+      ),
+      document.documentElement.scrollWidth > innerWidth,
+    ]),
+    [false, false],
+    `cut, or the page scrolls sideways, ${at}`,
+  );
+  // The control that closes it is in view, on the page.
+  const control = await boxOf(edge(page));
+  assert.ok(
+    control.x >= 0 &&
+      control.x + control.width <= width &&
+      control.y >= 0 &&
+      control.y + control.height <= height,
+    `the control, ${at}`,
+  );
+  await page.keyboard.press("Escape");
+  await window_.waitFor({ state: "detached" });
+}
+
+test(
+  "the window is laid out by the page's width, whole and in the page's middle at each: 1920, 1440, 1280, 1100, 1024, 900 and 800 with what it can do beside the card, 700, 560, 430 and 390 with it under the card",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    for (const [width, height] of WIDTHS) await looksRight(page, width, height);
     await page.close();
   }),
 );
 
 test(
-  "the window is always whole on the page and its card never moves: from 1064 wide what it can do is at the card's right, 296 to 360 wide; narrower it opens under the card, the window growing down",
+  "on short pages the window is still whole, with Create in view: 1280, 800 and 390 wide at 720, 600 and 480 tall",
   withGateway(async (gateway) => {
-    const HEIGHT = 720;
-    for (const [width, across] of [
-      [1280, 800],
-      [1100, 754],
-      [1064, 736],
-      [1024, 440],
-      [800, 440],
-      [700, 440],
-    ] as const) {
-      const beside = across > 440;
-      const page = await browser().newPage({ viewport: { width, height: HEIGHT } });
-      page.setDefaultTimeout(8000);
-      await page.addInitScript((s) => localStorage.setItem("agentorg.session", s), SESSION);
-      await page.goto(`${gateway.url}/#/team`);
-      const window_ = await create(page);
-      /** The window's box, none of it off the page. */
-      const whole = async (when: string) => {
-        const box = await boxOf(window_);
-        assert.ok(
-          box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= HEIGHT,
-          `${when}, at ${width}: ${JSON.stringify(box)}`,
-        );
-        return box;
-      };
-      const alone = await whole("the card alone");
-      assert.equal(alone.width, 440);
-      assert.ok(Math.abs(alone.x + 220 - width / 2) < 1, "in the page's middle");
-      const [was, button] = [await boxOf(card(page)), await boxOf(close(page))];
-      if (beside) {
-        // With the bar out at the card's right the window is still whole on the page.
-        await edge(page).hover();
-        await wide(page, 454);
-        await whole(`with the bar out, at ${width}`);
-        assert.deepEqual(await boxOf(card(page)), was, `the card moved, at ${width}`);
-      }
-      await edge(page).click();
-      await wide(page, across);
-      const open_ = await whole(`with what it can do, at ${width}`);
-      assert.deepEqual(await boxOf(card(page)), was, `the card moved, at ${width}`);
-      assert.deepEqual(await boxOf(close(page)), button, `Close moved, at ${width}`);
-      const shown = await boxOf(detail(page));
-      if (beside) {
-        assert.ok(Math.abs(shown.x - (was.x + was.width)) < 1, "at the card's right");
-        assert.equal(shown.width, across - 440);
-        assert.ok(shown.width >= 296 && shown.width <= 360);
-        assert.ok(open_.x + open_.width <= width - 16 + 0.5, "the page's margin");
-        assert.ok(shown.y + shown.height <= open_.y + open_.height + 0.5);
-        const far = await boxOf(edge(page));
-        assert.ok(Math.abs(far.x + far.width - (open_.x + open_.width)) < 1);
-      } else {
-        assert.equal(open_.y, alone.y, "the window grows down");
-        assert.ok(shown.y >= was.y + was.height - 1, "under the card");
-        assert.equal(shown.width, was.width);
-        // What does not fit under the card is reached by scrolling the window.
-        const reached = await window_.evaluate((e) => {
-          e.scrollTop = e.scrollHeight;
-          const within = e.getBoundingClientRect().bottom;
-          const end = (e.querySelector("#create-detail") as Element).getBoundingClientRect().bottom;
-          e.scrollTop = 0;
-          return end <= within + 0.5;
-        });
-        assert.equal(reached, true, `its end is reached, at ${width}`);
-      }
-      // None of its words run past it.
-      assert.equal(
-        await detail(page).evaluate((e) =>
-          [...e.querySelectorAll("li, h3")].some(
-            (one) => one.getBoundingClientRect().right > e.getBoundingClientRect().right + 0.5,
-          ),
-        ),
-        false,
-        `cut at ${width}`,
-      );
-      await edge(page).click();
-      await wide(page, 440);
-      assert.equal(await detail(page).count(), 0);
-      assert.deepEqual(await whole("closed again"), alone);
-      await page.close();
-    }
+    const page = await open(gateway);
+    for (const [width, height] of SHORT) await looksRight(page, width, height);
+    await page.close();
   }),
 );
 
 test(
-  "where nothing hovers the bar stands out at the card's right, the window that much wider from the start",
+  "a page resized with what the agent can do open changes the window's layout at once, with no width in between: beside the card at 900, under it at 700, and back",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await page.setViewportSize({ width: 900, height: 800 });
+    const window_ = await create(page);
+    await edge(page).click();
+    await wide(page, 800);
+    // Once it has opened, its width no longer takes time.
+    await page.waitForTimeout(500);
+    const frame = () =>
+      page.evaluate(() => new Promise((done) => requestAnimationFrame(() => done(null))));
+    for (const [width, across, beside] of [
+      [700, 440, false],
+      [900, 800, true],
+      [780, 748, true],
+      [760, 440, false],
+    ] as const) {
+      await page.setViewportSize({ width, height: 800 });
+      await frame();
+      const [whole, name, shown] = [
+        await boxOf(window_),
+        await boxOf(card(page)),
+        await boxOf(detail(page)),
+      ];
+      assert.equal(whole.width, across, `at once, at ${width}`);
+      assert.ok(Math.abs(whole.x + whole.width / 2 - width / 2) < 1, `in the middle, at ${width}`);
+      assert.ok(whole.x >= 16 - 0.5 && whole.x + whole.width <= width - 16 + 0.5);
+      if (beside) assert.equal(shown.x + shown.width - (name.x + name.width), across - 440);
+      else assert.ok(shown.y >= name.y + name.height - 0.5, `under the card, at ${width}`);
+      assert.equal(await edge(page).getAttribute("aria-expanded"), "true");
+    }
+    await page.close();
+  }),
+);
+
+test(
+  "a long name stays on one line, cut short with an ellipsis until it is typed in again, and what it's for is at most two lines",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await create(page);
+    const name = window_.locator("#build-name");
+    const line = window_.getByLabel("What it's for");
+    const [high, tall] = [(await boxOf(name)).height, (await boxOf(card(page))).height];
+    await name.fill("Bartholomew the agent whose name is far longer than a card is wide");
+    await line.fill(
+      "Keeps every dependency of every repository current, opens the pull requests, answers the reviews and reports each morning on what moved and what did not",
+    );
+    await line.blur();
+    assert.equal((await boxOf(name)).height, high, "one line");
+    assert.deepEqual(
+      await name.evaluate((e: HTMLInputElement) => [
+        getComputedStyle(e).textOverflow,
+        e.scrollWidth > e.clientWidth,
+      ]),
+      ["ellipsis", true],
+    );
+    assert.ok((await boxOf(line)).height <= 40, "two lines at most");
+    assert.ok((await boxOf(card(page))).height <= tall + 20, "the card barely taller");
+    assert.ok(
+      (await boxOf(name)).x >= (await boxOf(card(page))).x &&
+        (await boxOf(name)).x + (await boxOf(name)).width <=
+          (await boxOf(card(page))).x + (await boxOf(card(page))).width,
+    );
+    await page.close();
+  }),
+);
+
+test(
+  "where nothing hovers the bar stands out at the name card's right, closed and open, and the window is no wider for it",
   withGateway(async (gateway) => {
     const page = await browser().newPage({
       viewport: { width: 1280, height: 800 },
@@ -788,20 +1040,28 @@ test(
     const [whole, was, out] = [
       await boxOf(window_),
       await boxOf(card(page)),
-      await boxOf(bar(page)),
+      await boxOf(tab(page)),
     ];
-    assert.equal(whole.width, 454);
-    assert.ok(Math.abs(was.x + 220 - 640) < 1, "the card in the page's middle");
-    assert.ok(Math.abs(out.x - (was.x + was.width)) < 1 && out.width === 14, "beside the card");
+    assert.deepEqual(whole, was, "the window is the name card");
+    assert.ok(Math.abs(was.x + 220 - 640) < 1, "in the page's middle");
+    assert.ok(Math.abs(out.x + out.width - (was.x + was.width + 14)) < 0.5, "out at rest");
+    assert.equal(await arrow(page), "out");
+    assert.equal((await boxOf(edge(page))).width, 38, "pressed to the bar's end");
     await edge(page).tap();
     await wide(page, 800);
-    assert.deepEqual(await boxOf(card(page)), was);
+    await page.waitForTimeout(100);
+    const now = await boxOf(card(page));
+    assert.ok(
+      Math.abs((await boxOf(tab(page))).x + out.width - (now.x + now.width + 14)) < 0.5,
+      "still out, at the name card's right",
+    );
+    assert.equal(await arrow(page), "back");
     await page.close();
   }),
 );
 
 test(
-  "on a phone the bar is along the card's foot, thin and there without a pointer over it, and what the agent can do opens under it with the card and its Close where they were",
+  "on a phone the bar is along the card's foot, thin and there without a pointer over it, and what the agent can do opens under it, the taller window in the page's middle",
   withGateway(async (gateway) => {
     const page = await browser().newPage({
       viewport: { width: 390, height: 780 },
@@ -817,20 +1077,34 @@ test(
       await boxOf(close(page)),
       await boxOf(edge(page)),
     ];
+    assert.equal(await tab(page).isVisible(), false, "no bar at the card's side");
     assert.equal(under.width, was.width, "as wide as the card");
     assert.ok(Math.abs(under.y - (was.y + was.height)) < 1, "along its foot");
     assert.equal(under.height, 24, "what is pressed");
     const drawn = await boxOf(footBar(page));
     assert.equal(drawn.height, 14, "thin, and drawn at rest");
     assert.ok(Math.abs(drawn.y + drawn.height - (under.y + under.height)) < 1);
-    assert.equal(await ground(footBar(page)), await ground(window_));
+    assert.equal(await ground(footBar(page)), await token(page, "--create"));
+    // The name is its own size, larger than the line under it.
+    assert.deepEqual(
+      await window_.evaluate((e) => [
+        getComputedStyle(e.querySelector("#build-name") as Element).fontSize,
+        getComputedStyle(e.querySelector("textarea") as Element).fontSize,
+      ]),
+      ["22px", "16px"],
+    );
     assert.equal(await detail(page).count(), 0);
     await edge(page).tap();
-    const shown = await boxOf(detail(page));
-    assert.ok(shown.y >= under.y + under.height - 1, "under the bar");
+    const [whole, now, shown] = [
+      await boxOf(window_),
+      await boxOf(card(page)),
+      await boxOf(detail(page)),
+    ];
+    assert.ok(Math.abs(whole.y + whole.height / 2 - 390) < 1, "in the page's middle");
+    assert.ok(shown.y >= now.y + now.height + 24 - 1, "under the bar");
     assert.equal(shown.width, was.width);
-    assert.deepEqual(await boxOf(card(page)), was, "the card stays");
-    assert.deepEqual(await boxOf(close(page)), button, "Close stays");
+    const moved_ = await boxOf(close(page));
+    assert.deepEqual([moved_.x - now.x, moved_.y - now.y], [button.x - was.x, button.y - was.y]);
     assert.deepEqual(
       (await detail(page).getByRole("listitem").allInnerTexts()).map((text) => text.split("\n")[0]),
       ["Computer", "Web"],
@@ -851,7 +1125,7 @@ test(
 );
 
 test(
-  "with reduced motion the bar is out at once and the window is at its width at once, the bar that closes it does not slide, and the row's buttons move it with no glide",
+  "with reduced motion the bar is out at once and the window is at its width at once, and the row's buttons move it with no glide",
   withGateway(async (gateway) => {
     const page = await browser().newPage({
       viewport: { width: 1440, height: 900 },
@@ -866,12 +1140,16 @@ test(
         const { transitionProperty, transitionDuration } = getComputedStyle(e);
         return transitionProperty !== "none" && transitionDuration !== "0s";
       });
-    assert.equal(await moves(window_), false);
+    const right = async () => {
+      const box = await boxOf(card(page));
+      return box.x + box.width;
+    };
+    assert.equal(await moves(tab(page)), false, "the bar does not slide");
     await edge(page).hover();
-    assert.equal((await boxOf(window_)).width, 454, "the bar is out at once");
+    assert.ok(Math.abs((await boxOf(tab(page))).x + 56 - ((await right()) + 14)) < 0.5, "at once");
     await edge(page).click();
+    assert.equal(await moves(window_), false, "the window's width takes no time");
     assert.equal((await boxOf(window_)).width, 800, "at once");
-    assert.equal(await moves(bar(page)), false, "the bar that closes it does not slide");
     // The row is on its next place in the very frame after the press.
     const { chosen } = await ring(page);
     const beside = places(page)
@@ -883,14 +1161,13 @@ test(
     assert.equal((await boxOf(beside)).width, 104, "whole, in the middle");
     await page.close();
 
-    // Without it, the window's width, which the bar comes out with, and the closing bar's slide
-    // take time.
+    // Without it, the bar's slide takes time, and so does the window's width as it opens.
     const plain = await open(gateway);
     await create(plain);
-    assert.equal(await moves(panel(plain)), true);
+    assert.equal(await moves(tab(plain)), true);
+    assert.equal(await moves(panel(plain)), false, "not at rest");
     await edge(plain).click();
-    await wide(plain, 800);
-    assert.equal(await moves(bar(plain)), true);
+    assert.equal(await moves(panel(plain)), true, "while it opens");
     await plain.close();
   }),
 );

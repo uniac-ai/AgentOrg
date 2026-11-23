@@ -103,44 +103,107 @@ function Tile({ logo: Logo, small = false }: { logo: LucideIcon; small?: boolean
 }
 
 /**
+ * How an agent's create window is laid out, by the page's width: every width and size it goes by
+ * is here, as the window's own variables and the two widths its classes turn on.
+ *
+ *   page's width   what it can do    the card         what it can do is
+ *   under 480      under the card    the page less 32  as wide as the card
+ *   480 to 767     under the card    440               440
+ *   768 to 831     beside the card   440               the page less 472: 296 to 359
+ *   832 and more   beside the card   440               360
+ *
+ * `md` (768) is where what it can do has room beside the card: narrower than 296 it would be
+ * cramped. Under 480 (`max-[30rem]`) the card is narrower than 440, and its avatars are 88 where
+ * they are 104. The window is in the page's middle in every layout, and never wider or taller
+ * than the page less its margins.
+ */
+const CREATE = {
+  /**
+   * The window: the name card, and beside it what it can do while that is open. It has no ground
+   * of its own beside the card, where its two cards are each drawn whole; under the card it is
+   * one column on the window's other ground, which scrolls where the page is short.
+   */
+  window:
+    "flex max-h-[calc(100%-2rem)] w-(--card) max-w-none gap-0 overflow-visible rounded-3xl bg-transparent p-0 ring-0 [--bar:14px] [--card:min(440px,100vw_-_2rem)] [--detail:min(360px,100vw_-_2rem_-_440px)] [--face:104px] [--row-blur:56px] [--tuck:32px] max-md:flex-col max-md:overflow-x-hidden max-md:overflow-y-auto max-md:bg-[var(--create)] max-[30rem]:[--face:88px] max-[30rem]:[--row-blur:40px] sm:max-w-none",
+  /** Open beside the card, the window is wider by what it can do. */
+  open: "md:w-[calc(var(--card)_+_var(--detail))]",
+  /** Its width takes the time a window opens in, only as what it can do opens or closes. */
+  moving: "md:motion-safe:transition-[width] md:motion-safe:ease-out",
+  /**
+   * The name card, over what it can do: its head and its foot stay, and its middle scrolls where
+   * the page is shorter than the card, so Create is always in view.
+   */
+  card: "window relative z-10 flex max-h-[calc(100dvh-2rem)] w-(--card) shrink-0 flex-col rounded-3xl bg-[var(--create-card)] max-md:max-h-[calc(100dvh-3.5rem)] max-md:w-full max-md:rounded-none",
+  /** The room kept for the row of avatars. */
+  row: "h-[calc(var(--face)_+_16px)] shrink-0",
+  /**
+   * What it can do, a card of its own under the name card: `--tuck` of it stays under the name
+   * card's edge, the rest is at the card's right. Under the card it is part of the column.
+   */
+  detail:
+    "window absolute inset-y-0 right-0 z-0 w-[calc(var(--detail)_+_var(--tuck))] rounded-3xl bg-[var(--create)] max-md:static max-md:order-2 max-md:w-full max-md:shrink-0 max-md:rounded-none max-md:bg-transparent",
+  /** What it holds, clear of the part under the name card. */
+  detailInner:
+    "no-bar flex h-full flex-col gap-3 overflow-y-auto pt-4 pr-5 pb-5 pl-[calc(var(--tuck)_+_20px)] max-md:pl-5",
+  /** The name card's shadow on it: to the right of the card's edge, or downward under the card. */
+  shade:
+    "pointer-events-none absolute z-10 from-black/4 to-transparent max-md:inset-x-0 max-md:top-0 max-md:h-5 max-md:bg-linear-to-b md:inset-y-0 md:left-(--tuck) md:w-5 md:bg-linear-to-r dark:from-black/14",
+  /**
+   * What is pressed to open and close what it can do: 24 into the name card's right edge below
+   * its head row, and 14 more, to the bar's end, while the bar is out; its left edge stays. Under
+   * the card it is a row along the card's foot.
+   */
+  edge: "peer/edge absolute top-14 bottom-0 left-[calc(var(--card)_-_24px)] z-20 w-6 text-muted-foreground outline-none max-md:relative max-md:inset-auto max-md:order-1 max-md:h-6 max-md:w-full max-md:shrink-0 max-md:bg-[var(--create-card)] md:hover:w-[38px] md:focus-visible:w-[38px] md:[@media(hover:none)]:w-[38px]",
+  /**
+   * The bar, a tab of the window's other ground lying under the name card with the card's
+   * corners at its outer side: with the pointer or the keyboard on the edge it slides `--bar`
+   * out from under the card's right edge, and where nothing hovers it stands out.
+   */
+  tab: "window absolute inset-y-0 left-[calc(var(--card)_-_56px)] z-[5] w-14 rounded-r-3xl bg-[var(--create)] text-muted-foreground shadow-[2px_0_6px_rgb(0_0_0/0.05)] transition-transform duration-200 ease-out peer-hover/edge:translate-x-(--bar) peer-focus-visible/edge:translate-x-(--bar) motion-reduce:transition-none max-md:hidden dark:shadow-[2px_0_6px_rgb(0_0_0/0.3)] [@media(hover:none)]:translate-x-(--bar)",
+  /** The part of the bar that comes out, with its arrow and the name card's shadow on it. */
+  tabOut: "absolute inset-y-0 right-0 flex w-(--bar) items-center justify-center",
+  tabShade:
+    "pointer-events-none absolute inset-y-0 right-0 w-(--bar) bg-linear-to-r from-black/4 to-transparent dark:from-black/14",
+  /** The bar under the card: along the card's foot, always there. */
+  foot: "absolute inset-x-0 bottom-0 flex h-(--bar) items-center justify-center bg-[var(--create)] md:hidden",
+};
+
+/**
  * Create, in one window. A click outside closes it, and it opens clean, with the keyboard in the
- * name. An agent's opens as its card alone, and grows to the right to show what it can do beside
- * the card, which stays where it is. A template's is the card on the left and the options on the
- * right.
+ * name. An agent's opens as its card alone, in the page's middle; with what it can do open it is
+ * the card over a second card, the two in the page's middle together. A template's is the card
+ * on the left and the options on the right.
  */
 export function BuildDialog() {
   const { open, hide, draft, choosing } = useBuilding();
   const template = (draft?.mode ?? choosing?.mode) === "template";
-  // Whether what an agent can do is open: closed each time the window opens. While it is open the
-  // window's top is held where it was, so the window grows away from its card, which stays put.
+  // Whether what an agent can do is open: closed each time the window opens. `moving` is the
+  // moment after it opens or closes, in which the window's width takes time; a page that is
+  // resized changes the window's width at once.
   const [detail, setDetail] = useState(false);
-  const [top, setTop] = useState<number>();
-  const window_ = useRef<HTMLDivElement>(null);
+  const [moving, setMoving] = useState(false);
+  const settle = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
     if (open) {
       setDetail(false);
-      setTop(undefined);
+      setMoving(false);
     }
   }
+  useEffect(() => () => clearTimeout(settle.current), []);
   const toggle = (next: boolean) => {
-    const box = window_.current;
-    // In the page's middle, its top is half the height the page has to spare.
-    setTop(
-      next && box ? (document.documentElement.clientHeight - box.offsetHeight) / 2 : undefined,
-    );
+    setMoving(true);
+    clearTimeout(settle.current);
+    settle.current = setTimeout(() => setMoving(false), 400);
     setDetail(next);
   };
-  const held = !template && top !== undefined;
   return (
     <Dialog open={open} onOpenChange={(next) => !next && hide()}>
       <DialogContent
-        ref={window_}
         asWindow
         // Its close is in its head, in line with the title.
         showCloseButton={false}
-        {...(held ? { style: { top, maxHeight: `calc(100% - ${top}px - 1rem)` } } : {})}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           document.getElementById("build-name")?.focus({ preventScroll: true });
@@ -148,14 +211,7 @@ export function BuildDialog() {
         className={
           template
             ? "window flex h-[min(680px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col sm:max-w-[920px]"
-            : // The card is 440 wide, in the page's middle, and stays there: the window's left edge
-              // is the card's. Where the page is 1064 wide or more, what it can do opens at the
-              // card's right, 296 to 360 wide as the page's right half has room: the window
-              // grows that way in the time a window opens in, at once with reduced motion.
-              // Closed, it is 14 wider while the pointer or the keyboard is on its edge, or
-              // where nothing hovers: the bar that opens it, out at the card's right.
-              // Narrower, it opens under the card, the window growing down and scrolling.
-              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 left-[max(1rem,50%_-_220px)] translate-x-0 max-w-[min(440px,100%_-_2rem)] sm:max-w-[440px] max-[66.5rem]:flex-col max-[66.5rem]:overflow-y-auto min-[66.5rem]:motion-safe:transition-[max-width] min-[66.5rem]:motion-safe:ease-out ${held ? "translate-y-0" : ""} ${detail ? "min-[66.5rem]:max-w-[calc(440px_+_min(360px,50vw_-_236px))]" : "min-[66.5rem]:has-[[data-edge]:hover]:max-w-[454px] min-[66.5rem]:has-[[data-edge]:focus-visible]:max-w-[454px] min-[66.5rem]:[@media(hover:none)]:max-w-[454px]"}`
+            : `${CREATE.window} ${detail ? CREATE.open : ""} ${moving ? CREATE.moving : ""}`
         }
       >
         {template ? (
@@ -177,8 +233,8 @@ export function BuildDialog() {
         ) : (
           <>
             <CreateCard />
-            <Detail shown={detail} />
             <Edge detail={detail} toggle={toggle} />
+            <Detail shown={detail} drawn={detail || moving} />
           </>
         )}
       </DialogContent>
@@ -218,7 +274,8 @@ function TypedInPlace({
   const inPlace = `block w-full min-w-0 rounded-md border-0 bg-transparent p-0 text-center outline-none hover:bg-[var(--hover)] ${compact ? "max-sm:text-left" : ""}`;
   return (
     <>
-      {/* The name offered reads as a name until one is typed: Create works at once. */}
+      {/* The name offered reads as a name until one is typed: Create works at once. On a phone the
+          shell sets every typed field at 16, which an agent's name, larger, is kept from. */}
       <input
         id="build-name"
         aria-label="Name"
@@ -227,7 +284,7 @@ function TypedInPlace({
         // Until the stack is drawn there is nothing yet to hold what is typed.
         readOnly={!draft}
         onChange={(e) => setText({ name: e.target.value })}
-        className={`${inPlace} h-8 text-[22px] font-semibold tracking-tight ${compact ? "max-sm:h-6 max-sm:text-[17px]" : ""} ${shown ? "placeholder:text-foreground" : "placeholder:text-[var(--faint)]"}`}
+        className={`${inPlace} h-8 text-[22px] font-semibold tracking-tight text-ellipsis ${compact ? "max-sm:h-6 max-sm:text-[17px]" : "max-sm:text-[22px]!"} ${shown ? "placeholder:text-foreground" : "placeholder:text-[var(--faint)]"}`}
       />
       {/* What it's for, in one or two lines. */}
       <textarea
@@ -438,7 +495,7 @@ function CreateCard() {
   return (
     <form
       aria-label="Create"
-      className="relative flex w-full shrink-0 flex-col bg-[var(--create-card)] min-[66.5rem]:w-[440px]"
+      className={CREATE.card}
       onSubmit={(event) => {
         event.preventDefault();
         finish();
@@ -456,18 +513,24 @@ function CreateCard() {
           </Button>
         </DialogClose>
       </header>
-      {/* The row's height is kept while the agents, whose names it must not offer, are read. */}
-      <div className="h-[120px] shrink-0">
-        {loaded && <AvatarRow taken={taken} onChoose={setChosen} />}
+      {/* Between its head and its foot, the card scrolls where the page is shorter than it. */}
+      <div className="no-bar flex min-h-0 flex-col overflow-y-auto">
+        {/* The row's height is kept while the agents, whose names it must not offer, are read. */}
+        <div className={CREATE.row}>
+          {loaded && <AvatarRow taken={taken} onChoose={setChosen} />}
+        </div>
+        <div className="mt-3 w-full min-w-0 shrink-0 px-10 text-center max-[30rem]:px-6">
+          <TypedInPlace offered={chosen?.name} />
+        </div>
+        {refused && (
+          <p
+            role="alert"
+            className="mt-4 shrink-0 px-10 text-center text-[13px] text-[var(--bad)] max-[30rem]:px-6"
+          >
+            {refused}
+          </p>
+        )}
       </div>
-      <div className="mt-3 w-full min-w-0 px-10 text-center">
-        <TypedInPlace offered={chosen?.name} />
-      </div>
-      {refused && (
-        <p role="alert" className="mt-4 px-10 text-center text-[13px] text-[var(--bad)]">
-          {refused}
-        </p>
-      )}
       <footer className="flex min-h-[92px] shrink-0 flex-col items-center gap-3 px-10 pt-6 pb-7">
         {draft && needs && (
           <span className="text-center text-[13px] text-muted-foreground">{needs}</span>
@@ -487,57 +550,49 @@ function CreateCard() {
 }
 
 /**
- * What opens and closes what the agent can do: a thin bar, 14 wide, with an arrow in it. Closed,
- * it is under the card's right edge: with the pointer or the keyboard on that edge it slides out
- * to the right, the window growing by its width, so it stands beside the card in the window's
- * other ground, the first of what it opens. What is pressed reaches 10 into the card, and its
- * left edge stays where it is as the bar comes out. Open, the bar is at the far side of what it
- * can do: there it slides in from the window's edge, over what it can do, in the card's colour,
- * with an arrow pointing back, in a button 24 wide. Where nothing hovers, as on a touch screen,
- * the bar stands. Where what it can do opens under the card, it is a bar along the card's foot,
- * as thin.
+ * What opens and closes what the agent can do, at the name card's right edge whether it is open
+ * or not. The bar is a second card's edge under the name card: with the pointer or the keyboard
+ * on the edge it slides out to the right, 14 of it, with an arrow and the name card's light
+ * shadow on it, and the name card keeps its outline over it. Closed, the arrow points out; open,
+ * the bar comes out over the start of what it can do and its arrow points back. Where nothing
+ * hovers, as on a touch screen, the bar stands out. Where what it can do opens under the card, it
+ * is a thin bar along the card's foot.
  */
 function Edge({ detail, toggle }: { detail: boolean; toggle(next: boolean): void }) {
   return (
-    <button
-      type="button"
-      data-edge
-      aria-label="What it can do"
-      aria-expanded={detail}
-      aria-controls="create-detail"
-      onClick={() => toggle(!detail)}
-      className={`group/edge absolute top-14 right-0 bottom-0 z-10 text-muted-foreground outline-none max-[66.5rem]:relative max-[66.5rem]:inset-auto max-[66.5rem]:order-1 max-[66.5rem]:h-6 max-[66.5rem]:w-full max-[66.5rem]:shrink-0 max-[66.5rem]:bg-[var(--create-card)] ${detail ? "w-6" : "left-[416px]"}`}
-    >
-      {/* Beside the card: out at its right, or in at the window's far edge. */}
-      <span
-        aria-hidden
-        className={`absolute inset-y-0 flex w-3.5 items-center justify-center max-[66.5rem]:hidden ${
-          detail
-            ? "right-0 translate-x-[250%] bg-[var(--create-card)] shadow-[-4px_0_12px_rgb(0_0_0/0.14)] transition-transform duration-200 ease-out group-hover/edge:translate-x-0 group-focus-visible/edge:translate-x-0 motion-reduce:transition-none dark:shadow-[-4px_0_12px_rgb(0_0_0/0.45)] [@media(hover:none)]:translate-x-0"
-            : "left-6 bg-[var(--create)]"
-        }`}
+    <>
+      <button
+        type="button"
+        data-edge
+        aria-label="What it can do"
+        aria-expanded={detail}
+        aria-controls="create-detail"
+        onClick={() => toggle(!detail)}
+        className={CREATE.edge}
       >
-        <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "rotate-180" : ""}`} />
+        <span aria-hidden className={CREATE.foot}>
+          <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "-rotate-90" : "rotate-90"}`} />
+        </span>
+      </button>
+      <span aria-hidden data-edge-bar className={CREATE.tab}>
+        <span className={CREATE.tabShade} />
+        <span className={CREATE.tabOut}>
+          <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "rotate-180" : ""}`} />
+        </span>
       </span>
-      {/* Along the card's foot. */}
-      <span
-        aria-hidden
-        className="absolute inset-x-0 bottom-0 flex h-3.5 items-center justify-center bg-[var(--create)] min-[66.5rem]:hidden"
-      >
-        <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "-rotate-90" : "rotate-90"}`} />
-      </span>
-    </button>
+    </>
   );
 }
 
 /**
  * What the agent will be able to do, as the template gives it, on the window's other ground:
- * each unit with its logo, its title, its own line and what it gives. Shown, not asked. It is at
- * the card's right, or under the card where the page has no room there, and the card lies over
- * it: the card's shadow falls on it, very light, strongest at the card and gone 20 from it.
- * Closed, it is out of the window's width, and of reach; under the card, it isn't drawn.
+ * each unit with its logo, its title, its own line and what it gives. Shown, not asked. It is a
+ * card of its own under the name card, out at the card's right, or under the card where the page
+ * has no room there; the name card's shadow falls on it, very light, strongest at the card and
+ * gone 20 from it. Closed, it is behind the name card, not drawn and out of reach; under the
+ * card, it isn't there.
  */
-function Detail({ shown }: { shown: boolean }) {
+function Detail({ shown, drawn }: { shown: boolean; drawn: boolean }) {
   const { draft } = useBuilding();
   return (
     <section
@@ -545,16 +600,11 @@ function Detail({ shown }: { shown: boolean }) {
       aria-label="What it can do"
       aria-hidden={!shown}
       inert={!shown}
-      className={`relative max-[66.5rem]:order-2 max-[66.5rem]:shrink-0 min-[66.5rem]:absolute min-[66.5rem]:inset-y-0 min-[66.5rem]:left-[440px] min-[66.5rem]:w-[min(360px,50vw_-_236px)] ${shown ? "" : "max-[66.5rem]:hidden"}`}
+      className={`${CREATE.detail} ${shown ? "" : "max-md:hidden"} ${drawn ? "" : "md:invisible"}`}
     >
-      {/* The card's shadow, while this is open. */}
-      {shown && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute z-10 from-black/4 to-transparent max-[66.5rem]:inset-x-0 max-[66.5rem]:top-0 max-[66.5rem]:h-5 max-[66.5rem]:bg-linear-to-b min-[66.5rem]:inset-y-0 min-[66.5rem]:left-0 min-[66.5rem]:w-5 min-[66.5rem]:bg-linear-to-r dark:from-black/14"
-        />
-      )}
-      <div className="no-bar flex h-full flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5">
+      {/* The name card's shadow, while this is open. */}
+      {shown && <span aria-hidden className={CREATE.shade} />}
+      <div className={CREATE.detailInner}>
         <h3 className="flex h-6 shrink-0 items-center text-[13px] font-medium text-muted-foreground">
           What it can do
         </h3>

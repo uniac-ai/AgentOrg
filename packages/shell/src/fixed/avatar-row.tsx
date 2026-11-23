@@ -21,8 +21,6 @@ import { apart, comingRound, freshPair, KEPT, type Pair } from "./avatar-ring.ts
 import { useReducedMotion } from "./motion.ts";
 import { freshName } from "./names.ts";
 
-/** An avatar's width and height in the row, in pixels. */
-const SIZE = 104;
 /** Within this many places of the choice, a place keeps what it has. */
 const NEAR = 6;
 
@@ -92,7 +90,8 @@ function outOfSight(api: Api, place: number) {
   const snaps = api.scrollSnapList();
   const from = Math.abs((snaps[place] ?? 0) - api.scrollProgress()) % 1;
   const away = Math.min(from, 1 - from) * snaps.length;
-  return away >= api.rootNode().offsetWidth / 2 / SIZE + 1;
+  const wide = api.slideNodes()[0]?.offsetWidth || 104;
+  return away >= api.rootNode().offsetWidth / 2 / wide + 1;
 }
 
 /**
@@ -209,7 +208,7 @@ export function AvatarRow({
       plugins={wheels}
       setApi={setApi}
       jump={reduced}
-      className="mx-8 cursor-grab rounded-2xl outline-none max-sm:mx-3 select-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing"
+      className="mx-8 cursor-grab rounded-2xl outline-none max-[30rem]:mx-3 select-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing"
     >
       <CarouselContent className="ml-0 py-2">
         {ring.map((pair, place) => (
@@ -223,11 +222,12 @@ export function AvatarRow({
             onClick={() => api?.scrollTo(place, reduced)}
           >
             {/* Until the row has measured itself, nothing is drawn at the wrong size. */}
-            <div className="opacity-0 will-change-transform" style={{ width: SIZE, height: SIZE }}>
+            {/* As wide and tall as the window that holds the row says a face is, `--face`. */}
+            <div className="size-(--face) opacity-0 will-change-transform">
               {place === at ? (
-                <Avatar value={pair.avatar} size={SIZE} />
+                <Avatar value={pair.avatar} className="size-full" />
               ) : (
-                <img alt="" draggable={false} width={SIZE} height={SIZE} src={pair.still} />
+                <img alt="" draggable={false} className="size-full" src={pair.still} />
               )}
             </div>
           </CarouselItem>
@@ -237,7 +237,7 @@ export function AvatarRow({
           take no room of their own. */}
       <GradualBlur
         position="left"
-        width={56}
+        width="var(--row-blur, 56px)"
         strength={1}
         curve="ease-out"
         tint="var(--create-card)"
@@ -246,7 +246,7 @@ export function AvatarRow({
       />
       <GradualBlur
         position="right"
-        width={56}
+        width="var(--row-blur, 56px)"
         strength={1}
         curve="ease-out"
         tint="var(--create-card)"
