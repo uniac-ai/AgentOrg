@@ -11,6 +11,7 @@ import {
   agentSettings,
   agentSettings2,
   agents,
+  agents2,
   capability,
   capabilityProvider,
   chat,
@@ -72,6 +73,7 @@ const management = [
   unitProvider,
   capabilityProvider,
   agentSettings2,
+  agents2,
 ];
 
 test("the agent management interfaces are named, versioned and compile strictly", () => {
@@ -87,6 +89,7 @@ test("the agent management interfaces are named, versioned and compile strictly"
       "unit.provider@1",
       "capability.provider@1",
       "agent.settings@2",
+      "agents@2",
     ],
   );
   for (const iface of management)
@@ -1154,4 +1157,88 @@ test("agents@1 lists every capability its providers offer, each naming its provi
   assert.equal(listed({ capabilities: [unnamed] }), false);
   assert.equal(listed({ capabilities: [{ ...memory, asks: ["person"] }] }), false);
   assert.ok(compiled(agents)["capabilities.input"]?.({}));
+});
+
+test("a provider's mount says what it made for management to wire: connections, skills and the person's capability; one inside the agent says only what it mounted", () => {
+  const provider = compiled(capabilityProvider);
+  const mounted = provider["mount.output"];
+  assert.ok(mounted);
+  assert.ok(mounted({ mounted: "mnt_1" }));
+  const made = {
+    connections: [{ slot: "computer", connection: "act_c", target: "this computer" }],
+    skills: [{ name: "computer", files: ["SKILL.md", "ALWAYS.md"] }],
+    capability: { actor: "act_w", rows: { place: [{ label: "Where", value: "Here" }] } },
+  };
+  assert.ok(mounted({ mounted: "mnt_1", made }));
+  assert.ok(mounted({ mounted: "mnt_1", made: {} }));
+  assert.ok(mounted({ problems: [{ message: "No room." }] }));
+  // Nothing beside what was made, and no skill without its files.
+  assert.equal(mounted({ mounted: "mnt_1", made: { ...made, results: [] } }), false);
+  assert.equal(
+    mounted({ mounted: "mnt_1", made: { skills: [{ name: "computer", files: [] }] } }),
+    false,
+  );
+  assert.equal(mounted({ mounted: "mnt_1", made: { capability: { rows: {} } } }), false);
+  // A skill's files are read through the provider, by the capability that makes them.
+  assert.ok(
+    provider["skill.input"]?.({ capability: "computer", name: "computer", path: "SKILL.md" }),
+  );
+  assert.equal(
+    provider["skill.input"]?.({ unit: "computer", name: "computer", path: "SKILL.md" }),
+    false,
+  );
+  // Management's own mount still answers what was mounted, and nothing it made.
+  assert.equal(compiled(agents)["mount.output"]?.({ mounted: "mnt_1", made }), false);
+});
+
+test("agents@2 makes an agent empty and is what is mounted on it: no stack, units, check or template calls", () => {
+  const a = compiled(agents2);
+  assert.deepEqual(Object.keys(agents2.methods).sort(), [
+    "capabilities",
+    "create",
+    "get",
+    "list",
+    "mount",
+    "remove",
+    "unmount",
+  ]);
+  assert.ok(a["create.input"]?.({ name: "Pat" }));
+  assert.ok(a["create.input"]?.({ name: "Pat", purpose: "Keeps the docs." }));
+  const entry = {
+    agent: "act_1",
+    name: "Pat",
+    status: { state: "running" },
+    provider: "act_2",
+  };
+  assert.ok(a["list.output"]?.({ agents: [entry] }));
+  const template = {
+    mounted: "mnt_t",
+    provider: "act_m",
+    capability: "assistant",
+    title: "Assistant",
+    arguments: {},
+    by: "person",
+    children: [],
+  };
+  const computer = {
+    mounted: "mnt_c",
+    provider: "act_c",
+    capability: "computer",
+    title: "Computer",
+    arguments: { place: "this" },
+    by: "person",
+    children: [],
+    parent: "mnt_t",
+  };
+  const part = { name: "memory", title: "Memory", state: "mounted" };
+  assert.ok(a["get.output"]?.({ ...entry, mounted: [template, computer], composition: [part] }));
+  assert.ok(a["get.output"]?.({ ...entry, mounted: [] }));
+  assert.equal(a["get.output"]?.({ ...entry }), false, "what was mounted is always said");
+  // A stack or a template isn't how an agent is made.
+  assert.equal(
+    a["create.input"]?.({ stack: { base: { provider: "act_2", creatable: "assistant" } } }),
+    false,
+  );
+  assert.ok(a["mount.output"]?.({ mounted: "mnt_1" }));
+  assert.ok(a["capabilities.output"]?.({ capabilities: [] }));
 });

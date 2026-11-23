@@ -43,11 +43,11 @@ import {
 } from "./units.js";
 
 const Time = z.string().max(64);
-const ActorName = z.string().min(1).max(128);
+export const ActorName = z.string().min(1).max(128);
 const OnAgent = z.object({ agent: Id });
 const OnConnection = z.object({ connection: Id });
 const OnSkill = z.object({ name: SkillName });
-const Purpose = z.string().max(2000);
+export const Purpose = z.string().max(2000);
 
 /** A template's id. */
 export const TemplateId = z
