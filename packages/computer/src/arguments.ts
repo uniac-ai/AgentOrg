@@ -124,24 +124,48 @@ export function settle(
 }
 
 /**
- * The skills a unit's answers give an agent: those the unit always gives, then those each answer
- * adds, of the fields asked, each once and with its files.
+ * What a unit's answers give, as management works it out for an applied unit: what it always
+ * gives, then what each answer adds, of the fields asked, in the form's order.
  */
+const addsOf = (unit: TheUnit, values: Record<string, unknown>) => [
+  unit.gives,
+  ...unit.form
+    .filter((field) => shown(field, values))
+    .flatMap((field) => {
+      const value = values[field.id];
+      if (value === undefined) return [];
+      return [
+        ...(value === true && field.adds ? [field.adds] : []),
+        ...(field.options ?? []).flatMap((option) =>
+          option.adds && [value].flat().map(String).includes(option.value) ? [option.adds] : [],
+        ),
+      ];
+    }),
+];
+
+/** One of each by its id: what is given first stands. */
+const once = <T>(all: T[], id: (one: T) => string) =>
+  all.filter((one, at) => all.findIndex((other) => id(other) === id(one)) === at);
+
+/** The skills a unit's answers give an agent, each once and with its files. */
 export function skillsOf(unit: TheUnit, values: Record<string, unknown>) {
-  const names = [
-    ...unit.gives.skills,
-    ...unit.form
-      .filter((field) => shown(field, values))
-      .flatMap((field) => {
-        const value = values[field.id];
-        if (value === undefined) return [];
-        return [
-          ...(value === true ? (field.adds?.skills ?? []) : []),
-          ...(field.options ?? [])
-            .filter((option) => [value].flat().map(String).includes(option.value))
-            .flatMap((option) => option.adds?.skills ?? []),
-        ];
-      }),
-  ].flatMap((skill) => ("name" in skill ? [skill.name] : []));
+  const names = addsOf(unit, values)
+    .flatMap((add) => add.skills ?? [])
+    .flatMap((skill) => ("name" in skill ? [skill.name] : []));
   return [...new Set(names)].map((name) => ({ name, files: skillFiles(name) }));
+}
+
+/** The live surfaces and the views a unit's answers give the person's capability. */
+export function viewsOf(unit: TheUnit, values: Record<string, unknown>) {
+  const adds = addsOf(unit, values);
+  return {
+    surfaces: once(
+      adds.flatMap((add) => add.surfaces ?? []),
+      (one) => one.surface,
+    ),
+    views: once(
+      adds.flatMap((add) => add.views ?? []),
+      (one) => one.id,
+    ),
+  };
 }

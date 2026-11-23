@@ -46,7 +46,7 @@ import { type Log, Refused } from "@agentorg/sdk";
 import { type Client, connect } from "@agentorg/sdk/client";
 import WebSocket from "ws";
 import { z } from "zod";
-import { argumentsOf, settle, skillsOf } from "./arguments.js";
+import { argumentsOf, settle, skillsOf, viewsOf } from "./arguments.js";
 import {
   type Access,
   BROWSER_SLOT,
@@ -1798,8 +1798,16 @@ export async function startComputerProvider(
             made: {
               connections: made.connections,
               skills: skillsOf(unit, values),
+              // The person's capability, its views as these answers give them.
               ...(made.capability?.actor
-                ? { capability: { actor: made.capability.actor, rows: made.capability.rows ?? {} } }
+                ? {
+                    capability: {
+                      actor: made.capability.actor,
+                      title: unit.capability?.title ?? unit.title,
+                      ...viewsOf(unit, values),
+                      rows: made.capability.rows ?? {},
+                    },
+                  }
                 : {}),
             },
           };

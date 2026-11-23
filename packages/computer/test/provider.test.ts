@@ -2723,6 +2723,23 @@ test("the computer and web are capabilities too: each unit's form as its argumen
     Object.keys(made?.capability?.rows ?? {}).sort(),
     Object.keys(byUnit.capability?.rows ?? {}).sort(),
   );
+  // The person's capability: its title, and the surfaces and views the unit gives with these
+  // answers, what it always gives and then what "terminal" adds, in that order.
+  const unit = (await units.units({})).units.find((one) => one.id === "computer");
+  const terminal = form(unit, "access")?.options?.find((one) => one.value === "terminal") as
+    | { adds?: { surfaces?: unknown[] } }
+    | undefined;
+  const gives = unit?.gives as { surfaces?: unknown[]; views?: unknown[] } | undefined;
+  assert.equal(made?.capability?.title, "Computer");
+  assert.deepEqual(made?.capability?.surfaces, [
+    ...(gives?.surfaces ?? []),
+    ...(terminal?.adds?.surfaces ?? []),
+  ]);
+  assert.deepEqual(made?.capability?.views, gives?.views);
+  assert.deepEqual(
+    made?.capability?.surfaces?.map(({ surface }) => surface),
+    ["load", "presence", "terminal", "files"],
+  );
   await connected(mounted.mounted);
   // Byte for byte: the same functions, names, descriptions and arguments.
   const listedByMount = (
