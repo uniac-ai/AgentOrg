@@ -24,6 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
+import GradualBlur from "../ui/gradual-blur.tsx";
 import {
   InputGroup,
   InputGroupAddon,
@@ -351,6 +352,19 @@ const ProblemLine = ({
 );
 
 /**
+ * A bubble's corners: 18 px, and 6 px on its own side where it meets what the same side said just
+ * above it or just under it, so a run of one side's bubbles reads as one group.
+ */
+const corners = (side: "start" | "end", above: boolean, below: boolean) =>
+  [
+    "rounded-[18px]",
+    above && (side === "start" ? "rounded-ss-[6px]" : "rounded-se-[6px]"),
+    below && (side === "start" ? "rounded-es-[6px]" : "rounded-ee-[6px]"),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+/**
  * The agent typing in this conversation, as a messenger shows the other end typing: three dots in a
  * muted bubble on its side, heard as "<agent> is typing". The dots rise in turn, and stay still for
  * a person who asks for less motion.
@@ -364,7 +378,9 @@ const TypingSign = ({ name }: { name: string }) => (
         aria-label={`${name} is typing`}
         className="max-w-[80%]"
       >
-        <BubbleContent className="flex h-10 items-center gap-1 rounded-3xl px-4">
+        <BubbleContent
+          className={`flex h-10 items-center gap-1 px-4 ${corners("start", false, false)}`}
+        >
           <span className="sr-only">{name} is typing</span>
           {[0, 1, 2].map((n) => (
             <span
@@ -391,10 +407,10 @@ export interface OnPage {
 }
 
 /**
- * The head of your conversation with an agent: back to the list, its face to its details, its name,
- * and its computer, begun or not. One between two agents is named by both, and says it is
- * there to be read. On the chat page it has no close, and a way back only where the list isn't
- * beside it.
+ * The head of your conversation with an agent: its face, which goes to its details, and its name,
+ * in the middle; back to the list at its start; its computer, begun or not, at its end. One
+ * between two agents is named by both, and says it is there to be read. On the chat page it has no
+ * close, and a way back only where the list isn't beside it.
  */
 function Head({
   agent,
@@ -412,16 +428,22 @@ function Head({
   const { show, close } = useChats();
   const back = page ? page.back : () => show({ kind: "list" });
   return (
-    <header className={`flex h-14 shrink-0 items-center gap-1 pr-2.5 ${back ? "pl-2" : "pl-4"}`}>
+    <header className="grid h-14 shrink-0 grid-cols-[1fr_auto_minmax(0,auto)_1fr] items-center gap-x-2.5 px-2.5">
       {back && (
-        <Button variant="ghost" size="icon-sm" aria-label="All chats" onClick={back}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="All chats"
+          className="justify-self-start"
+          onClick={back}
+        >
           <ChevronLeftIcon />
         </Button>
       )}
       <button
         type="button"
         aria-label={`${agent.name}'s details`}
-        className="shrink-0 rounded-full"
+        className="col-start-2 rounded-full"
         onClick={() => {
           // Beside the conversation where the page has room; else on the team page.
           if (page?.details) return page.details();
@@ -434,7 +456,7 @@ function Head({
       </button>
       {/* One not begun is headed by the agent alone, as the design draws it, on the same line. */}
       {begun ? (
-        <div className="ml-1.5 min-w-0 flex-1">
+        <div className="min-w-0">
           <h2 className="truncate text-[15px] leading-5 font-semibold">
             {other ? `${agent.name} and ${other.name}` : agent.name}
           </h2>
@@ -445,12 +467,12 @@ function Head({
           )}
         </div>
       ) : (
-        <h2 className="ml-1.5 min-w-0 flex-1 truncate text-[15px] leading-5 font-semibold">
-          {agent.name}
-        </h2>
+        <h2 className="min-w-0 truncate text-[15px] leading-5 font-semibold">{agent.name}</h2>
       )}
-      {children}
-      {!page && <CloseChats />}
+      <div className="col-start-4 flex items-center gap-1 justify-self-end">
+        {children}
+        {!page && <CloseChats />}
+      </div>
     </header>
   );
 }
@@ -721,11 +743,18 @@ export function Thread({
     return working || typing ? undefined : { kind: "open" };
   };
   // What is drawn: each turn but a card's answer, which its card shows. Each knows the turn before
-  // it, drawn or not, for the room between them.
+  // it and the one after, drawn or not, for the room between them and the corners where they meet.
   const drawn = turns.flatMap((turn, n) =>
     turn.kind === "user" && turn.answer
       ? []
-      : [{ turn, card: cardOf(turn, n), after: turns[n - 1]?.kind }],
+      : [
+          {
+            turn,
+            card: cardOf(turn, n),
+            after: turns[n - 1]?.kind,
+            before: turns[n + 1]?.kind,
+          },
+        ],
   );
 
   /** Sends words and pictures, or a card's answer alone. */
@@ -788,7 +817,17 @@ export function Thread({
       {/* What is said is followed to its end as it comes, until the person scrolls away. */}
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
-          <Room>
+          {/* Under the head, what is said goes up into a blur and the conversation's ground, both
+              fading downward to nothing. Scrolled to its start, the room has neither. */}
+          <GradualBlur
+            position="top"
+            height={40}
+            strength={1}
+            tint="var(--thread)"
+            autoHide
+            zIndex={10}
+          />
+          <Room sent={sends.current}>
             {/* Room above the first message; with none yet, what went wrong is at the top. */}
             <MessageScrollerContent
               className={`mx-auto w-full max-w-[720px] gap-6 px-4 pb-4 ${turns.length > 0 ? "pt-3" : ""}`}
@@ -804,10 +843,9 @@ export function Thread({
                   </Marker>
                 </MessageScrollerItem>
               )}
-              {drawn.map(({ turn, card, after }) => (
+              {drawn.map(({ turn, card, after, before }) => (
                 <MessageScrollerItem
                   key={turn.id}
-                  scrollAnchor={turn.kind === "user"}
                   // A reacted message keeps the room its emoji hangs into, so what follows is as far
                   // from the emoji as it would be from the bubble.
                   className={`[content-visibility:visible] ${after === undefined ? "" : after === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-5" : ""}`}
@@ -838,7 +876,9 @@ export function Thread({
                         ))}
                         {turn.text && (
                           <Bubble variant="secondary" align="end">
-                            <BubbleContent className="rounded-3xl px-4 py-2 text-[15px] whitespace-pre-wrap">
+                            <BubbleContent
+                              className={`${corners("end", after === "user", before === "user")} px-4 py-2 text-[15px] whitespace-pre-wrap`}
+                            >
                               {turn.text}
                             </BubbleContent>
                             {/* On the bubble's foot at its end corner, as a messenger puts one: 8 px past
@@ -865,6 +905,8 @@ export function Thread({
                         at={turn.at}
                         streaming={!!turn.streaming}
                         reduced={reduced}
+                        above={after === "agent"}
+                        below={before === "agent"}
                         isLast={turn === lastTurn}
                         awaiting={awaiting}
                       />
@@ -888,9 +930,9 @@ export function Thread({
                   )}
                 </MessageScrollerItem>
               ))}
-              {/* Drawn at its own height from its first frame, as each turn is: the scroller's
-                  stand-in height for an item not yet drawn would size the room under the message
-                  just sent for a taller sign, and the message would drop for a frame as it came. */}
+              {/* Drawn at its own height from its first frame, as each turn is, and not at the
+                  scroller's stand-in height for an item not yet drawn: the end the room goes to as
+                  the sign comes is the end it keeps. */}
               {typing && (
                 <MessageScrollerItem className={`[content-visibility:visible] ${SIDE_CHANGES}`}>
                   <TypingSign name={agent.name} />
@@ -931,12 +973,20 @@ const SIDE_CHANGES = "-mt-2";
 const THEIRS_MS = 400;
 
 /**
- * The room a chat is read in. The scroller follows a reply to its end once the reply has filled
- * the room under the message it answers. Where that never happens, as under a chat's first
- * message, which is at the top already, the end is gone to here when what came passes the foot.
- * A person who has scrolled away is past the foot already, so nothing moves them.
+ * The room a chat is read in. The scroller keeps its end in view as what is said comes, so the
+ * latest message is at its foot, until the person scrolls away; from the end it follows again. A
+ * person who moved the room while all of it was in view hasn't scrolled away: the end is gone to
+ * here when what came passes the foot. One who has is past the foot already, so nothing moves
+ * them but a message of their own, which is always gone to.
  */
-function Room({ children }: { children: React.ReactNode }) {
+function Room({
+  sent,
+  children,
+}: {
+  /** How many messages the person has sent from here. */
+  sent: number;
+  children: React.ReactNode;
+}) {
   const { scrollToEnd } = useMessageScroller();
   const { end: more } = useMessageScrollerScrollable();
   const moved = useRef(0);
@@ -946,6 +996,9 @@ function Room({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (more && Date.now() - moved.current > THEIRS_MS) scrollToEnd({ behavior: "auto" });
   }, [more, scrollToEnd]);
+  useEffect(() => {
+    if (sent) scrollToEnd({ behavior: "auto" });
+  }, [sent, scrollToEnd]);
   return (
     <MessageScrollerViewport
       className="no-bar"
@@ -970,6 +1023,8 @@ function Reply({
   at,
   streaming,
   reduced,
+  above,
+  below,
   isLast,
   awaiting,
 }: {
@@ -979,6 +1034,9 @@ function Reply({
   /** Still being written. */
   streaming: boolean;
   reduced: boolean;
+  /** The agent's own message is just above it, or just under it: their bubbles meet. */
+  above: boolean;
+  below: boolean;
   isLast: boolean;
   /** The chat still awaits its reply: the last message isn't settled, and offers nothing yet. */
   awaiting: boolean;
@@ -993,6 +1051,9 @@ function Reply({
         <BubbleGroup className="gap-1">
           {bubbles.map((bubble, n) => {
             const code = isCode(bubble);
+            const shape = code
+              ? "w-full"
+              : `${corners("start", above || n > 0, below || n < bubbles.length - 1)} px-4 py-2`;
             return (
               <ReplyBubble
                 // biome-ignore lint/suspicious/noArrayIndexKey: a message's bubbles only grow at its end.
@@ -1002,9 +1063,7 @@ function Reply({
                 at={settled ? at : undefined}
               >
                 {/* Its size is said here: the bubble's own would outrank a rule of the sheet's. */}
-                <BubbleContent
-                  className={`prose-chat text-[15px] leading-[1.6] ${code ? "w-full" : "rounded-3xl px-4 py-2"}`}
-                >
+                <BubbleContent className={`prose-chat text-[15px] leading-[1.6] ${shape}`}>
                   <Streamdown
                     controls={{ table: false, code: true }}
                     animated={{

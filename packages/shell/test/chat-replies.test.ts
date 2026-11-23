@@ -1,5 +1,6 @@
 // The chat's replies in a real browser, over the stand-in gateway: how one reveals and settles, earlier
-// messages read on asking, the thread's room, and a long reply followed to its end.
+// messages read on asking, the thread's room, a long reply followed to its end, and the latest
+// message at the room's foot.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withBrowser } from "./build-kit.ts";
@@ -203,6 +204,110 @@ test(
     );
     await page.waitForTimeout(300);
     assert.ok((await short()) <= 8, `it stays there (${await short()} short)`);
+    await page.close();
+  }),
+);
+
+/** Reviewer's conversation, longer than the chat's room: thirty messages, a side each in turn. */
+const longConversation = (gateway: Parameters<typeof open>[0]) =>
+  gateway.converse(
+    "a-reviewer",
+    Array.from({ length: 30 }, (_, n) => ({
+      ...reply(`long-${n}`, `Note ${n} of a conversation longer than its room.`),
+      ...(n % 2 ? {} : { role: "user" as const }),
+    })),
+  );
+/** The chat's room, how far it is from its end, and how far its last bubble's foot is above its own. */
+const roomOf = (page: Parameters<typeof panel>[0]) => {
+  const room = panel(page).locator('[data-slot="message-scroller-viewport"]');
+  return {
+    room,
+    short: () =>
+      room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight)),
+    under: () =>
+      room.evaluate((view) => {
+        const last = [...view.querySelectorAll('[data-slot="bubble"]')].at(-1) as Element;
+        return Math.round(
+          view.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom,
+        );
+      }),
+    /** The room comes to its end, a frame or more behind what came. */
+    atEnd: async (what: string) => {
+      try {
+        await page.waitForFunction(
+          (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight <= 8,
+          await room.elementHandle(),
+          { timeout: 3000 },
+        );
+      } catch {
+        assert.fail(what);
+      }
+    },
+  };
+};
+
+test(
+  "in a long conversation the latest message is at the room's foot, 16 px above the box: as it opens, with a message just sent and the agent's sign under it, and with the reply",
+  withGateway(async (gateway) => {
+    longConversation(gateway);
+    const page = await open(gateway);
+    const { short, under, atEnd } = roomOf(page);
+    await atEnd("it opens at its end");
+    assert.equal(await under(), 16, "as it opens");
+    await input(page).fill("Is that all of them?");
+    await input(page).press("Enter");
+    await panel(page).getByRole("status", { name: "Reviewer is typing" }).waitFor();
+    await page.waitForTimeout(300);
+    assert.deepEqual([await short(), await under()], [0, 16], "the sign under the message sent");
+    assert.ok(await mine(page, "Is that all of them?").isVisible());
+    gateway.addMessage("a-reviewer", reply("all", "Yes, that is all thirty."));
+    gateway.setChatStatus("a-reviewer", { state: "idle" });
+    await panel(page).getByText("Yes, that is all thirty.").waitFor();
+    await page.waitForTimeout(300);
+    assert.deepEqual([await short(), await under()], [0, 16], "the reply");
+    await page.close();
+  }),
+);
+
+test(
+  "a person who has scrolled away is brought to the end by a message of their own",
+  withGateway(async (gateway) => {
+    longConversation(gateway);
+    const page = await open(gateway);
+    const { room, short, atEnd } = roomOf(page);
+    await atEnd("it opens at its end");
+    await room.hover();
+    await page.mouse.wheel(0, -600);
+    await page.waitForFunction(
+      (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight > 300,
+      await room.elementHandle(),
+    );
+    await input(page).fill("Back to the newest.");
+    await input(page).press("Enter");
+    await mine(page, "Back to the newest.").waitFor();
+    await atEnd(`their own message is gone to (${await short()} short)`);
+    await page.close();
+  }),
+);
+
+test(
+  "a person who moved the wheel where the room had nothing to scroll hasn't scrolled away: a reply that then comes whole, longer than the room, is followed to its end",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const { room, short, atEnd } = roomOf(page);
+    assert.equal(
+      await room.evaluate((view) => view.scrollHeight - view.clientHeight),
+      0,
+      "all of it is in view",
+    );
+    await room.hover();
+    await page.mouse.wheel(0, -200);
+    await page.mouse.wheel(0, 200);
+    await page.waitForTimeout(600);
+    const said = Array.from({ length: 70 }, (_, n) => `Finding ${n} is on a line of its own.`);
+    gateway.addMessage("a-reviewer", reply("whole", said.join("\n\n")));
+    await panel(page).getByText("Finding 69 is").waitFor({ state: "attached" });
+    await atEnd(`its end is gone to (${await short()} short)`);
     await page.close();
   }),
 );

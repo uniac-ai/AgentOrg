@@ -77,14 +77,32 @@ const messages = (thread: Locator) =>
       const s = getComputedStyle(e);
       return {
         fill: s.backgroundColor,
-        corners: s.borderTopLeftRadius,
+        // From the top left, clockwise.
+        corners: [
+          s.borderTopLeftRadius,
+          s.borderTopRightRadius,
+          s.borderBottomRightRadius,
+          s.borderBottomLeftRadius,
+        ].join(" "),
+        edge: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`,
         inside: `${s.paddingLeft} ${s.paddingTop}`,
         type: s.fontSize,
       };
     };
+    // The hairline every line of the page is drawn in, as this theme has it.
+    const line = document.createElement("i");
+    line.style.border = "1px solid var(--line)";
+    root.append(line);
+    const hairline = getComputedStyle(line).borderTopColor;
+    line.remove();
     const person = root.querySelector('[data-variant="secondary"] [data-slot="bubble-content"]');
     return {
+      hairline,
       person: person ? { ...look(person), ...box(person) } : undefined,
+      // The person's bubbles, each one's corners.
+      mine: [
+        ...root.querySelectorAll('[data-variant="secondary"] [data-slot="bubble-content"]'),
+      ].map((one) => look(one).corners),
       agent: [...root.querySelectorAll('[data-slot="message"]')]
         .filter((message) => message.querySelector(".prose-chat"))
         .map((message) => ({
@@ -138,10 +156,11 @@ test(
 );
 
 test(
-  "each bubble is filled with the person's bubble's grey, in dark and in light, with the person's corners, padding and type; no bubble is wider than 80% of the conversation, and the code keeps its whole width with its Copy and Download",
+  "each bubble is filled with the person's bubble's grey and edged with the page's hairline, in dark and in light, with the person's padding and type; no bubble is wider than 80% of the conversation, and the code keeps its whole width with its Copy and Download",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "long");
     await thread.locator(".prose-chat").first().waitFor();
+    const edges: string[] = [];
     for (const theme of ["dark", "light"]) {
       await page.evaluate((t) => {
         document.documentElement.dataset.theme = t;
@@ -154,8 +173,8 @@ test(
       assert.equal(words.length, 5);
       for (const bubble of words) {
         assert.deepEqual(
-          [bubble.fill, bubble.corners, bubble.inside, bubble.type],
-          [said.person.fill, said.person.corners, said.person.inside, said.person.type],
+          [bubble.fill, bubble.edge, bubble.inside, bubble.type],
+          [said.person.fill, said.person.edge, said.person.inside, said.person.type],
           `${theme}: as the person's (${bubble.words.slice(0, 20)})`,
         );
         assert.ok(
@@ -164,9 +183,10 @@ test(
         );
       }
       assert.deepEqual(
-        [said.person.corners, said.person.inside, said.person.type],
-        ["24px", "16px 8px", "15px"],
+        [said.person.edge, said.person.inside, said.person.type],
+        [`1px solid ${said.hairline}`, "16px 8px", "15px"],
       );
+      edges.push(said.person.edge);
       assert.ok(code);
       assert.equal(
         Math.round(code.width),
@@ -176,6 +196,44 @@ test(
       assert.equal(code.fill, "rgba(0, 0, 0, 0)", "with no fill");
       assert.deepEqual(code.buttons, ["Download file", "Copy Code"]);
     }
+    assert.notEqual(edges[0], edges[1], "each theme's own hairline");
+    await page.close();
+  }),
+);
+
+test(
+  "a bubble's corners are 18 px, and 6 px on its own side where it meets what the same side said just above or under it: a message's bubbles, and one side's messages in a row",
+  withGateway(async (gateway) => {
+    // The agent's receipt and its result of two bubbles, under the person's one message.
+    const { page, thread } = await conversation(gateway, "result");
+    await thread.locator(".prose-chat").nth(1).waitFor();
+    let said = await messages(thread);
+    assert.deepEqual(said.mine, ["18px 18px 18px 18px"], "one message alone");
+    assert.deepEqual(
+      said.agent.flatMap((message) => message.bubbles.map((b) => b.corners)),
+      ["18px 18px 18px 6px", "6px 18px 18px 6px", "6px 18px 18px 18px"],
+      "the agent's three, at the start side",
+    );
+    // Then the person's three in a row.
+    for (const [n, text] of ["Thanks.", "One more thing.", "Which file has the most?"].entries())
+      gateway.addMessage("a-research", {
+        id: `u-row-${n}`,
+        role: "user",
+        text,
+        at: new Date().toISOString(),
+      });
+    await thread.locator(".whitespace-pre-wrap", { hasText: "Which file has the most?" }).waitFor();
+    said = await messages(thread);
+    assert.deepEqual(
+      said.mine.slice(-3),
+      ["18px 18px 6px 18px", "18px 6px 6px 18px", "18px 6px 18px 18px"],
+      "the person's three, at the end side",
+    );
+    assert.equal(
+      said.agent.at(-1)?.bubbles.at(-1)?.corners,
+      "6px 18px 18px 18px",
+      "the agent's last is as it was: the side changes under it",
+    );
     await page.close();
   }),
 );
