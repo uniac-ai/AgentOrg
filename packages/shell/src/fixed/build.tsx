@@ -152,8 +152,10 @@ export function BuildDialog() {
               // is the card's. Where the page is 1064 wide or more, what it can do opens at the
               // card's right, 296 to 360 wide as the page's right half has room: the window
               // grows that way in the time a window opens in, at once with reduced motion.
+              // Closed, it is 14 wider while the pointer or the keyboard is on its edge, or
+              // where nothing hovers: the bar that opens it, out at the card's right.
               // Narrower, it opens under the card, the window growing down and scrolling.
-              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 left-[max(1rem,50%_-_220px)] translate-x-0 max-w-[min(440px,100%_-_2rem)] sm:max-w-[440px] max-[66.5rem]:flex-col max-[66.5rem]:overflow-y-auto min-[66.5rem]:motion-safe:transition-[max-width] min-[66.5rem]:motion-safe:ease-out ${held ? "translate-y-0" : ""} ${detail ? "min-[66.5rem]:max-w-[calc(440px_+_min(360px,50vw_-_236px))]" : ""}`
+              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 left-[max(1rem,50%_-_220px)] translate-x-0 max-w-[min(440px,100%_-_2rem)] sm:max-w-[440px] max-[66.5rem]:flex-col max-[66.5rem]:overflow-y-auto min-[66.5rem]:motion-safe:transition-[max-width] min-[66.5rem]:motion-safe:ease-out ${held ? "translate-y-0" : ""} ${detail ? "min-[66.5rem]:max-w-[calc(440px_+_min(360px,50vw_-_236px))]" : "min-[66.5rem]:has-[[data-edge]:hover]:max-w-[454px] min-[66.5rem]:has-[[data-edge]:focus-visible]:max-w-[454px] min-[66.5rem]:[@media(hover:none)]:max-w-[454px]"}`
         }
       >
         {template ? (
@@ -485,31 +487,34 @@ function CreateCard() {
 }
 
 /**
- * What opens and closes what the agent can do: a thin bar at the window's right edge, 14 wide,
- * in a button 24 wide. Closed, that edge is the card's: under the pointer or the keyboard the bar
- * rises from the card's foot, in the window's other ground, with an arrow pointing out. Open, the
- * edge is the far side of what it can do: there the bar slides in from the edge, over what it can
- * do, in the card's colour, with an arrow pointing back. Where nothing hovers, as on a touch
- * screen, the bar stands. Where what it can do opens under the card, it is a bar along the card's
- * foot, as thin.
+ * What opens and closes what the agent can do: a thin bar, 14 wide, with an arrow in it. Closed,
+ * it is under the card's right edge: with the pointer or the keyboard on that edge it slides out
+ * to the right, the window growing by its width, so it stands beside the card in the window's
+ * other ground, the first of what it opens. What is pressed reaches 10 into the card, and its
+ * left edge stays where it is as the bar comes out. Open, the bar is at the far side of what it
+ * can do: there it slides in from the window's edge, over what it can do, in the card's colour,
+ * with an arrow pointing back, in a button 24 wide. Where nothing hovers, as on a touch screen,
+ * the bar stands. Where what it can do opens under the card, it is a bar along the card's foot,
+ * as thin.
  */
 function Edge({ detail, toggle }: { detail: boolean; toggle(next: boolean): void }) {
   return (
     <button
       type="button"
+      data-edge
       aria-label="What it can do"
       aria-expanded={detail}
       aria-controls="create-detail"
       onClick={() => toggle(!detail)}
-      className="group/edge absolute top-14 right-0 bottom-0 z-10 w-6 text-muted-foreground outline-none max-[66.5rem]:relative max-[66.5rem]:inset-auto max-[66.5rem]:order-1 max-[66.5rem]:h-6 max-[66.5rem]:w-full max-[66.5rem]:shrink-0 max-[66.5rem]:bg-[var(--create-card)]"
+      className={`group/edge absolute top-14 right-0 bottom-0 z-10 text-muted-foreground outline-none max-[66.5rem]:relative max-[66.5rem]:inset-auto max-[66.5rem]:order-1 max-[66.5rem]:h-6 max-[66.5rem]:w-full max-[66.5rem]:shrink-0 max-[66.5rem]:bg-[var(--create-card)] ${detail ? "w-6" : "left-[416px]"}`}
     >
-      {/* At the window's right edge. */}
+      {/* Beside the card: out at its right, or in at the window's far edge. */}
       <span
         aria-hidden
-        className={`absolute right-0 bottom-0 flex w-3.5 items-center justify-center overflow-hidden duration-200 ease-out motion-reduce:transition-none max-[66.5rem]:hidden ${
+        className={`absolute inset-y-0 flex w-3.5 items-center justify-center max-[66.5rem]:hidden ${
           detail
-            ? "top-0 translate-x-[250%] bg-[var(--create-card)] shadow-[-4px_0_12px_rgb(0_0_0/0.14)] transition-transform group-hover/edge:translate-x-0 group-focus-visible/edge:translate-x-0 dark:shadow-[-4px_0_12px_rgb(0_0_0/0.45)] [@media(hover:none)]:translate-x-0"
-            : "h-0 rounded-tl-md bg-[var(--create)] transition-[height] group-hover/edge:h-full group-focus-visible/edge:h-full [@media(hover:none)]:h-full"
+            ? "right-0 translate-x-[250%] bg-[var(--create-card)] shadow-[-4px_0_12px_rgb(0_0_0/0.14)] transition-transform duration-200 ease-out group-hover/edge:translate-x-0 group-focus-visible/edge:translate-x-0 motion-reduce:transition-none dark:shadow-[-4px_0_12px_rgb(0_0_0/0.45)] [@media(hover:none)]:translate-x-0"
+            : "left-6 bg-[var(--create)]"
         }`}
       >
         <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "rotate-180" : ""}`} />
@@ -529,8 +534,8 @@ function Edge({ detail, toggle }: { detail: boolean; toggle(next: boolean): void
  * What the agent will be able to do, as the template gives it, on the window's other ground:
  * each unit with its logo, its title, its own line and what it gives. Shown, not asked. It is at
  * the card's right, or under the card where the page has no room there, and the card lies over
- * it: the card's shadow falls on it, strongest at the card and fading away from it. Closed, it is
- * out of the window's width, and of reach; under the card, it isn't drawn.
+ * it: the card's shadow falls on it, very light, strongest at the card and gone 20 from it.
+ * Closed, it is out of the window's width, and of reach; under the card, it isn't drawn.
  */
 function Detail({ shown }: { shown: boolean }) {
   const { draft } = useBuilding();
@@ -542,10 +547,13 @@ function Detail({ shown }: { shown: boolean }) {
       inert={!shown}
       className={`relative max-[66.5rem]:order-2 max-[66.5rem]:shrink-0 min-[66.5rem]:absolute min-[66.5rem]:inset-y-0 min-[66.5rem]:left-[440px] min-[66.5rem]:w-[min(360px,50vw_-_236px)] ${shown ? "" : "max-[66.5rem]:hidden"}`}
     >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute z-10 from-black/12 to-transparent max-[66.5rem]:inset-x-0 max-[66.5rem]:top-0 max-[66.5rem]:h-5 max-[66.5rem]:bg-linear-to-b min-[66.5rem]:inset-y-0 min-[66.5rem]:left-0 min-[66.5rem]:w-7 min-[66.5rem]:bg-linear-to-r dark:from-black/45"
-      />
+      {/* The card's shadow, while this is open. */}
+      {shown && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute z-10 from-black/4 to-transparent max-[66.5rem]:inset-x-0 max-[66.5rem]:top-0 max-[66.5rem]:h-5 max-[66.5rem]:bg-linear-to-b min-[66.5rem]:inset-y-0 min-[66.5rem]:left-0 min-[66.5rem]:w-5 min-[66.5rem]:bg-linear-to-r dark:from-black/14"
+        />
+      )}
       <div className="no-bar flex h-full flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5">
         <h3 className="flex h-6 shrink-0 items-center text-[13px] font-medium text-muted-foreground">
           What it can do
