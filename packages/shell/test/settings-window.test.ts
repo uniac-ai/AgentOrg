@@ -37,7 +37,8 @@ test(
     assert.equal(await place(page, "Team").getAttribute("aria-current"), "page");
     assert.equal(await place(page, "Settings").getAttribute("aria-current"), null);
     assert.equal(await place(page, "Settings").getAttribute("aria-expanded"), "true");
-    // Its left is 220 wide, on the canvas colour with a hairline at its right, under "Settings".
+    // Its left is 220 wide, on the ground's colour as a page's list is, with a hairline at its
+    // right, under "Settings".
     const left = sections(page);
     assert.deepEqual((await boxOf(left)).slice(0, 3), [290, 150, 220]);
     assert.deepEqual(
@@ -45,7 +46,7 @@ test(
         const style = getComputedStyle(e);
         return [style.backgroundColor, style.borderRightWidth];
       }),
-      ["rgb(25, 25, 25)", "1px"],
+      ["rgb(20, 20, 20)", "1px"],
     );
     assert.deepEqual(
       await left
