@@ -47,7 +47,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { type ListedChat, PERSON, useAllChats } from "./all-chats.tsx";
 import { AskCard, type CardState } from "./ask.tsx";
 import { bubblesOf, isCode } from "./bubbles.ts";
-import { age, CloseChats } from "./chat-parts.tsx";
+import { CloseChats, timeOf } from "./chat-parts.tsx";
 import { useChats } from "./chats.tsx";
 import { surfacesOf, windowsOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
@@ -820,7 +820,7 @@ export function Thread({
                   key={turn.id}
                   // A reacted message keeps the room its emoji hangs into, so what follows is as far
                   // from the emoji as it would be from the bubble.
-                  className={`[content-visibility:visible] ${after === undefined ? "" : after === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-5" : ""}`}
+                  className={`[content-visibility:visible] ${after === undefined ? "" : after === turn.kind ? SAME_SIDE : SIDE_CHANGES} ${reactionOf(turn) ? "pb-6" : ""}`}
                 >
                   {turn.kind === "user" ? (
                     <Message
@@ -857,14 +857,14 @@ export function Thread({
                               {turn.text}
                             </BubbleContent>
                             {/* On the bubble's foot at its end corner, as a messenger puts one: 8 px past
-                                the end, and 4 px over the foot, 7 px with its ring, inside the bubble's
+                                the end, and 4 px over the foot, 6 px with its ring, inside the bubble's
                                 8 px under the words, so it never meets them. Its ring is the
                                 conversation's ground, which cuts it out of the bubble. */}
                             {reactionOf(turn) && (
                               <BubbleReactions
                                 role="img"
                                 aria-label={`${agent.name} reacted ${reactionOf(turn)}`}
-                                className={`-right-2 translate-y-5 text-[16px] leading-5 ring-[var(--thread)] ${turn.message && reacted.current.has(turn.message) ? "reaction-in" : ""}`}
+                                className={`-right-2 translate-y-6 ring-[var(--thread)] ${turn.message && reacted.current.has(turn.message) ? "reaction-in" : ""}`}
                               >
                                 {reactionOf(turn)}
                               </BubbleReactions>
@@ -1134,7 +1134,7 @@ function More({
           <CopyIcon />
           Copy
         </DropdownMenuItem>
-        <p className="px-2 pt-0.5 pb-1.5 text-xs text-muted-foreground">{age(at)}</p>
+        <p className="px-2 pt-0.5 pb-1.5 text-xs text-muted-foreground">{timeOf(at)}</p>
       </DropdownMenuContent>
     </DropdownMenu>
   );
