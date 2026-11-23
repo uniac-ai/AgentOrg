@@ -4684,7 +4684,7 @@ test("an agent holding the control unit reaches management's agents@1, answered 
   assert.deepEqual(await reach(plain), []);
 });
 
-test("an agent's settings binding, made while its executor read the first major, is kept as it reads the second: refused while its ends differ, answered once they are alike", async (t) => {
+test("an agent kept as 0.0.38 kept it, its settings binding made while its executor read the first major, is kept as it reads the second and gets the tree: refused while its ends differ, answered once they are alike", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([], "Elder");
   const settings = async () =>
@@ -4693,8 +4693,14 @@ test("an agent's settings binding, made while its executor read the first major,
       .map((b) => `${b.provider} ${b.export} ${b.interface}`);
   const bound = await settings();
   assert.deepEqual(bound, [`${s.management.actorId} settings agent.settings@2`]);
-  // As an executor of an earlier version reads it: kept, and refused.
-  const earlier = await s.rejoin(agent, chat, {}, agentSettings);
+  // Its record as 0.0.38 kept it, with nothing mounted on it, and its executor reading the first
+  // major, as management starts: its binding is kept, and refused while its ends differ.
+  let earlier: Awaited<ReturnType<typeof s.rejoin>> | undefined;
+  await s.restart(async (kept) => {
+    delete (kept.agents as unknown as Record<string, { mounted?: unknown }>)[agent]?.mounted;
+    earlier = await s.rejoin(agent, chat, {}, agentSettings);
+  });
+  assert.ok(earlier);
   assert.deepEqual(await settings(), [`${s.management.actorId} settings agent.settings@1`]);
   await assert.rejects(
     (earlier.slots as { settings: Slot<typeof agentSettings> }).settings.call.get({}),
@@ -4708,7 +4714,10 @@ test("an agent's settings binding, made while its executor read the first major,
     assert.ok(i < 300, "it was never bound");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.equal((await settingsRead({ slots: { settings: reads } })).instructions, "Be plain.");
+  assert.deepEqual((await reads.call.get({})).mounted, [
+    { mounted: "instructions", capability: "instructions", arguments: { text: "Be plain." } },
+    { mounted: "skills", capability: "skills", arguments: { skills: [] } },
+  ]);
 });
 
 test("a capability is held once, and one its provider doesn't make isn't kept", async (t) => {
