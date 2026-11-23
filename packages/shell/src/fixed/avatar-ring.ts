@@ -1,12 +1,14 @@
 // The ring the row of avatars goes round: what a place in it holds, and which places come round to
 // the far side as the choice moves.
-import { avatarFromSeed } from "2dlivebot";
+import { avatarFromSeed, toSvg } from "2dlivebot";
 import { freshName } from "./names.ts";
 
 /** An avatar, as its string, and the name it comes with. */
 export interface Pair {
   avatar: string;
   name: string;
+  /** Its still picture, as an image's address: drawn once, when the pair is made. */
+  still: string;
 }
 
 /** How many the row keeps. */
@@ -16,10 +18,14 @@ const randomSeed = () =>
   [...crypto.getRandomValues(new Uint32Array(2))].map((n) => n.toString(36)).join("");
 
 /** A random avatar, with a name that nothing in `taken` is. */
-export const freshPair = (taken: Iterable<string>): Pair => ({
-  avatar: avatarFromSeed(randomSeed()),
-  name: freshName(taken),
-});
+export function freshPair(taken: Iterable<string>): Pair {
+  const avatar = avatarFromSeed(randomSeed());
+  return {
+    avatar,
+    name: freshName(taken),
+    still: `data:image/svg+xml,${encodeURIComponent(toSvg(avatar))}`,
+  };
+}
 
 /** How many places apart two are, round the ring. */
 export const apart = (a: number, b: number, kept: number) => {

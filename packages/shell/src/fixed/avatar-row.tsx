@@ -2,10 +2,10 @@
 // the middle is the choice, and alive; the others are still pictures, smaller and fainter toward
 // the sides. It is dragged, or moved by its two buttons and the arrow keys. The row is a ring of
 // `KEPT` places that goes round: a place that comes round to the far side, out of sight, is given a
-// new avatar and name, so there are always new ones ahead and never more than `KEPT`.
-import { toSvg } from "2dlivebot";
+// new avatar and name, so there are always new ones ahead and never more than `KEPT`. The ones
+// just passed, as many as are behind the choice in the ring, come back as they were.
 import { Avatar } from "2dlivebot/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Carousel,
   type CarouselApi,
@@ -17,6 +17,7 @@ import {
 import GradualBlur from "../ui/gradual-blur.tsx";
 import { apart, comingRound, freshPair, KEPT, type Pair } from "./avatar-ring.ts";
 import { useReducedMotion } from "./motion.ts";
+import { freshName } from "./names.ts";
 
 /** An avatar's width and height in the row, in pixels. */
 const SIZE = 104;
@@ -65,10 +66,17 @@ function paint(api: Api, event?: string) {
   });
 }
 
-/** An avatar that is not the choice: a still picture of it. */
-function Still({ avatar }: { avatar: string }) {
-  const src = useMemo(() => `data:image/svg+xml,${encodeURIComponent(toSvg(avatar))}`, [avatar]);
-  return <img alt="" draggable={false} width={SIZE} height={SIZE} src={src} />;
+/**
+ * Whether a place is out of sight as the row is drawn now, whatever its width: farther from the
+ * row's middle than the row reaches, by Embla's own measure of where it has scrolled to, and not
+ * among the places it sees.
+ */
+function outOfSight(api: Api, place: number) {
+  if (api.slidesInView().includes(place)) return false;
+  const snaps = api.scrollSnapList();
+  const from = Math.abs((snaps[place] ?? 0) - api.scrollProgress()) % 1;
+  const away = Math.min(from, 1 - from) * snaps.length;
+  return away >= api.rootNode().offsetWidth / 2 / SIZE + 1;
 }
 
 /**
@@ -97,23 +105,43 @@ export function AvatarRow({
   now.current.taken = taken;
   now.current.onChoose = onChoose;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: once, with the avatar it opens on.
+  // Once, with the avatar it opens on.
   useEffect(() => {
     const first = now.current.ring[0];
     if (first) now.current.onChoose(first);
   }, []);
+
+  // An agent made while the row is open may have a name in it: that place is given another.
+  const agents = taken.size;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the names taken are one set, which grows.
+  useEffect(() => {
+    const held = now.current;
+    const had = new Set([...held.taken].map((name) => name.toLowerCase()));
+    if (!held.ring.some((pair) => had.has(pair.name.toLowerCase()))) return;
+    const next = [...held.ring];
+    next.forEach((pair, place) => {
+      if (had.has(pair.name.toLowerCase()))
+        next[place] = {
+          ...pair,
+          name: freshName([...held.taken, ...next.map((one) => one.name)]),
+        };
+    });
+    held.ring = next;
+    setRing(next);
+    const chosen = next[held.at];
+    if (chosen) held.onChoose(chosen);
+  }, [agents]);
 
   useEffect(() => {
     if (!api) return;
     /** A place that has come round is given a new avatar once it is out of sight. */
     const renew = () => {
       const held = now.current;
-      const seen = new Set(api.slidesInView());
       let next: Pair[] | undefined;
       for (const place of [...held.stale]) {
         // The choice came back toward it first: it keeps what it has.
         if (apart(place, held.at, KEPT) < NEAR) held.stale.delete(place);
-        else if (!seen.has(place)) {
+        else if (outOfSight(api, place)) {
           next ??= [...held.ring];
           next[place] = freshPair([...held.taken, ...next.map((pair) => pair.name)]);
           held.stale.delete(place);
@@ -178,7 +206,7 @@ export function AvatarRow({
               {place === at ? (
                 <Avatar value={pair.avatar} size={SIZE} />
               ) : (
-                <Still avatar={pair.avatar} />
+                <img alt="" draggable={false} width={SIZE} height={SIZE} src={pair.still} />
               )}
             </div>
           </CarouselItem>

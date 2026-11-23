@@ -117,11 +117,17 @@ test(
     assert.ok(nextBox.x >= rowBox.x && nextBox.x + nextBox.width <= rowBox.x + rowBox.width + 0.5);
     // Twenty-five to the right: once round, and on.
     for (let step = 1; step <= 25; step++) {
+      const before = await ring(page);
       await next.click();
       const now = await moved(page, at);
       assert.equal(now, (at + 1) % 20, "the next place");
       at = now;
       const { names, alive, pictures } = await ring(page);
+      // The one chosen and those beside it hold what they held.
+      for (const beside of [-2, -1, 0, 1, 2]) {
+        const place = (at + beside + 20) % 20;
+        assert.equal(names[place], before.names[place], `${beside} from the middle`);
+      }
       assert.equal(names.length, 20, "never more than twenty");
       assert.equal(new Set(names).size, 20, "no name twice");
       assert.deepEqual(alive, [at]);
@@ -145,12 +151,14 @@ test(
     assert.equal(await moved(page, at), (at + 1) % 20);
     at = (at + 1) % 20;
 
-    // Dragged a place's width to the left, the next one comes to the middle.
+    // Dragged most of a place's width to the left and let go at rest, the next one comes to the
+    // middle.
     const y = rowBox.y + rowBox.height / 2;
     const x = rowBox.x + rowBox.width / 2;
     await page.mouse.move(x + 30, y);
     await page.mouse.down();
-    await page.mouse.move(x - 80, y, { steps: 8 });
+    await page.mouse.move(x - 40, y, { steps: 14 });
+    await page.waitForTimeout(200);
     await page.mouse.up();
     assert.equal(await moved(page, at), (at + 1) % 20);
     // A press on one at the side brings it to the middle.
@@ -160,6 +168,126 @@ test(
       .click();
     assert.equal(await moved(page, at), (at + 19) % 20);
     assert.equal((await ring(page)).names.length, 20);
+    await page.close();
+  }),
+);
+
+/** The row has stopped: the one chosen is in the middle, whole. */
+const rested = (page: Page) =>
+  page.waitForFunction(() => {
+    const chosen = document.querySelector('[data-slot="carousel-item"][aria-current="true"] > div');
+    return chosen && Math.abs(chosen.getBoundingClientRect().width - 104) < 0.5;
+  });
+
+test(
+  "a place is given a new avatar only out of sight, however fast the row is moved, and the ones just passed come back as they were: nine to the right and nine back meets the same names",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await create(page);
+    const next = window_.getByRole("button", { name: "Next avatar" });
+    const previous = window_.getByRole("button", { name: "Previous avatar" });
+    // From here on, every frame: a place in sight whose name changed is written down.
+    await page.evaluate(() => {
+      const row = document.querySelector('[data-slot="carousel"]') as Element;
+      const view = row.querySelector('[data-slot="carousel-content"]') as Element;
+      const swapped: number[] = [];
+      (window as unknown as { swapped: number[] }).swapped = swapped;
+      const last = new Map<number, string | null>();
+      const look = () => {
+        const { left, right } = view.getBoundingClientRect();
+        row.querySelectorAll('[data-slot="carousel-item"]').forEach((one, place) => {
+          const box = one.getBoundingClientRect();
+          const name = one.getAttribute("aria-label");
+          if (box.right <= left || box.left >= right) last.delete(place);
+          else {
+            if (last.has(place) && last.get(place) !== name) swapped.push(place);
+            last.set(place, name);
+          }
+        });
+        requestAnimationFrame(look);
+      };
+      look();
+    });
+    const swapped = () => page.evaluate(() => (window as unknown as { swapped: number[] }).swapped);
+
+    const start = await ring(page);
+    let at = start.chosen;
+    const behind = (back: number) => (at - back + 20) % 20;
+    for (let step = 1; step <= 9; step++) {
+      await next.click();
+      at = await moved(page, at);
+    }
+    // The nine passed are behind it as they were, and come back one by one.
+    const there = await ring(page);
+    for (let back = 1; back <= 9; back++)
+      assert.equal(there.names[behind(back)], start.names[behind(back)], `${back} behind`);
+    for (let back = 1; back <= 9; back++) {
+      await previous.click();
+      at = await moved(page, at);
+      assert.equal((await ring(page)).names[at], start.names[at], `${back} back`);
+    }
+    assert.equal(at, start.chosen, "where it began");
+
+    // Six presses at once, faster than the row glides: the nine behind where it stops are as
+    // they were.
+    const before = await ring(page);
+    await next.evaluate((button: HTMLElement) => {
+      for (let press = 0; press < 6; press++) button.click();
+    });
+    at = await moved(page, at);
+    assert.equal(at, (before.chosen + 6) % 20);
+    await rested(page);
+    const after = await ring(page);
+    for (let back = 1; back <= 9; back++)
+      assert.equal(after.names[behind(back)], before.names[behind(back)], `${back} behind`);
+    // Twelve at once: the choice runs more than half the ring ahead of what is drawn.
+    await next.evaluate((button: HTMLElement) => {
+      for (let press = 0; press < 12; press++) button.click();
+    });
+    at = await moved(page, at);
+    await rested(page);
+    const last = await ring(page);
+    assert.equal(last.names.length, 20);
+    assert.equal(new Set(last.names).size, 20, "no name twice");
+    assert.deepEqual(last.alive, [at]);
+    assert.deepEqual(await swapped(), [], "nothing in sight was given a new avatar");
+    await page.close();
+  }),
+);
+
+test(
+  "a name in the row that an agent comes to have while the window is open gives way to another, on the same avatar",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    const window_ = await create(page);
+    const { names, chosen } = await ring(page);
+    const beside = (chosen + 1) % 20;
+    const picture = await places(page).nth(beside).locator("img").getAttribute("src");
+    const [first, second] = [...gateway.agents.values()];
+    assert.ok(first && second);
+    first.name = (names[chosen] ?? "").toUpperCase();
+    second.name = names[beside] ?? "";
+    // The agents are read again.
+    gateway.setAccount("signed_in");
+    await page.waitForFunction(
+      (was) => document.querySelector("#build-name")?.getAttribute("placeholder") !== was,
+      names[chosen],
+    );
+    const now = await ring(page);
+    assert.equal(new Set(now.names).size, 20, "no name twice");
+    for (const taken of [names[chosen], names[beside]])
+      assert.ok(!now.names.includes(taken ?? ""), `${taken} is an agent's now`);
+    assert.equal(
+      now.names.filter((name, place) => name === names[place]).length,
+      18,
+      "the others keep theirs",
+    );
+    assert.equal(now.chosen, chosen, "the same avatar is chosen");
+    assert.equal(await places(page).nth(beside).locator("img").getAttribute("src"), picture);
+    assert.equal(
+      await window_.locator("#build-name").getAttribute("placeholder"),
+      now.names[chosen],
+    );
     await page.close();
   }),
 );
