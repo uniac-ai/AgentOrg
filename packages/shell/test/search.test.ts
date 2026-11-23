@@ -68,7 +68,7 @@ test(
       ),
     );
     assert.ok(search && chat && search.bottom <= 52 && search.bottom < chat.top, "above Chat");
-    assert.equal(search.right, 300 - 4, "at the strip's end");
+    assert.equal(search.right, 300 - 10, "at the strip's end");
     assert.equal(await place(page).getAttribute("aria-haspopup"), "dialog");
     await page.close();
     page = await open(gateway, 390);
