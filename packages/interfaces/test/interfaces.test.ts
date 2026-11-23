@@ -11,6 +11,7 @@ import {
   agentSettings,
   agentSettings2,
   agents,
+  agents2,
   capability,
   capabilityProvider,
   chat,
@@ -72,6 +73,7 @@ const management = [
   unitProvider,
   capabilityProvider,
   agentSettings2,
+  agents2,
 ];
 
 test("the agent management interfaces are named, versioned and compile strictly", () => {
@@ -87,6 +89,7 @@ test("the agent management interfaces are named, versioned and compile strictly"
       "unit.provider@1",
       "capability.provider@1",
       "agent.settings@2",
+      "agents@2",
     ],
   );
   for (const iface of management)
@@ -1154,4 +1157,185 @@ test("agents@1 lists every capability its providers offer, each naming its provi
   assert.equal(listed({ capabilities: [unnamed] }), false);
   assert.equal(listed({ capabilities: [{ ...memory, asks: ["person"] }] }), false);
   assert.ok(compiled(agents)["capabilities.input"]?.({}));
+});
+
+test("a provider's mount says what it made for management to wire: connections, skills and the person's capability; one inside the agent says only what it mounted", () => {
+  const provider = compiled(capabilityProvider);
+  const mounted = provider["mount.output"];
+  assert.ok(mounted);
+  assert.ok(mounted({ mounted: "mnt_1" }));
+  const made = {
+    connections: [{ slot: "computer", connection: "act_c", target: "this computer" }],
+    skills: [{ name: "computer", files: ["SKILL.md", "ALWAYS.md"] }],
+    capability: {
+      actor: "act_w",
+      title: "Computer",
+      surfaces: [{ surface: "terminal", protocol: "terminal@1" }],
+      views: [{ id: "where", place: "column", kind: "facts" }],
+      rows: { where: [{ label: "Where", value: "Here" }] },
+    },
+  };
+  assert.ok(mounted({ mounted: "mnt_1", made }));
+  assert.ok(mounted({ mounted: "mnt_1", made: {} }));
+  assert.ok(mounted({ problems: [{ message: "No room." }] }));
+  // Nothing beside what was made, and no skill without its files.
+  assert.equal(mounted({ mounted: "mnt_1", made: { ...made, results: [] } }), false);
+  assert.equal(
+    mounted({ mounted: "mnt_1", made: { skills: [{ name: "computer", files: [] }] } }),
+    false,
+  );
+  assert.equal(mounted({ mounted: "mnt_1", made: { capability: { rows: {} } } }), false);
+  // The person's capability says its title, surfaces and views, as the answers gave them.
+  const { title: _, ...untitled } = made.capability;
+  assert.equal(mounted({ mounted: "mnt_1", made: { capability: untitled } }), false);
+  const { views: __, ...viewless } = made.capability;
+  assert.equal(mounted({ mounted: "mnt_1", made: { capability: viewless } }), false);
+  // A skill's files are read through the provider, by the capability that makes them.
+  assert.ok(
+    provider["skill.input"]?.({ capability: "computer", name: "computer", path: "SKILL.md" }),
+  );
+  assert.equal(
+    provider["skill.input"]?.({ unit: "computer", name: "computer", path: "SKILL.md" }),
+    false,
+  );
+  // Management's own mount still answers what was mounted, and nothing it made.
+  assert.equal(compiled(agents)["mount.output"]?.({ mounted: "mnt_1", made }), false);
+});
+
+test("agents@2 makes an agent empty and is what is mounted on it, and carries every call a page makes beside units", () => {
+  const a = compiled(agents2);
+  assert.deepEqual(Object.keys(agents2.methods).sort(), [
+    "activity",
+    "capabilities",
+    "create",
+    "expose",
+    "get",
+    "list",
+    "live",
+    "models",
+    "mount",
+    "remove",
+    "removeTemplate",
+    "saveTemplate",
+    "setModel",
+    "start",
+    "stop",
+    "templates",
+    "unexpose",
+    "unmount",
+  ]);
+  // The calls carried over are agents@1's, as they are.
+  for (const name of [
+    "start",
+    "stop",
+    "activity",
+    "live",
+    "models",
+    "setModel",
+    "expose",
+    "unexpose",
+  ])
+    assert.equal(
+      agents2.methods[name as keyof typeof agents2.methods],
+      agents.methods[name as keyof typeof agents.methods],
+      name,
+    );
+  assert.ok(a["create.input"]?.({ name: "Pat" }));
+  assert.ok(a["create.input"]?.({ name: "Pat", purpose: "Keeps the docs." }));
+  // A stack or a template isn't how an agent is made.
+  assert.equal(
+    a["create.input"]?.({ stack: { base: { provider: "act_2", creatable: "assistant" } } }),
+    false,
+  );
+  const entry = { agent: "act_1", name: "Pat", status: { state: "running" }, provider: "act_2" };
+  assert.ok(a["list.output"]?.({ agents: [entry] }));
+  const template = {
+    mounted: "mnt_t",
+    provider: "act_m",
+    capability: "assistant",
+    title: "Assistant",
+    arguments: {},
+    by: "person",
+    children: [],
+  };
+  const computer = {
+    mounted: "mnt_c",
+    provider: "act_c",
+    capability: "computer",
+    title: "Computer",
+    arguments: { kind: "this" },
+    by: "person",
+    children: [],
+    parent: "mnt_t",
+  };
+  const part = { name: "memory", title: "Memory", state: "mounted" };
+  // What the page reads of an agent, but its base, its template and its units.
+  const detail = {
+    ...entry,
+    instructions: "Be plain.",
+    skills: [{ name: "notes", description: "Notes." }],
+    mcp: [],
+    capabilities: [],
+  };
+  assert.ok(a["get.output"]?.({ ...detail, mounted: [template, computer], composition: [part] }));
+  assert.ok(a["get.output"]?.({ ...detail, mounted: [] }));
+  assert.equal(a["get.output"]?.({ ...detail }), false, "what was mounted is always said");
+  // A template is capabilities with their arguments; a shipped one says so.
+  const saved = {
+    id: "keeper",
+    title: "Keeper",
+    description: "Keeps things.",
+    capabilities: [
+      { provider: "Computers", capability: "computer", arguments: { kind: "this" } },
+      { provider: "Agents", capability: "memory", arguments: {} },
+    ],
+  };
+  assert.ok(a["saveTemplate.input"]?.(saved));
+  assert.ok(a["templates.output"]?.({ templates: [{ ...saved, shipped: true }] }));
+  assert.equal(
+    a["saveTemplate.input"]?.({ ...saved, units: [{ provider: "Units", unit: "files" }] }),
+    false,
+  );
+  assert.ok(a["removeTemplate.input"]?.({ id: "keeper" }));
+  // A template as management offers it: its arguments, one property for each capability it lists,
+  // each that capability's own schema, a computer's token secret among them.
+  const remote = {
+    id: "remote-keeper",
+    title: "Remote keeper",
+    description: "Keeps things on a computer elsewhere.",
+    arguments: {
+      type: "object",
+      properties: {
+        computer: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["this", "new"] },
+            address: { type: "string" },
+            token: { type: "string", title: "Token", secret: true },
+          },
+        },
+        memory: { type: "object", properties: {} },
+        "memory-2": { type: "object", properties: {} },
+      },
+    },
+    provider: "act_management",
+  };
+  assert.ok(a["capabilities.output"]?.({ capabilities: [remote] }));
+  // Filled as it is mounted: what is given overrides the template's, a secret among it.
+  assert.ok(
+    a["mount.input"]?.({
+      agent: "act_1",
+      provider: "act_management",
+      capability: "remote-keeper",
+      arguments: { computer: { address: "https://far.example/", token: "tok" } },
+    }),
+  );
+  // A required argument left empty is a problem at its key's path, and nothing is mounted.
+  assert.ok(
+    a["mount.output"]?.({
+      problems: [{ path: "/computer/token", message: "Token must be given." }],
+    }),
+  );
+  assert.ok(a["mount.output"]?.({ mounted: "mnt_1" }));
+  assert.ok(a["capabilities.output"]?.({ capabilities: [] }));
 });

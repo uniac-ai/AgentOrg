@@ -382,6 +382,10 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
       };
       ctx.exports.capabilities.implement({
         capabilities: () => ({ capabilities: offers }),
+        // What it mounts it holds inside the agent: it makes no skills for management to copy.
+        skill: ({ capability: name }) => {
+          throw new Refused("unknown", `${name} makes no skills.`);
+        },
         mount: ({ agent, capability: name }) =>
           inTurn(agent, async (one) => {
             if (!offers.some((offer) => offer.id === name))

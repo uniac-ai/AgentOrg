@@ -544,6 +544,9 @@ async function setup(t: test.TestContext) {
     start(ctx) {
       ctx.exports.capabilities.implement({
         capabilities: () => ({ capabilities: [MEMORY, GITHUB, CONTROL] }),
+        skill: () => {
+          throw new Refused("unknown", "It makes no skills.");
+        },
         mount(input) {
           given.mounted.push(input);
           if (script.mountProblems) return { problems: script.mountProblems };

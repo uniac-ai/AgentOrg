@@ -43,11 +43,11 @@ import {
 } from "./units.js";
 
 const Time = z.string().max(64);
-const ActorName = z.string().min(1).max(128);
+export const ActorName = z.string().min(1).max(128);
 const OnAgent = z.object({ agent: Id });
 const OnConnection = z.object({ connection: Id });
 const OnSkill = z.object({ name: SkillName });
-const Purpose = z.string().max(2000);
+export const Purpose = z.string().max(2000);
 
 /** A template's id. */
 export const TemplateId = z
@@ -79,7 +79,7 @@ export const Stack = z.strictObject({
   template: TemplateId.optional(),
 });
 /** A provider in a template: by its Actor's name, so a template works on another home. */
-const ProviderName = z.string().min(1).max(128);
+export const ProviderName = z.string().min(1).max(128);
 /**
  * A saved stack of prefills: nothing in it is locked, and no secret is in it; management refuses a
  * value for a secret field. A required field with no value must still be filled at creation.
