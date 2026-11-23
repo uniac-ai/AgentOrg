@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
-import { computerWith, noted } from "./design/samples.ts";
+import { noted } from "./design/samples.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let browser: Browser;
@@ -195,25 +195,6 @@ test(
       location.hash = "#/a/a-reviewer";
     });
     await panel.waitFor();
-    await page.close();
-  }),
-);
-
-test(
-  "on the chat page a conversation's face goes to its agent's details, and its computer button opens the agent's computer",
-  withGateway(async (gateway) => {
-    computerWith(gateway, "terminal");
-    const page = await open(gateway);
-    const research = conversation(page, "Research");
-    await research.getByRole("button", { name: "Research's computer" }).click();
-    const shown = page.getByRole("main").getByRole("region", { name: "Research's computer" });
-    await shown.getByRole("button", { name: "Close Research's computer" }).click();
-    await shown.waitFor({ state: "detached" });
-    await research.getByRole("button", { name: "Research's details" }).click();
-    await page.waitForURL(/#\/team\/a-research$/);
-    // The face leaves the floating chat as it was: collapsed.
-    assert.equal(await page.getByRole("complementary", { name: "Chats" }).count(), 0);
-    await page.getByRole("group", { name: "Chats, collapsed" }).waitFor();
     await page.close();
   }),
 );

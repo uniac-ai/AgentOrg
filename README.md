@@ -105,6 +105,8 @@ From a clone, after `npm ci` and `npm run build`, with `agentorg` being `node pa
 
 To run the tests, install the browser they drive once, with `npx playwright install --only-shell chromium`, then `npm test`. The shell's, the connector's and the app's tests use Playwright's headless shell, never a browser installed on the machine.
 
+On Node 22, a test script's `--test-timeout` limits each test file as a whole, not only each test. So a package whose slowest file runs at 45 s or more on CI's Node 22 sets 120 s: the hub and the app. The rest set 60 s.
+
 ## The app: the person's gateway
 
 `agentorg` runs the person's Actor as the app's gateway: its single running instance, holding the person's one channel to the Hub, in this process. Browser tabs and the CLI are the person's UIs, not channels: they reach the gateway, not the Hub.

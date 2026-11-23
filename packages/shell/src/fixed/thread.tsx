@@ -386,10 +386,12 @@ const TypingSign = ({ name }: { name: string }) => (
  */
 export interface OnPage {
   back?: () => void;
+  /** Opens the agent's details beside the conversation, or closes them, where there is room. */
+  details?: (() => void) | undefined;
 }
 
 /**
- * The head of your conversation with an agent: back to the list, its face to its page, its name,
+ * The head of your conversation with an agent: back to the list, its face to its details, its name,
  * and its computer, begun or not. One between two agents is named by both, and says it is
  * there to be read. On the chat page it has no close, and a way back only where the list isn't
  * beside it.
@@ -421,6 +423,8 @@ function Head({
         aria-label={`${agent.name}'s details`}
         className="shrink-0 rounded-full"
         onClick={() => {
+          // Beside the conversation where the page has room; else on the team page.
+          if (page?.details) return page.details();
           go({ screen: "team", agent: agent.id });
           // The chat is put away; the chat page leaves it as it was.
           if (!page) close();

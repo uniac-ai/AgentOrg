@@ -1825,9 +1825,17 @@ export async function startComputerProvider(
           return takeOff(mounted);
         },
         skill: ({ capability: id, name, path: file }) => skillText(id, name, file),
-        // Answered from each mount's state in the change after the contract.
-        status: () => {
-          throw new Refused("unimplemented", "This provider doesn't say how a mount stands yet.");
+        // As its unit's status says it: mounted once its connections are up, down with why
+        // while they aren't, as while its computer is being made.
+        async status({ agent, mounted }) {
+          if (stored[mounted]?.agent !== agent)
+            throw new Refused("unknown", `${agent} has nothing mounted as ${mounted} here.`);
+          const { state, detail } = await stateOf(mounted);
+          if (state === "connected") return { state: "mounted" as const };
+          return {
+            state: "down" as const,
+            detail: (detail ?? "Its connections are coming up.").slice(0, 2000),
+          };
         },
       });
     },
