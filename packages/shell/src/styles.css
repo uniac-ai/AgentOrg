@@ -44,6 +44,20 @@
     }
   }
 }
+/* The list put away and looked at: the pointer is near the window's left edge, or the keyboard is
+   in the frame's left side, which lies over the page for as long. */
+@custom-variant peek {
+  @container app (width >= 56rem) {
+    &:where([data-shell][data-collapsed][data-peek] *) {
+      @slot;
+    }
+  }
+}
+/* The list put away as the page opens, as the person's store says: the frame's left side is away
+   at once. Its going and coming is for a person putting the list away, and for looking at it. */
+[data-shell][data-instant] :is(nav[aria-label="Main"], [data-list], [data-side]) {
+  transition: none;
+}
 @custom-variant narrow {
   @container app (width < 68.75rem) {
     @slot;

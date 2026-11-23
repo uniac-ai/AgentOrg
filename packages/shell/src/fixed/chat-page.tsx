@@ -66,15 +66,16 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   const named = agent && agents.byId.has(agent) ? agent : undefined;
   const open = named ?? (split ? (first.current ?? fresh) : back ? undefined : fresh);
   const watched = open ? agents.byId.get(open) : undefined;
-  // Put away, the list is shown only while nothing is open.
-  const listing = (split && !collapsed) || !watched;
+  // Where there is room for both, the list is there whether or not it is put away: put away, it
+  // is off the window's edge until it is looked at.
+  const listing = split || !watched;
   // With nothing to list, it says so: the same words whether or not there are agents, and no way to
   // make one here. Agents that can't be read say that.
   const nothing = agents.unread ? UNREAD : listed && chats.length === 0 ? "No chats" : undefined;
   return (
     <div ref={ref} className="flex h-full min-h-0">
       {listing && (
-        <ListPanel label="Chats">
+        <ListPanel label="Chats" beside={!!watched}>
           <ListHead label="Chats" add="Message" onAdd={() => setComposing(true)} />
           {chats.length > 0 && (
             <ChatList

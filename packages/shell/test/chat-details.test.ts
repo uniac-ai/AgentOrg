@@ -164,10 +164,7 @@ test(
 
     page = await open(gateway, "#/chat/a-research", ROOM - 1);
     await page.getByRole("button", { name: "Hide list" }).click();
-    await page
-      .getByRole("main")
-      .getByRole("region", { name: "Chats" })
-      .waitFor({ state: "detached" });
+    await page.locator("[data-shell][data-collapsed]").waitFor();
     await openDetails(page);
     assert.equal(await widthOf(side(page)), COLUMN);
     // The conversation has what the card has beside the column: the page less the 6 at each side

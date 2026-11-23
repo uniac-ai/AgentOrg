@@ -67,7 +67,7 @@ test(
       }),
       ["0px", "0px"],
     );
-    // Four places. Search is 44 square, 4 from the strip's end, in a strip 52 tall. The others are
+    // Four places. Search is 32 square, 10 from the strip's end, in a strip 52 tall. The others are
     // 44 wide and a little less tall, 36, in a row 56 tall, 12 from the window's foot: Chat and
     // Team 4 apart from 8 in, Settings 8 from its end. Each of those holds an icon of 22.
     assert.deepEqual(
@@ -76,7 +76,7 @@ test(
         .evaluateAll((places) => places.map((one) => one.getAttribute("aria-label"))),
       ["Search", "Chat", "Team", "Settings"],
     );
-    assert.deepEqual(await boxOf(place(page, "Search")), [252, 4, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Search")), [258, 10, 32, 32]);
     assert.deepEqual(await boxOf(place(page, "Chat")), [8, 852, 44, 36]);
     assert.deepEqual(await boxOf(place(page, "Team")), [56, 852, 44, 36]);
     assert.deepEqual(await boxOf(place(page, "Settings")), [248, 852, 44, 36]);
@@ -90,7 +90,8 @@ test(
     // line, in the grey of what is said quietly.
     const search = place(page, "Search").locator("svg");
     const [sx, sy, sw, sh] = await boxOf(search);
-    assert.deepEqual([sw, sh, sx - 252, sy - 4], [18, 18, 13, 13]);
+    assert.deepEqual([sw, sh, sx - 258, sy - 10], [18, 18, 7, 7]);
+    assert.deepEqual([sx + sw / 2, sy + sh / 2], [274, 26], "where a larger box had it");
     assert.deepEqual(
       await search.evaluate((icon) => {
         const style = getComputedStyle(icon);
@@ -188,9 +189,18 @@ test(
     assert.equal(await label(page).locator("svg").count(), 0, "no arrow");
     assert.ok(Math.abs(x + width / 2 - 78) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
+    // How it goes is read as it closes: its fading out is over in a moment.
+    const leaving = label(page).evaluate(
+      (one) =>
+        new Promise<string>((done) => {
+          new MutationObserver(() => {
+            if (one.getAttribute("data-state") === "closed")
+              done(getComputedStyle(one).animationName);
+          }).observe(one, { attributes: true, attributeFilter: ["data-state"] });
+        }),
+    );
     await page.mouse.move(700, 450, { steps: 4 });
-    await page.locator('[data-slot="tooltip-content"][data-state="closed"]').waitFor();
-    assert.equal(await animation(), "exit", "it fades out");
+    assert.equal(await leaving, "exit", "it fades out");
     await label(page).waitFor({ state: "detached" });
 
     // From the keyboard: the place it is on shows its label, and only that one.
