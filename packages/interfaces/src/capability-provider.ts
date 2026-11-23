@@ -3,7 +3,7 @@ import { z } from "zod";
 import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
 import { ConnectionTarget } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
-import { CapabilityId, FactRow } from "./units.js";
+import { CapabilityId, FactRow, Surface, View } from "./units.js";
 
 /**
  * What a capability is made with, as the JSON Schema of an object: a page draws a field from each
@@ -33,6 +33,17 @@ export const Mounting = z.union([
   z.strictObject({ problems: z.array(ArgumentProblem).min(1).max(64) }),
 ]);
 /**
+ * A capability a provider can make for an agent: what it is called, what it does, and what it is
+ * made with. Its `id` is unique among the provider's, and an agent holds one of it.
+ */
+export const CapabilityDefinition = z.strictObject({
+  id: CapabilityId,
+  title: z.string().min(1).max(128),
+  description: z.string().max(2000),
+  arguments: ArgumentsSchema,
+});
+
+/**
  * What a provider outside the agent made in mounting a capability, for management to wire to the
  * agent and the person: none from one inside the agent, which holds what it makes itself.
  * - `connections`: each an Actor of the provider's that exports `tools@1` as `tools`, which
@@ -40,7 +51,9 @@ export const Mounting = z.union([
  * - `skills`: each by its name and its files, which management reads with `skill` and exposes to the
  *   agent.
  * - `capability`: the Actor that exports `capability@1` as `capability`, which management connects
- *   the person to, and by view id the rows of each view whose rows are fixed now.
+ *   the person to; its title; its live surfaces and its views, as they are for the arguments it was
+ *   mounted with, in the shapes an agent's capability is given to a page; and by view id the rows of
+ *   each view whose rows are fixed now.
  * Management takes it all off when the capability is unmounted; the provider ends what it made.
  */
 export const Made = z.strictObject({
@@ -55,6 +68,9 @@ export const Made = z.strictObject({
   capability: z
     .strictObject({
       actor: Id,
+      title: CapabilityDefinition.shape.title,
+      surfaces: z.array(Surface).max(16),
+      views: z.array(View).max(32),
       rows: z.record(CapabilityId, z.array(FactRow).max(32)).optional(),
     })
     .optional(),
@@ -64,17 +80,6 @@ export const ProviderMounting = z.union([
   z.strictObject({ mounted: Id, made: Made.optional() }),
   z.strictObject({ problems: z.array(ArgumentProblem).min(1).max(64) }),
 ]);
-/**
- * A capability a provider can make for an agent: what it is called, what it does, and what it is
- * made with. Its `id` is unique among the provider's, and an agent holds one of it.
- */
-export const CapabilityDefinition = z.strictObject({
-  id: CapabilityId,
-  title: z.string().min(1).max(128),
-  description: z.string().max(2000),
-  arguments: ArgumentsSchema,
-});
-
 const OnMounted = z.object({ agent: Id, mounted: Id });
 
 /**

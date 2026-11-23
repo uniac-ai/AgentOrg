@@ -1167,7 +1167,13 @@ test("a provider's mount says what it made for management to wire: connections, 
   const made = {
     connections: [{ slot: "computer", connection: "act_c", target: "this computer" }],
     skills: [{ name: "computer", files: ["SKILL.md", "ALWAYS.md"] }],
-    capability: { actor: "act_w", rows: { place: [{ label: "Where", value: "Here" }] } },
+    capability: {
+      actor: "act_w",
+      title: "Computer",
+      surfaces: [{ surface: "terminal", protocol: "terminal@1" }],
+      views: [{ id: "where", place: "column", kind: "facts" }],
+      rows: { where: [{ label: "Where", value: "Here" }] },
+    },
   };
   assert.ok(mounted({ mounted: "mnt_1", made }));
   assert.ok(mounted({ mounted: "mnt_1", made: {} }));
@@ -1179,6 +1185,11 @@ test("a provider's mount says what it made for management to wire: connections, 
     false,
   );
   assert.equal(mounted({ mounted: "mnt_1", made: { capability: { rows: {} } } }), false);
+  // The person's capability says its title, surfaces and views, as the answers gave them.
+  const { title: _, ...untitled } = made.capability;
+  assert.equal(mounted({ mounted: "mnt_1", made: { capability: untitled } }), false);
+  const { views: __, ...viewless } = made.capability;
+  assert.equal(mounted({ mounted: "mnt_1", made: { capability: viewless } }), false);
   // A skill's files are read through the provider, by the capability that makes them.
   assert.ok(
     provider["skill.input"]?.({ capability: "computer", name: "computer", path: "SKILL.md" }),
