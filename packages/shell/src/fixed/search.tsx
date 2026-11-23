@@ -90,7 +90,12 @@ export function Search({
                     onSelect={() => pick({ screen: "team", agent: entry.agent })}
                   >
                     <Face
-                      agent={{ id: entry.agent, name: entry.name, tone: toneOf(entry.agent) }}
+                      agent={{
+                        id: entry.agent,
+                        name: entry.name,
+                        tone: toneOf(entry.agent),
+                        avatar: entry.avatar,
+                      }}
                       size={32}
                       plain
                     />

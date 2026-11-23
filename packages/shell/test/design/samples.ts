@@ -717,6 +717,13 @@ export function sampleAgents(gateway: Gateway) {
     ["a-weekly", "Writes Monday's numbers from the analytics database"],
   ] as const)
     (gateway.agents.get(agent) as Agent).purpose = purpose;
+  // Three were given an avatar when they were made; the others' faces are drawn from their ids.
+  for (const [agent, avatar] of [
+    ["a-research", "v1.round-f4d6b8.dot-2a2530.waves-5b3a2c.specs-2a2530"],
+    ["a-triage", "v1.round-d2a078.dot-2a2530.sweep-453c4d"],
+    ["a-weekly", "v1.round-e9c09c.dot-2a2530.mane-9d99a4"],
+  ] as const)
+    (gateway.agents.get(agent) as Agent).avatar = avatar;
   gateway.converse("a-weekly", [
     {
       id: "monday-1",

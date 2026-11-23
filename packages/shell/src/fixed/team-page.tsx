@@ -38,7 +38,7 @@ function AgentRow({
       onClick={onOpen}
       className={`flex h-14 w-full items-center gap-3 rounded-xl px-2.5 text-left ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"}`}
     >
-      <Face agent={{ id: entry.agent, name: entry.name, tone }} size={36} />
+      <Face agent={{ id: entry.agent, name: entry.name, tone, avatar: entry.avatar }} size={36} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[15px] font-medium">{entry.name}</span>
         <span

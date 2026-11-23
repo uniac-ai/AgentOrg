@@ -280,7 +280,7 @@ test(
 );
 
 test(
-  "Create shows the face, the name offered and what the base or the template is; what is typed is its name, the face's letters and its line; the keyboard starts in the name",
+  "Create shows the face, the name offered and what the base or the template is; what is typed is its name and its line, under a face that stays; the keyboard starts in the name",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const window_ = await openCreate(page);
@@ -288,21 +288,16 @@ test(
     const line = window_.getByLabel("What it's for");
     assert.equal(await name.evaluate((e) => e === document.activeElement), true, "the keyboard");
     assert.equal(await name.getAttribute("placeholder"), "Scout");
-    // The face, with its letters.
-    const disc = window_
-      .locator('span[aria-hidden="true"][style*="linear-gradient(140deg"]')
-      .first();
-    assert.equal(await disc.innerText(), "S");
-    assert.equal((await boxOf(disc)).width, 80);
+    const face = window_.locator("[data-face]").first();
+    assert.equal((await boxOf(face)).width, 80);
     assert.equal(await line.getAttribute("placeholder"), "Chats and uses what you connect");
     await named(page, /^Assistant/).click();
     await window_.getByRole("list", { name: "What it can do" }).waitFor();
     assert.equal(await line.getAttribute("placeholder"), "Does what you ask on a computer");
-    const colour = () => disc.evaluate((e) => getComputedStyle(e).backgroundImage);
-    const was = await colour();
+    const picture = () => face.locator("img").getAttribute("src");
+    const was = await picture();
     await name.fill("Foreman");
-    assert.equal(await disc.innerText(), "F");
-    assert.equal(await colour(), was, "its colour stays");
+    assert.equal(await picture(), was, "its face stays");
     await line.fill("Keeps dependencies current");
     assert.equal(await line.inputValue(), "Keeps dependencies current");
     // Typed in place: no box around either.

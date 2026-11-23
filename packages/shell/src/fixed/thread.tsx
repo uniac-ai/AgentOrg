@@ -59,9 +59,8 @@ import {
   type Progress,
   type ProgressSaid,
   reasonOf,
-  type Tone,
 } from "./data.ts";
-import { Face } from "./face.tsx";
+import { Face, type Faced } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
@@ -418,7 +417,7 @@ function Head({
   page,
   children,
 }: {
-  agent: { id: string; name: string; tone: Tone };
+  agent: Faced;
   other?: { name: string } | undefined;
   begun: boolean;
   page?: OnPage | undefined;
@@ -451,7 +450,7 @@ function Head({
           if (!page) close();
         }}
       >
-        <Face agent={agent} size={36} />
+        <Face agent={agent} size={36} live />
       </button>
       {/* One not begun is headed by the agent alone, as the design draws it, on the same line. */}
       {begun ? (
@@ -487,11 +486,11 @@ export function Thread({
   other,
   page,
 }: {
-  agent: { id: string; name: string; tone: Tone };
+  agent: Faced;
   /** As the list has it, once it is listed. */
   chat?: ListedChat | undefined;
   /** The agent its conversation is with, when it is not yours: read here, never written in. */
-  other?: { id: string; name: string; tone: Tone } | undefined;
+  other?: Faced | undefined;
   /** Drawn on the chat page rather than in the chat. */
   page?: OnPage | undefined;
 }) {

@@ -28,8 +28,8 @@ import { createPortal } from "react-dom";
 import { Button } from "../ui/button.tsx";
 import { ScreencastView } from "./browser-view.tsx";
 import { useComputers } from "./computers.tsx";
-import { type AgentDetail, reasonOf, type Tone } from "./data.ts";
-import { Face, tintOf } from "./face.tsx";
+import { type AgentDetail, reasonOf } from "./data.ts";
+import { Face, type Faced, tintOf } from "./face.tsx";
 import { FilesView } from "./files-view.tsx";
 import type { LiveTarget } from "./live-socket.ts";
 import { Refusal } from "./parts.tsx";
@@ -146,7 +146,7 @@ export function Computer({
   overlay = false,
   beside = false,
 }: {
-  agent: { id: string; name: string; tone: Tone };
+  agent: Faced;
   surfaces: readonly OpenSurface[];
   /** Starts its agent, which is how a stopped one's computer comes back. */
   onStart(): Promise<unknown>;

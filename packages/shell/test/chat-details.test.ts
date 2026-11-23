@@ -157,8 +157,8 @@ test(
     await openDetails(page);
     const shown = details(page);
     await shown.getByText(purpose).waitFor();
-    // Its face, its name and what it is for, and no other words; two buttons, Close and its own.
-    assert.deepEqual((await shown.innerText()).split(/\n+/), ["R", "Research", purpose]);
+    // Its name and what it is for, and no other words; two buttons, Close and its own.
+    assert.deepEqual((await shown.innerText()).split(/\n+/), ["Research", purpose]);
     assert.deepEqual(
       await shown.getByRole("button").evaluateAll((all) => all.map((b) => b.ariaLabel)),
       ["Close Research's details", "Research on the team page"],

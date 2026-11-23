@@ -1,5 +1,8 @@
-// An agent's face: a colour from its id and initials from its name. Its state is on it: a mark
-// while it works or has a problem, a spinner while it starts, faded when it's stopped.
+// An agent's face: its avatar, drawn from the string it was given, or else from its id, so each
+// agent keeps one face. A still picture, or live where it is asked to be. Its state is on it: a
+// mark while it works or has a problem, a spinner while it starts, faded when it's stopped.
+import { avatarFromSeed, toSvg } from "2dlivebot";
+import { Avatar } from "2dlivebot/react";
 import { LoaderCircleIcon } from "lucide-react";
 import { type Tone, WORD } from "./data.ts";
 
@@ -8,23 +11,8 @@ const hueOf = (id: string) =>
   (([...id].reduce((h, ch) => Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0, 2166136261) >>> 23) %
     24) *
   15;
-/** One letter for one word, two for more: "Release notes" is RN. */
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => [...word][0]?.toUpperCase())
-    .join("");
-/** An agent's colours, worked out from its id alone, so a rename keeps them. */
-export const tintOf = (id: string) => {
-  const h = hueOf(id);
-  return {
-    from: `oklch(0.80 0.11 ${h})`,
-    to: `oklch(0.60 0.14 ${(h + 48) % 360})`,
-    soft: `oklch(0.62 0.10 ${h} / 0.28)`,
-  };
-};
+/** An agent's colour, worked out from its id alone, so a rename keeps it. */
+export const tintOf = (id: string) => ({ soft: `oklch(0.62 0.10 ${hueOf(id)} / 0.28)` });
 
 /** How a state that shows on an agent is marked: the others have no mark. */
 export const MARK: Partial<Record<Tone, string>> = {
@@ -32,35 +20,67 @@ export const MARK: Partial<Record<Tone, string>> = {
   trouble: "bg-[var(--bad)]",
 };
 
+/** An agent as its face needs it: `avatar` is the avatar's string, for an agent given one. */
+export interface Faced {
+  id: string;
+  name: string;
+  tone: Tone;
+  avatar?: string | undefined;
+}
+
+/** An avatar's still picture as an image's address: none for text that names no avatar. */
+function addressOf(avatar: string) {
+  try {
+    return `data:image/svg+xml,${encodeURIComponent(toSvg(avatar))}`;
+  } catch {
+    return undefined;
+  }
+}
+/** Each avatar's still picture, drawn once however many faces show it. */
+const pictures = new Map<string, string | undefined>();
+function pictureOf(avatar: string) {
+  if (!pictures.has(avatar)) pictures.set(avatar, addressOf(avatar));
+  return pictures.get(avatar);
+}
+
 export function Face({
   agent,
   size = 40,
   plain = false,
-  bare = false,
+  live = false,
 }: {
-  agent: { id: string; name: string; tone: Tone };
+  agent: Faced;
   size?: number;
-  /** Without its state. */
+  /** Without its state's mark. */
   plain?: boolean;
-  /** Without its letters. */
-  bare?: boolean;
+  /** Moving, and doing what the agent does: reading while it works, asleep when it's stopped. */
+  live?: boolean;
 }) {
-  const tint = tintOf(agent.id);
   const mark = MARK[agent.tone];
   const dot = Math.max(8, Math.round(size * 0.24));
-  const letters = initials(agent.name);
+  const avatar = agent.avatar && pictureOf(agent.avatar) ? agent.avatar : avatarFromSeed(agent.id);
   return (
-    <span className="relative inline-block shrink-0" style={{ width: size, height: size }}>
-      {/* A rounded square, its corners a quarter of its size at every size. */}
+    <span
+      data-face={agent.id}
+      className="relative inline-block shrink-0"
+      style={{ width: size, height: size }}
+    >
+      {/* The figure alone, in a square. Whatever draws a face names its agent beside it. */}
       <span
         aria-hidden
-        className={`grid size-full place-items-center rounded-[25%] font-semibold text-white ${agent.tone === "stopped" ? "opacity-45 grayscale" : ""}`}
-        style={{
-          background: `linear-gradient(140deg, ${tint.from}, ${tint.to})`,
-          fontSize: Math.round(size * ([...letters].length > 1 ? 0.36 : 0.42)),
-        }}
+        className={`grid size-full ${agent.tone === "stopped" ? "opacity-45 grayscale" : ""}`}
       >
-        {!bare && letters}
+        {live ? (
+          <Avatar
+            value={avatar}
+            size={size}
+            state={
+              agent.tone === "working" ? "working" : agent.tone === "stopped" ? "asleep" : "idle"
+            }
+          />
+        ) : (
+          <img alt="" draggable={false} src={pictureOf(avatar)} width={size} height={size} />
+        )}
       </span>
       {!plain && agent.tone === "starting" && (
         <LoaderCircleIcon

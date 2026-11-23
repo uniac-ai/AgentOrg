@@ -13,7 +13,7 @@ import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { Face } from "./face.tsx";
 import { Thread } from "./thread.tsx";
-import { useAgents } from "./watch.tsx";
+import { facedOf, useAgents } from "./watch.tsx";
 
 /** How many faces the collapsed chat shows; the count on its button says how many are unread. */
 const FACES = 3;
@@ -29,7 +29,8 @@ const ICON = 40;
  * between. Under the pointer only the pill's width changes, to one fixed width, leftward and over
  * what's beside it, so the same rule sets the icons a little further apart, still stacked. The room
  * the layer keeps stays the same, so nothing else moves. With nothing unread it is the chat button
- * alone, and doesn't widen. A face opens its chat.
+ * alone, and doesn't widen. A face opens its chat; it is edged at each side in the pill's colour,
+ * along the figure's own outline, so it stands off the face behind it.
  */
 function ChatPill({ returned }: { returned: boolean }) {
   const { expand, openChat } = useChats();
@@ -87,9 +88,9 @@ function ChatPill({ returned }: { returned: boolean }) {
                     aria-label={`Open ${chat.agent.name}`}
                     title={chat.agent.name}
                     onClick={() => openChat(chat.agent.id)}
-                    className="grid rounded-[25%] ring-2 ring-[var(--surface)]"
+                    className="grid rounded-[25%] [filter:drop-shadow(2px_0_var(--surface))_drop-shadow(-2px_0_var(--surface))]"
                   >
-                    <Face agent={chat.agent} size={ICON} plain bare />
+                    <Face agent={chat.agent} size={ICON} plain />
                   </button>
                 </li>
               ))}
@@ -152,10 +153,12 @@ function ChatPanel() {
       {open && agent ? (
         <Thread
           key={shown}
-          agent={{ id: agent.entry.agent, name: agent.entry.name, tone: agent.now.tone }}
+          agent={facedOf(agent)}
           chat={chat}
           {...(party && other
-            ? { other: { id: party, name: other.entry.name, tone: other.now.tone } }
+            ? {
+                other: facedOf(other),
+              }
             : {})}
         />
       ) : (
@@ -205,7 +208,7 @@ export function Layer() {
       {computer && owner && !onPage && hasComputer(owner.detail, !!owner.held?.windows) && (
         <Window key={shown} className={room}>
           <Computer
-            agent={{ id: computer, name: owner.entry.name, tone: owner.now.tone }}
+            agent={facedOf(owner)}
             surfaces={surfaces}
             onStart={() => api.call("agents", "start", { agent: computer })}
             {...(owner.held?.windows ? { down: owner.held.detail ?? "" } : {})}
@@ -215,10 +218,7 @@ export function Layer() {
       )}
       {activity && doer && (
         <Window key={shown} className={room}>
-          <ActivityWindow
-            agent={{ id: activity, name: doer.entry.name, tone: doer.now.tone }}
-            detail={doer.detail}
-          />
+          <ActivityWindow agent={facedOf(doer)} detail={doer.detail} />
         </Window>
       )}
       {chat && (open ? <ChatPanel /> : <ChatPill returned={opened.current} />)}
