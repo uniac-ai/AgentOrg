@@ -1,7 +1,9 @@
 // The fixed frontend: the ground, with the page on it. Wider than a phone, the page's list is at
 // the left, on the ground itself, between the frame's two rows: Search at the end of a strip along
 // the top, and the places with Settings along the foot. What the page shows is in cards beside
-// them. On a phone the places and Search run along the foot, and the page has the rest.
+// them. With the list put away the card has the window, and that left side comes back over it
+// while it is looked at. On a phone the places and Search run along the foot, and the page has
+// the rest.
 import {
   MessageCircleIcon,
   PanelLeftIcon,
@@ -25,10 +27,11 @@ import { ComputersProvider } from "./computers.tsx";
 import { Layer } from "./layer.tsx";
 import { LoginProvider, type LoginStatus, SignInBanner } from "./login.tsx";
 import { Offline, useOffline } from "./offline.tsx";
+import { SIDE_PART } from "./page-frame.tsx";
 import { PresenceProvider } from "./presence.tsx";
 import { Search } from "./search.tsx";
 import { SettingsWindow } from "./settings-window.tsx";
-import { setCollapsed, useCollapsed } from "./split.ts";
+import { setCollapsed, settle, useCollapsed, useOpenedAway } from "./split.ts";
 import { TeamPage } from "./team-page.tsx";
 import { AgentsProvider } from "./watch.tsx";
 
@@ -88,8 +91,8 @@ function Place({
   /** What a screen reader is told, where it is more than the label. */
   name?: string;
   side: "top" | "bottom";
-  /** Square in the strip; along the foot a little less tall than wide. */
-  size: "size-11" | "h-9 w-11";
+  /** Square and small in the strip; along the foot larger, a little less tall than wide. */
+  size: "size-8" | "h-9 w-11";
   current: boolean;
   onClick(): void;
   children: React.ReactNode;
@@ -103,7 +106,7 @@ function Place({
           aria-current={current ? "page" : undefined}
           onClick={onClick}
           {...rest}
-          className={`pointer-events-auto relative grid ${size} shrink-0 place-items-center rounded-xl ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"} phone:flex phone:h-full phone:w-auto phone:flex-1 phone:flex-col phone:items-center phone:justify-center phone:gap-0.5 phone:rounded-none phone:bg-transparent phone:hover:bg-transparent ${current ? "" : "phone:text-muted-foreground"}`}
+          className={`pointer-events-auto relative grid ${size} shrink-0 place-items-center ${size === "size-8" ? "rounded-lg" : "rounded-xl"} ${current ? "bg-[var(--selected)]" : "hover:bg-[var(--hover)]"} phone:flex phone:h-full phone:w-auto phone:flex-1 phone:flex-col phone:items-center phone:justify-center phone:gap-0.5 phone:rounded-none phone:bg-transparent phone:hover:bg-transparent ${current ? "" : "phone:text-muted-foreground"}`}
         >
           {children}
           <span className="hidden text-[10px] leading-3 font-medium phone:block">{label}</span>
@@ -136,8 +139,8 @@ const onApple = () => {
  * The frame's two rows, on every page, icons only. Wider than a phone they lie over the page's left
  * side, as wide as its list beside what is chosen, and the page leaves them their room: a strip
  * along the top with Search at its end, and a row along the foot with the places from its start
- * and Settings at its end. With the list put away they go with it, and come back with it. On a
- * phone they are one row along the foot. Chat carries the count of conversations with something new, as the floating
+ * and Settings at its end. With the list put away they go with it off the window's edge, and
+ * come back with it. On a phone they are one row along the foot. Chat carries the count of conversations with something new, as the floating
  * chat's button does. Search opens from its key too, anywhere, with nothing drawn to say so: ⌘K on
  * a Mac, and Ctrl K elsewhere. A terminal keeps Ctrl K itself: xterm takes it at its own text area,
  * and the window never hears it. While the service is out of reach nothing opens over the notice.
@@ -208,13 +211,14 @@ function Places() {
   return (
     <nav
       aria-label="Main"
-      className="pointer-events-none absolute inset-y-0 left-0 z-10 flex w-[var(--side)] flex-col justify-between away:hidden phone:pointer-events-auto phone:static phone:order-last phone:h-[var(--foot)] phone:w-full phone:shrink-0 phone:flex-row phone:border-t"
+      className={`pointer-events-none absolute inset-y-0 left-0 z-10 flex w-[var(--side)] flex-col justify-between away:z-40 ${SIDE_PART} phone:pointer-events-auto phone:static phone:order-last phone:h-[var(--foot)] phone:w-full phone:shrink-0 phone:flex-row phone:border-t`}
     >
-      <div className="flex h-[var(--strip)] shrink-0 items-center justify-end pr-1 phone:contents">
+      {/* Search's box is 10 from the strip's end and its top, its icon where a larger box had it. */}
+      <div className="flex h-[var(--strip)] shrink-0 items-center justify-end pr-2.5 phone:contents">
         <Place
           label="Search"
           side="bottom"
-          size="size-11"
+          size="size-8"
           current={false}
           aria-haspopup="dialog"
           aria-expanded={searching}
@@ -283,10 +287,11 @@ const LIST_COLLAPSED = "ui/list-collapsed";
 /**
  * Puts the page's list away and brings it back, where a page has room for a list beside what is
  * chosen: first in the strip along the top, after the room left for a window's own buttons, and
- * drawn as quietly as Search. With the list away, Search and the row of places go with it, and what
- * is chosen has the page under the strip, where this alone is left: it brings them all back. Search
- * still opens from its key. The choice is the person's, kept in their store: it is as it was left
- * when the page opens again.
+ * drawn as quietly as Search. With the list away, this, Search and the row of places go with it,
+ * and what is chosen has the window; looked at, they are back over the page, and this brings them
+ * back for good. Search still opens from its key. The choice is the person's, kept in their store:
+ * it is as it was left when the page opens again, away at once as the store answers. Their going
+ * and coming is seen only when a person puts the list away, or looks at it.
  */
 function Collapse() {
   const collapsed = useCollapsed();
@@ -294,7 +299,10 @@ function Collapse() {
     void api
       .call<{ value?: unknown }>("store", "get", { key: LIST_COLLAPSED })
       .then(({ value }) => {
-        if (value === true) setCollapsed(true);
+        if (value !== true) return;
+        setCollapsed(true, true);
+        // Once it has been drawn away.
+        requestAnimationFrame(() => requestAnimationFrame(settle));
       })
       .catch(() => {});
   }, []);
@@ -303,11 +311,14 @@ function Collapse() {
     void api.call("store", "set", { key: LIST_COLLAPSED, value: away }).catch(() => {});
   };
   return (
-    <div className="absolute top-1 left-[calc(var(--corner)+4px)] z-10 hidden @min-[56rem]/app:block">
+    <div
+      data-side
+      className={`absolute top-2.5 left-[calc(var(--corner)+10px)] z-10 hidden @min-[56rem]/app:block away:z-40 ${SIDE_PART}`}
+    >
       <Place
         label={collapsed ? "Show list" : "Hide list"}
         side="bottom"
-        size="size-11"
+        size="size-8"
         current={false}
         aria-expanded={!collapsed}
         onClick={() => put(!collapsed)}
@@ -324,9 +335,9 @@ function Collapse() {
  * words cut, so its link and its close stay whole. Where the page holds one thing at a time it is
  * beside the row of places, short of the chat's tab; with the chat open there is no room there, and
  * it is above the places as beside a list, where a page with the chat over it ends well above it.
- * With the list put away it is in the strip, after the button that brings the list back. On a phone
- * it has a row of its own along the top, above the page. It holds the plan's notice, once,
- * until it is dismissed (being offline is the notice at the top).
+ * With the list put away it goes with it, and is over the list's foot again while that is looked
+ * at. On a phone it has a row of its own along the top, above the page. It holds the plan's notice,
+ * once, until it is dismissed (being offline is the notice at the top).
  */
 function ShellBar({ notice, dismiss }: Required<Notice>) {
   const chats = useChats();
@@ -336,11 +347,12 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
   if (!notice) return null;
   const at = open
     ? "bottom-[calc(var(--foot)+6px)] left-3 max-w-[calc(var(--side)-24px)]"
-    : "bottom-2.5 left-[calc(var(--side)+12px)] max-w-[calc(100%-var(--side)-12px-var(--inset)-var(--tab-open)-var(--gap))] split:bottom-[calc(var(--foot)+6px)] split:left-3 split:max-w-[calc(var(--side)-24px)]";
+    : "bottom-2.5 left-[calc(var(--side)+12px)] max-w-[calc(100%-var(--side)-12px-var(--inset)-var(--tab-open)-var(--gap))] @min-[56rem]/app:bottom-[calc(var(--foot)+6px)] @min-[56rem]/app:left-3 @min-[56rem]/app:max-w-[calc(var(--side)-24px)]";
   return (
     <div
       role="status"
-      className={`window absolute z-20 flex h-10 ${at} items-center gap-3 rounded-full bg-[var(--raised)] pr-1.5 pl-4 text-[13px] shadow-lg away:top-1.5 away:bottom-auto away:left-[calc(var(--corner)+56px)] away:max-w-[calc(100%-var(--corner)-68px-var(--inset)-var(--panel)-var(--gap))] phone:relative phone:inset-auto phone:mx-3 phone:my-2 phone:max-w-none phone:shrink-0`}
+      data-side
+      className={`window absolute z-20 flex h-10 ${at} items-center gap-3 rounded-full bg-[var(--raised)] pr-1.5 pl-4 text-[13px] shadow-lg away:z-40 ${SIDE_PART} phone:relative phone:inset-auto phone:mx-3 phone:my-2 phone:max-w-none phone:shrink-0`}
     >
       <>
         <span className="min-w-0 flex-1 truncate">You're using your ChatGPT plan</span>
@@ -360,9 +372,128 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
   );
 }
 
+/** The frame's side, `--side` in styles.css; how near the window's left edge the pointer brings
+ * it back over the page, and how far past it the pointer sends it away again. */
+const SIDE = 300;
+const EDGE = 16;
+const PAST = 12;
+/** The parts of the frame's left side: its rows, the page's list, and what is marked as one. */
+const SIDE_PARTS = 'nav[aria-label="Main"], [data-list], [data-side]';
+
+/**
+ * Whether the frame's left side is looked at while the list is put away. A pointer looks at it by
+ * coming to the window's left edge, or leaving the window across it, until it goes past the side or
+ * out of the window another way. The keyboard looks at it while it is on one of its parts, having
+ * come there by a key and not by a press, the button that brings the list back being the first
+ * thing Tab comes to. A touch looks at it by a swipe in from the left edge, until a touch past it
+ * or another place is gone to.
+ */
+function usePeek(collapsed: boolean) {
+  const route = useRoute();
+  const [peek, setPeek] = useState(false);
+  const held = useRef({ pointer: false, keys: false, touch: false });
+  const say = useRef(() => {});
+  say.current = () => setPeek(held.current.pointer || held.current.keys || held.current.touch);
+  /** Whether the last thing done was a key, not a press. */
+  const keyboard = useRef(false);
+  useEffect(() => {
+    const key = () => {
+      keyboard.current = true;
+    };
+    const press = () => {
+      keyboard.current = false;
+      if (!held.current.keys) return;
+      held.current.keys = false;
+      say.current();
+    };
+    addEventListener("keydown", key, true);
+    addEventListener("pointerdown", press, true);
+    return () => {
+      removeEventListener("keydown", key, true);
+      removeEventListener("pointerdown", press, true);
+    };
+  }, []);
+  useEffect(() => {
+    const by = held.current;
+    const keyed = (target: EventTarget | null) =>
+      keyboard.current && target instanceof Element && !!target.closest(SIDE_PARTS);
+    by.pointer = false;
+    by.touch = false;
+    // Put away from the keyboard, it is still where the keyboard is.
+    by.keys = collapsed && keyed(document.activeElement);
+    say.current();
+    if (!collapsed) return;
+    const move = (event: PointerEvent) => {
+      if (event.pointerType === "touch") return;
+      const now = event.clientX <= EDGE ? true : event.clientX > SIDE + PAST ? false : by.pointer;
+      if (now === by.pointer) return;
+      by.pointer = now;
+      say.current();
+    };
+    const leave = (event: MouseEvent) => {
+      by.pointer = event.clientX <= 0;
+      say.current();
+    };
+    const focus = (event: FocusEvent) => {
+      by.keys = keyed(event.target);
+      say.current();
+    };
+    const blur = (event: FocusEvent) => {
+      if (event.relatedTarget) return;
+      by.keys = false;
+      say.current();
+    };
+    /** Where a touch that began at the left edge began. */
+    let from: { x: number; y: number } | undefined;
+    const touched = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      from = touch.clientX <= EDGE + 8 ? { x: touch.clientX, y: touch.clientY } : undefined;
+      if (!by.touch || touch.clientX <= SIDE) return;
+      by.touch = false;
+      say.current();
+    };
+    const swiped = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!from || !touch) return;
+      const across = touch.clientX - from.x;
+      if (across < 30 || across < Math.abs(touch.clientY - from.y)) return;
+      from = undefined;
+      by.touch = true;
+      say.current();
+    };
+    const root = document.documentElement;
+    addEventListener("pointermove", move);
+    root.addEventListener("mouseleave", leave);
+    addEventListener("focusin", focus);
+    addEventListener("focusout", blur);
+    addEventListener("touchstart", touched, { passive: true });
+    addEventListener("touchmove", swiped, { passive: true });
+    return () => {
+      removeEventListener("pointermove", move);
+      root.removeEventListener("mouseleave", leave);
+      removeEventListener("focusin", focus);
+      removeEventListener("focusout", blur);
+      removeEventListener("touchstart", touched);
+      removeEventListener("touchmove", swiped);
+    };
+  }, [collapsed]);
+  // A touch that chose something has what it came for.
+  const place = `${route.screen}/${route.agent ?? ""}`;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: it runs as the place changes.
+  useEffect(() => {
+    if (!held.current.touch) return;
+    held.current.touch = false;
+    say.current();
+  }, [place]);
+  return peek;
+}
+
 function Frame({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
   const collapsed = useCollapsed();
+  const peek = usePeek(collapsed);
+  const openedAway = useOpenedAway();
   // Out of reach, all of it is under the notice: the keyboard doesn't reach it either.
   const offline = useOffline();
   return (
@@ -378,6 +509,8 @@ function Frame({ notice, dismiss }: Required<Notice>) {
         <div
           data-shell
           data-collapsed={collapsed || undefined}
+          data-peek={peek || undefined}
+          data-instant={openedAway || undefined}
           className="@container/app relative flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--ground)]"
         >
           <Collapse />
