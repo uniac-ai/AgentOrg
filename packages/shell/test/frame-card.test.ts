@@ -168,7 +168,22 @@ test(
       [18, 26, 26],
     );
     assert.equal(await button("Hide list").getAttribute("aria-expanded"), "true");
-    await button("Hide list").click();
+    // Put away by a person, its going is seen: the parts of the left side move off.
+    assert.ok(
+      (await button("Hide list").evaluate((pressed) => {
+        (pressed as HTMLButtonElement).click();
+        return new Promise<number>((done) =>
+          requestAnimationFrame(() =>
+            done(
+              document
+                .getAnimations()
+                .filter((one) => (one as CSSTransition).transitionProperty === "translate").length,
+            ),
+          ),
+        );
+      })) >= 4,
+      "the button, the rows, the list and the notice move",
+    );
     await away(page);
     assert.equal(await button("Show list").getAttribute("aria-expanded"), "false");
     // All of the left side is past the window's left edge, the list still there to come back.
@@ -187,12 +202,28 @@ test(
     // It is kept: the page opens again as it was left, and Team's list is away as Chat's is.
     await kept(true);
     await page.goto(`${gateway.url}/#/team`);
+    // As the page opens, what was kept is applied at once: nothing moves as the list is put away.
+    await page.addInitScript(() => {
+      new MutationObserver((_, watching) => {
+        if (!document.querySelector("[data-shell][data-collapsed]")) return;
+        watching.disconnect();
+        (window as unknown as { movedAway: number }).movedAway = document
+          .getAnimations()
+          .filter((one) => (one as CSSTransition).transitionProperty === "translate").length;
+      }).observe(document, { subtree: true, attributeFilter: ["data-collapsed"] });
+    });
     await page.reload();
     await away(page);
+    assert.equal(
+      await page.evaluate(() => (window as unknown as { movedAway: number }).movedAway),
+      0,
+      "away at once as the page opens",
+    );
+    // What looks at it afterwards is seen to bring it: the motion is back.
+    await page.locator("[data-shell]:not([data-instant])").waitFor();
     // The chosen agent's own heading, after the list's.
     await page.getByRole("main").getByRole("heading", { level: 1 }).nth(1).waitFor();
     const team = page.locator('main section[aria-label="Team"]');
-    // Once it has gone: the page opens with its list, and puts it away as the store answers.
     assert.deepEqual((await side(page)).list, [-324, 0, 300, 900], "Team's list is off the window");
     assert.deepEqual(
       await team.evaluate((list) =>

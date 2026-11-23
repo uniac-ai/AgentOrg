@@ -31,7 +31,7 @@ import { SIDE_PART } from "./page-frame.tsx";
 import { PresenceProvider } from "./presence.tsx";
 import { Search } from "./search.tsx";
 import { SettingsWindow } from "./settings-window.tsx";
-import { setCollapsed, useCollapsed } from "./split.ts";
+import { setCollapsed, settle, useCollapsed, useOpenedAway } from "./split.ts";
 import { TeamPage } from "./team-page.tsx";
 import { AgentsProvider } from "./watch.tsx";
 
@@ -290,7 +290,8 @@ const LIST_COLLAPSED = "ui/list-collapsed";
  * drawn as quietly as Search. With the list away, this, Search and the row of places go with it,
  * and what is chosen has the window; looked at, they are back over the page, and this brings them
  * back for good. Search still opens from its key. The choice is the person's, kept in their store:
- * it is as it was left when the page opens again.
+ * it is as it was left when the page opens again, away at once as the store answers. Their going
+ * and coming is seen only when a person puts the list away, or looks at it.
  */
 function Collapse() {
   const collapsed = useCollapsed();
@@ -298,7 +299,10 @@ function Collapse() {
     void api
       .call<{ value?: unknown }>("store", "get", { key: LIST_COLLAPSED })
       .then(({ value }) => {
-        if (value === true) setCollapsed(true);
+        if (value !== true) return;
+        setCollapsed(true, true);
+        // Once it has been drawn away.
+        requestAnimationFrame(() => requestAnimationFrame(settle));
       })
       .catch(() => {});
   }, []);
@@ -489,6 +493,7 @@ function Frame({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
   const collapsed = useCollapsed();
   const peek = usePeek(collapsed);
+  const openedAway = useOpenedAway();
   // Out of reach, all of it is under the notice: the keyboard doesn't reach it either.
   const offline = useOffline();
   return (
@@ -505,6 +510,7 @@ function Frame({ notice, dismiss }: Required<Notice>) {
           data-shell
           data-collapsed={collapsed || undefined}
           data-peek={peek || undefined}
+          data-instant={openedAway || undefined}
           className="@container/app relative flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--ground)]"
         >
           <Collapse />
