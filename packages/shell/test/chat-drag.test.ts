@@ -220,7 +220,7 @@ test(
 );
 
 test(
-  "from the keyboard, Space picks a tile up, the arrows move it among the tiles, and Space puts it down, the keyboard still on it; Escape puts it back; Enter still opens it; its menu has Unpin alone",
+  "from the keyboard, Space picks a tile up, the arrows move it among the tiles, and Space puts it down, the keyboard still on it; Escape puts it back; Enter still opens it; its menu has Unpin, and no Pin",
   withGateway(async (gateway) => {
     threePinned(gateway);
     const page = await open(gateway, "#/chat/a-research");
@@ -254,11 +254,11 @@ test(
     });
     assert.deepEqual(gateway.notes.get(PINS), ["a-reviewer", "a-weekly", "a-triage"]);
     await until(focused, "a-reviewer");
-    // The menu of a tile with others beside it: Unpin, and nothing else.
+    // The menu of a tile with others beside it: Unpin where a row's has Pin.
     await page.keyboard.press("Shift+F10");
     const menu = page.getByRole("menu");
     await menu.waitFor();
-    assert.deepEqual(await menu.getByRole("menuitem").allInnerTexts(), ["Unpin"]);
+    assert.deepEqual(await menu.getByRole("menuitem").allInnerTexts(), ["Unpin", "Delete chat"]);
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "detached" });
     // Enter is the button's own: it opens the conversation.

@@ -496,9 +496,14 @@ export function Thread({
   page?: OnPage | undefined;
 }) {
   const { byId } = useAgents();
-  const { read } = useAllChats();
+  const { read, opened } = useAllChats();
   const connection = useConnection();
   const entry = chat?.entry;
+  // Yours, opened: it is on the list, had it been taken off.
+  const yours = !other;
+  useEffect(() => {
+    if (yours) opened(agent.id);
+  }, [opened, agent.id, yours]);
   const watched = byId.get(agent.id);
   const slot = watched?.slot;
   // Its agent's computer, as a window beside the chat: pressed again, it closes. The chat stays

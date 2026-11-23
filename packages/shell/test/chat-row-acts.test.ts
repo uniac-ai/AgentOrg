@@ -275,7 +275,7 @@ test(
     await moreOf(list, "Reviewer").click();
     await menu.waitFor();
     assert.deepEqual(await items(), byRightClick);
-    assert.deepEqual(byRightClick, ["Pin"]);
+    assert.deepEqual(byRightClick, ["Pin", "Delete chat"]);
     assert.equal(await expanded(), "true");
     // The pointer is in the menu or anywhere: the row still shows what the menu is of.
     await away(page);
