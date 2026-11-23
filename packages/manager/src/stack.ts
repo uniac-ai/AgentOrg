@@ -544,6 +544,18 @@ export function createStacks(parts: StackParts) {
         .map(({ id, title, description }) => ({ value: id, title, description })),
       (await places()).slice(0, MAX_OPTIONS - 1),
     );
+  /**
+   * Control's arguments: its AgentOrg control unit's form, but `templates` may be left out, and is
+   * then none, so `{}` mounts control as it did before it took arguments. What control is for here
+   * is mounting and unmounting capabilities; creating from templates is only what it may add. The
+   * unit's own form, as the page draws it, still asks for templates.
+   */
+  const controlForm = async () =>
+    (await controlUnit()).form.map((field) => {
+      if (field.id !== "templates") return field;
+      const { required: _, ...optional } = field;
+      return optional;
+    });
   const ownUnits = async (kinds: TheUnit[]): Promise<TheUnit[]> => [
     mcpUnit(kinds),
     await controlUnit(),
@@ -1630,7 +1642,7 @@ export function createStacks(parts: StackParts) {
    * Given by an agent, they are held to its own control.
    */
   const settleControl = async (record: TheAgent, given: Values, by: string) => {
-    const { form } = await controlUnit();
+    const form = await controlForm();
     const settled = settle(form, given, []);
     const problems = [...settled.problems];
     let { values } = settled;
@@ -1862,7 +1874,7 @@ export function createStacks(parts: StackParts) {
     settleControl,
     wireControl,
     /** Control's arguments: the JSON Schema of its AgentOrg control unit's form. */
-    controlSchema: async () => schemaOf((await controlUnit()).form),
+    controlSchema: async () => schemaOf(await controlForm()),
     /** Take off what an agent reaches of other agents through its control. */
     unreachAgents: (agent: string) => unreach(agent),
     reachManagement,

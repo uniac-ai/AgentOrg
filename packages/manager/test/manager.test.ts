@@ -4998,11 +4998,14 @@ test("control mounted with its unit's answers gives what the unit gives: managem
       capability: "control",
       arguments: args as never,
     });
-  // Its arguments are its unit's form: one left out that must be filled in, and more than its own
-  // computer reaches, are each a problem at its field, and nothing is mounted.
+  // Its arguments are its unit's form: more than its own computer reaches is a problem at its
+  // field, and nothing is mounted.
   const wrong = await mount({ access: "terminal" });
   assert.ok("problems" in wrong);
-  assert.deepEqual(wrong.problems.map((one) => one.path).sort(), ["/access", "/templates"]);
+  assert.deepEqual(
+    wrong.problems.map((one) => one.path),
+    ["/access"],
+  );
   assert.deepEqual((await s.calls.agents.get({ agent })).mounted, []);
   const made = await mount({ templates: ["helper"] });
   assert.ok("mounted" in made, JSON.stringify(made));
@@ -5302,4 +5305,71 @@ test("get says how each mount an outside provider made stands, as it says it: do
   outside.running.close();
   await until(async () => (await stood()).detail === "Its provider can't be reached now.");
   assert.equal((await stood()).state, "down");
+});
+
+test("control is mounted with no arguments, as before it took any: no templates to create from, and the reach and the tools it always gave", async (t) => {
+  const s = await delegating(t);
+  const agent = await s.makeStack([], "Plain");
+  // Its arguments say templates may be left out; the unit's own form still asks for them.
+  const listed = (await s.calls.agents.capabilities({})).capabilities.find(
+    (one) => one.id === "control",
+  );
+  assert.equal((listed?.arguments.required as string[] | undefined)?.includes("templates"), false);
+  const unit = (await s.calls.agents.units({})).units.find(
+    (one) => one.provider === s.management.actorId && one.id === "control",
+  );
+  assert.equal(unit?.form.find((field) => field.id === "templates")?.required, true);
+  const made = await s.calls.agents.mount({
+    agent,
+    provider: s.agentActor.actorId,
+    capability: "control",
+    arguments: {},
+  });
+  assert.ok("mounted" in made, JSON.stringify(made));
+  // Management's agents@1 is reached, as it always was.
+  assert.ok(
+    (await s.bindingsOf(agent)).some(
+      (b) => b.consumer === agent && b.slot === "agents" && b.provider === s.management.actorId,
+    ),
+  );
+  // With no templates, it creates from none.
+  const tools = (await (await s.exposedTo<ToolCalls>(agent, "control")).list({})).tools;
+  assert.ok(!tools.some((one) => one.name.startsWith("create_")), JSON.stringify(tools));
+});
+
+test("control kept mounted with no arguments, as 0.0.39 left it, is still held after a restart, with its reach: what was mounted is never settled again", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([]);
+  // As 0.0.39 kept it: mounted through management with no arguments, nothing wired for it.
+  await s.restart((kept) => {
+    (kept as unknown as { agents: Record<string, { mounted: object[] }> }).agents[
+      agent
+    ]?.mounted.push({
+      mounted: "mnt_0039",
+      provider: s.agentActor.actorId,
+      providerMounted: "control",
+      capability: "control",
+      title: "Control",
+      arguments: {},
+      by: s.callerActor.actorId,
+    });
+  });
+  // Held: its settings name it, management lists it, and it reaches management's agents@1.
+  const roots = (await settingsRead(s.agentChannel(agent))).mounted;
+  assert.deepEqual(
+    roots.filter((one) => one.capability === "control"),
+    [{ mounted: "mnt_0039", capability: "control", arguments: {}, provider: s.agentActor.actorId }],
+  );
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent })).mounted?.map((one) => [one.mounted, one.arguments]),
+    [["mnt_0039", {}]],
+  );
+  await until(async () =>
+    (await s.bindingsOf(agent)).some(
+      (b) => b.consumer === agent && b.slot === "agents" && b.provider === s.management.actorId,
+    ),
+  );
+  // And it can be taken off as any mount is.
+  await s.calls.agents.unmount({ agent, mounted: "mnt_0039" });
+  assert.deepEqual((await s.calls.agents.get({ agent })).mounted, []);
 });
