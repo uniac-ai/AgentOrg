@@ -172,6 +172,7 @@ export const AgentRecord = z.object({
   instructions: z.string(),
   skills: z.array(z.string()),
   purpose: z.string().optional(),
+  avatar: z.string().optional(),
   template: z.string().optional(),
   units: z.array(UnitRecord).default([]),
   /** What it holds, in its stack's order: one for each applied unit that builds one. */
@@ -2085,6 +2086,7 @@ export function createStacks(parts: StackParts) {
           mounted: [],
           chat: made.chat,
           ...(input.purpose ? { purpose: input.purpose } : {}),
+          ...(input.avatar ? { avatar: input.avatar } : {}),
           ...(stack.template ? { template: stack.template } : {}),
           ...(child ? { parent: child.parent } : {}),
           ...(child?.computer ? { computer: child.computer } : {}),

@@ -805,6 +805,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                         provider: record.provider,
                         creatable: record.creatable,
                         ...(record.purpose ? { purpose: record.purpose } : {}),
+                        ...(record.avatar ? { avatar: record.avatar } : {}),
                         ...(record.template ? { template: record.template } : {}),
                         ...parentOf(record),
                       })),
@@ -843,6 +844,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             provider: record.provider,
             creatable: record.creatable,
             ...(record.purpose ? { purpose: record.purpose } : {}),
+            ...(record.avatar ? { avatar: record.avatar } : {}),
             ...(record.template ? { template: record.template } : {}),
             ...parentOf(record),
             instructions: record.instructions,
@@ -974,7 +976,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         };
       };
       ctx.exports.agents2.implement({
-        async create({ name, purpose }, { caller }) {
+        async create({ name, purpose, avatar }, { caller }) {
           // On the agents' executor: what every agent holds, and nothing mounted.
           const [base] = (
             (await handlerOf("creatable")({}, { caller })) as {
@@ -987,6 +989,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               stack: { base: { provider: base.provider, creatable: base.id }, units: [] },
               name,
               ...(purpose ? { purpose } : {}),
+              ...(avatar ? { avatar } : {}),
             } as never,
             caller,
           );

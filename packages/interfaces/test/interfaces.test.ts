@@ -699,6 +699,40 @@ test("a stack carries secrets at creation, and a template can never hold one", (
   );
 });
 
+test("an agent's avatar is one bounded string, taken as it is made and given with its entry", () => {
+  const one = compiled(agents);
+  const two = compiled(agents2);
+  const avatar = "v1.round-f7e3cf.dot-2a2530.waves-5b3a2c.specs-2a2530";
+  const stack = { base: { provider: "act_b", creatable: "assistant" }, units: [] };
+  const made = [
+    (given: unknown) => one["create.input"]?.({ stack, name: "Fay", avatar: given }),
+    (given: unknown) =>
+      one["create.input"]?.({ template: "assistant", name: "Fay", avatar: given }),
+    (given: unknown) => two["create.input"]?.({ name: "Fay", avatar: given }),
+  ];
+  for (const create of made) {
+    assert.ok(create(avatar));
+    assert.ok(create("a".repeat(512)));
+    // Past its length, or with a character what draws it never writes, it is refused.
+    for (const not of ["a".repeat(513), "", "V1.round", "v1 round", "v1_round", "v1/round", 1])
+      assert.equal(create(not), false, String(not));
+  }
+  const entry = { agent: "act_1", name: "Fay", status: { state: "running" }, provider: "act_2" };
+  const first = { ...entry, creatable: "assistant" };
+  const detail = { instructions: "Be plain.", skills: [], mcp: [] };
+  for (const [schemas, listed, read] of [
+    [one, first, { ...first, ...detail, units: [] }],
+    [two, entry, { ...entry, ...detail, mounted: [] }],
+  ] as const) {
+    // One made without an avatar has none.
+    assert.ok(schemas["list.output"]?.({ agents: [listed, { ...listed, avatar }] }));
+    assert.ok(schemas["get.output"]?.(read));
+    assert.ok(schemas["get.output"]?.({ ...read, avatar }));
+    assert.equal(schemas["list.output"]?.({ agents: [{ ...listed, avatar: "No" }] }), false);
+    assert.equal(schemas["get.output"]?.({ ...read, avatar: "" }), false);
+  }
+});
+
 test("management exposes a skill or a connection, and adds a skill from a folder or as files", () => {
   const expose = compiled(agents)["expose.input"];
   assert.ok(expose);
