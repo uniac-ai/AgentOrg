@@ -51,7 +51,8 @@ const pill = (page: Page) => page.getByRole("group", { name: "Chats, collapsed" 
 const chatButton = (page: Page) => pill(page).getByRole("button", { name: /^Chats/ });
 const panel = (page: Page) => page.getByRole("complementary", { name: "Chats" });
 const main = (page: Page) => page.getByRole("main");
-const rows = (page: Page) => panel(page).getByRole("list").getByRole("button");
+/** The rows themselves: each has buttons of its own beside it. */
+const rows = (page: Page) => panel(page).getByRole("list").locator(":scope > li > button");
 /** A part's box as [x, y, width, height], to the hundredth. */
 const boxOf = async (part: Locator) => {
   const box = await part.boundingBox();
