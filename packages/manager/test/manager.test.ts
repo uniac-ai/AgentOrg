@@ -552,6 +552,9 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
         skill: () => {
           throw new Refused("unknown", "It makes no skills.");
         },
+        status: () => {
+          throw new Refused("unimplemented", "It doesn't say how a mount stands.");
+        },
         mount(input) {
           given.mounted.push(input);
           if (

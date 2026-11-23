@@ -1,5 +1,6 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { HeldCapability } from "./agent-provider.js";
 import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
 import { ConnectionTarget } from "./connection.js";
 import { Id, SlotName } from "./hub.js";
@@ -34,13 +35,15 @@ export const Mounting = z.union([
 ]);
 /**
  * A capability a provider can make for an agent: what it is called, what it does, and what it is
- * made with. Its `id` is unique among the provider's, and an agent holds one of it.
+ * made with. Its `id` is unique among the provider's. An agent holds one of it, or, with `many`, as
+ * many as are mounted, each its own mount with its own arguments, such as one for each MCP server.
  */
 export const CapabilityDefinition = z.strictObject({
   id: CapabilityId,
   title: z.string().min(1).max(128),
   description: z.string().max(2000),
   arguments: ArgumentsSchema,
+  many: z.literal(true).optional(),
 });
 
 /**
@@ -84,7 +87,8 @@ const OnMounted = z.object({ agent: Id, mounted: Id });
 
 /**
  * `capability.provider@1`: a program that makes capabilities for agents. It lists what it can make,
- * makes one on a running agent from the arguments given, and takes one it made off. The same
+ * makes one on a running agent from the arguments given, says how one it made stands, and takes one
+ * it made off. The same
  * definition serves the person, the agent and any program on the Hub; management calls it, and
  * keeps what was mounted. Each call is refused `unknown` for an agent the provider can't mount on.
  */
@@ -100,7 +104,8 @@ export const capabilityProvider = defineInterface({
     /**
      * Make the capability on the agent, from `arguments`. It takes effect from the agent's next
      * model request. Arguments that don't fit give each problem, and nothing is made. Refused
-     * `unknown` for a capability it doesn't list, and `state` when the agent holds it already.
+     * `unknown` for a capability it doesn't list, and `state` when the agent holds it already,
+     * unless it is `many`.
      */
     mount: method({
       input: z.object({ agent: Id, capability: CapabilityId, arguments: Arguments }),
@@ -119,6 +124,20 @@ export const capabilityProvider = defineInterface({
           .array(z.string().regex(/^[0-9a-f]{64}$/))
           .max(256)
           .optional(),
+      }),
+    }),
+    /**
+     * How a mount stands now, in the words an agent's own capabilities use: `mounted` once it
+     * works, `down` while it can't for now (being made, or its server away) with why, and
+     * `failed` when it won't without a change. Management asks it when a person or program reads
+     * the agent, never in the agent's turn. Refused `unknown` for a mount it doesn't have, which
+     * management shows as failed.
+     */
+    status: method({
+      input: OnMounted,
+      output: z.strictObject({
+        state: HeldCapability.shape.state,
+        detail: z.string().max(2000).optional(),
       }),
     }),
     /**

@@ -386,6 +386,10 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         skill: ({ capability: name }) => {
           throw new Refused("unknown", `${name} makes no skills.`);
         },
+        // What it mounts it holds inside the agent, which says how each stands itself.
+        status: () => {
+          throw new Refused("unimplemented", "The agent says how what it holds stands.");
+        },
         mount: ({ agent, capability: name }) =>
           inTurn(agent, async (one) => {
             if (!offers.some((offer) => offer.id === name))
