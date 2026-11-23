@@ -79,22 +79,17 @@ test(
       "To",
     );
     assert.deepEqual(await offered(page), [
-      "RResearch",
-      "RReviewer",
-      "TTriage",
-      "WRWeekly report",
-      "BBroken",
+      "Research",
+      "Reviewer",
+      "Triage",
+      "Weekly report",
+      "Broken",
       "New agent",
     ]);
     await input.fill("re");
-    assert.deepEqual(await offered(page), [
-      "RResearch",
-      "RReviewer",
-      "WRWeekly report",
-      "New agent",
-    ]);
+    assert.deepEqual(await offered(page), ["Research", "Reviewer", "Weekly report", "New agent"]);
     await input.fill("tri");
-    assert.deepEqual(await offered(page), ["TTriage", "New agent"]);
+    assert.deepEqual(await offered(page), ["Triage", "New agent"]);
     await page.keyboard.press("Escape");
     await picker(page).waitFor({ state: "detached" });
     await page.close();

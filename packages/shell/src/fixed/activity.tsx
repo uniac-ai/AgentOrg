@@ -13,8 +13,8 @@ import { CallRow } from "./call-row.tsx";
 import { type Row, rowsOf } from "./calls.ts";
 import { age } from "./chat-parts.tsx";
 import { useComputers } from "./computers.tsx";
-import { type AgentDetail, reachedOf, type Tone, useEvery } from "./data.ts";
-import { Face, tintOf } from "./face.tsx";
+import { type AgentDetail, reachedOf, useEvery } from "./data.ts";
+import { Face, type Faced, tintOf } from "./face.tsx";
 import { Nothing, Section, UNREAD } from "./parts.tsx";
 
 type Work = z.output<typeof Activity>["works"][number];
@@ -377,7 +377,7 @@ export function ActivityWindow({
   agent,
   detail,
 }: {
-  agent: { id: string; name: string; tone: Tone };
+  agent: Faced;
   detail: AgentDetail | undefined;
 }) {
   const { close } = useComputers();

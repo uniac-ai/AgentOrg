@@ -61,7 +61,7 @@ const drawn = (list: Locator) =>
     };
   });
 /**
- * What follows the pointer: the letters it shows, its size, how far its middle is from where the
+ * What follows the pointer: whose face it is, its size, how far its middle is from where the
  * pointer is held, and the cursor over it. None when nothing is dragged.
  */
 const followed = (page: Page, at: { x: number; y: number }) =>
@@ -70,7 +70,7 @@ const followed = (page: Page, at: { x: number; y: number }) =>
     if (!face) return undefined;
     const box = face.getBoundingClientRect();
     return {
-      shows: (face.parentElement as HTMLElement).textContent.trim(),
+      shows: (face as HTMLElement).dataset.face,
       size: [box.width, box.height],
       off: Math.round(Math.hypot(box.left + box.width / 2 - x, box.top + box.height / 2 - y)),
       cursor: getComputedStyle(document.elementFromPoint(x, y) as Element).cursor,
@@ -92,7 +92,7 @@ test(
         rows: ["a-research"],
       });
       assert.deepEqual(await followed(page, at), {
-        shows: "T",
+        shows: "a-triage",
         size: [48, 48],
         off: 0,
         cursor: "auto",
@@ -146,7 +146,7 @@ test(
         rows: ["a-triage"],
       });
       assert.deepEqual(await followed(page, at), {
-        shows: "R",
+        shows: "a-research",
         size: [48, 48],
         off: 0,
         cursor: "auto",

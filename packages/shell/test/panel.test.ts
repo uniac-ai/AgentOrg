@@ -154,10 +154,10 @@ test(
     gateway.sayWith("a-triage", "a-research", said("x1", "user", "Which issues are new?", 1));
     const page = await open(gateway);
     await listed(page, 4);
-    // After its face: its agent, then its last words or its problem. Its time comes last.
+    // Its agent, then its last words or its problem. Its time comes last.
     const lines = async () =>
       (await rows(page).allInnerTexts()).map((text) =>
-        text.split("\n").filter(Boolean).slice(1, 3),
+        text.split("\n").filter(Boolean).slice(0, 2),
       );
     await until(lines, [
       ["Research", "The model refused it."],
@@ -370,7 +370,7 @@ test(
 );
 
 test(
-  "the collapsed chat is one row of stacked icons: 64 wide at rest and 80 under the pointer, for any count of unread conversations",
+  "the collapsed chat is one row of stacked icons: 64 wide at rest and 120 under the pointer, for any count of unread conversations",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     const still = [await boxOf(main(page)), await boxOf(chatButton(page))];
@@ -397,8 +397,8 @@ test(
         .waitFor();
       const shown = Math.min(unread, 3);
       assert.equal(await pill(page).getByRole("listitem").count(), shown, "three faces at most");
-      for (const width of [64, 80]) {
-        if (width === 80) await pill(page).hover({ position: { x: 60, y: 24 } });
+      for (const width of [64, 120]) {
+        if (width === 120) await pill(page).hover({ position: { x: 60, y: 24 } });
         else await page.mouse.move(700, 300);
         // The chat button at the right inner edge, the last face at the left, equal steps between.
         const at = await lefts(width);
@@ -427,7 +427,7 @@ test(
     // Reached by the keyboard, it widens as under the pointer.
     await page.keyboard.press("Shift+Tab");
     await page.keyboard.press("Tab");
-    assert.equal((await lefts(80)).length, 4);
+    assert.equal((await lefts(120)).length, 4);
 
     // Asked for less motion, it changes width at once.
     await page.emulateMedia({ reducedMotion: "reduce" });

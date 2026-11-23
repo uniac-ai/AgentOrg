@@ -444,6 +444,76 @@ test(
 );
 
 test(
+  "a room at its end that is scrolled with no wheel, touch or key stays where it was put, as when the browser finds words in an earlier message or a script shows one; a message that comes then doesn't pull it down; put at its end again, it follows what comes",
+  withGateway(async (gateway) => {
+    longConversation(gateway);
+    const page = await open(gateway);
+    const { room, short, atEnd } = roomOf(page);
+    const top = () => room.evaluate((view) => view.scrollTop);
+    await atEnd("it opens at its end");
+    // It is at rest there: a moment after the last scroll of its own, it no longer says it scrolls.
+    await page.waitForFunction(
+      (view) => !!view && !view.hasAttribute("data-autoscrolling"),
+      await room.elementHandle(),
+    );
+    // An earlier message is shown by a script: the room hears a scroll, and nothing of the person's.
+    const early = panel(page).getByText("Note 2 of a conversation longer than its room.", {
+      exact: true,
+    });
+    await early.evaluate((note) => note.scrollIntoView({ block: "center" }));
+    const put = await top();
+    await page.waitForTimeout(600);
+    assert.equal(await top(), put, "it stays where it was put");
+    assert.ok((await short()) > 300, "which is short of its end");
+    // What comes meanwhile is under the foot, and moves nothing.
+    gateway.addMessage("a-reviewer", reply("late", "One more note, while you read above."));
+    await panel(page)
+      .getByText("One more note, while you read above.")
+      .waitFor({ state: "attached" });
+    await page.waitForTimeout(600);
+    assert.equal(await top(), put, "what came didn't pull it down");
+    // Put at its end, by a script again, it follows what comes.
+    await room.evaluate((view) => view.scrollTo(0, view.scrollHeight));
+    await atEnd("put at its end");
+    // It hears that scroll a frame later: from then it says nothing is under its foot.
+    await page.waitForFunction(
+      (view) => !!view && !view.getAttribute("data-scrollable")?.includes("end"),
+      await room.elementHandle(),
+    );
+    const said = Array.from({ length: 30 }, (_, n) => `Finding ${n} is on a line of its own.`);
+    gateway.addMessage("a-reviewer", reply("whole", said.join("\n\n")));
+    await panel(page).getByText("Finding 29 is").waitFor({ state: "attached" });
+    await atEnd(`its end is gone to (${await short()} short)`);
+    await page.close();
+  }),
+);
+
+test(
+  'a press on "Earlier messages" where a script scrolled to it reads them in, though a reply has just come',
+  withGateway(async (gateway) => {
+    const chat = gateway.agents.get("a-reviewer");
+    assert.ok(chat);
+    chat.chat.messages.unshift(
+      ...Array.from({ length: 120 }, (_, i) => reply(`old${i}`, `Old note ${i}`)),
+    );
+    const page = await open(gateway);
+    const { room, short, atEnd } = roomOf(page);
+    await atEnd("it opens at its end");
+    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    await panel(page).getByText("Three causes explain it.").waitFor();
+    const earlier = panel(page).getByRole("button", { name: "Earlier messages" });
+    await earlier.evaluate((button) => button.scrollIntoView({ block: "center" }));
+    const put = await room.evaluate((view) => view.scrollTop);
+    await page.waitForTimeout(300);
+    assert.equal(await room.evaluate((view) => view.scrollTop), put, "it stays at the button");
+    assert.ok((await short()) > 300, "which is short of its end");
+    await earlier.click();
+    await panel(page).getByText("Old note 3", { exact: true }).waitFor({ state: "attached" });
+    await page.close();
+  }),
+);
+
+test(
   "a reply in which nothing was said has nothing to copy",
   withGateway(async (gateway) => {
     const page = await open(gateway);

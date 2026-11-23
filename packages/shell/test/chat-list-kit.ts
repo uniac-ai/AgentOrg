@@ -35,9 +35,9 @@ export const tiles = (list: Locator) =>
 /** One conversation of a list, row or tile, by its agent's name. */
 export const one = (list: Locator, name: string) =>
   list.getByRole("button").filter({ has: list.page().getByText(name, { exact: true }) });
-/** The agents the rows name, top to bottom: each row's face comes first, then its name. */
+/** The agents the rows name, top to bottom: a row's name is the first thing it says. */
 export const rowNames = async (list: Locator) =>
-  (await rows(list).allInnerTexts()).map((text) => text.split("\n").filter(Boolean)[1]);
+  (await rows(list).allInnerTexts()).map((text) => text.split("\n").filter(Boolean)[0]);
 /** The agents the tiles name, in their order: each tile's face comes first, then its name. */
 export const tileNames = async (list: Locator) =>
   (await tiles(list).allInnerTexts()).map((text) => text.split("\n").filter(Boolean).at(-1));

@@ -42,9 +42,9 @@ const list = (page: Page) => page.getByRole("main").getByRole("region", { name: 
 const rows = (page: Page) =>
   list(page).getByRole("list", { name: "Chats" }).locator(":scope > li > button");
 const row = (page: Page, name: string) => rows(page).filter({ hasText: name });
-/** The agents the rows name, top to bottom: each row's face comes first, then its name. */
+/** The agents the rows name, top to bottom: a row's name is the first thing it says. */
 const names = async (page: Page) =>
-  (await rows(page).allInnerTexts()).map((text) => text.split("\n").filter(Boolean)[1]);
+  (await rows(page).allInnerTexts()).map((text) => text.split("\n").filter(Boolean)[0]);
 /** The stand-in's agents, in the order they are read. */
 const NAMES = ["Research", "Reviewer", "Triage", "Weekly report", "Broken"];
 /** The open conversation, on the page. */

@@ -36,9 +36,9 @@ const withGateway = (run: (gateway: Gateway) => Promise<void>) => async () => {
 const team = (page: Page) => page.getByRole("main").getByRole("region", { name: "Team" });
 const rows = (page: Page) => team(page).getByRole("list", { name: "Agents" }).getByRole("button");
 const row = (page: Page, name: string) => rows(page).filter({ hasText: name });
-/** Each row's name and line, top to bottom; a row's face comes first. */
+/** Each row's name and line, top to bottom. */
 const listed = async (page: Page) =>
-  (await rows(page).allInnerTexts()).map((text) => text.split("\n").filter(Boolean).slice(1));
+  (await rows(page).allInnerTexts()).map((text) => text.split("\n").filter(Boolean));
 /** The details' head and line: the agent's page as it is. */
 const heading = (page: Page, name: string) =>
   page.getByRole("main").getByRole("heading", { name, level: 1 });
