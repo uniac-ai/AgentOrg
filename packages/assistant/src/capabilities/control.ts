@@ -127,7 +127,7 @@ export const control = (): Capability => ({
       },
       run: (input) =>
         on((input as Json).agent, async (calls, target) => {
-          const [{ capabilities }, { mounted = [] }] = await Promise.all([
+          const [{ capabilities }, { mounted = [], composition }] = await Promise.all([
             calls.capabilities({}),
             calls.get({ agent: target }),
           ]);
@@ -152,6 +152,9 @@ export const control = (): Capability => ({
                 ...(state ? { state } : {}),
               }),
             ),
+            // Everything it is made of, as management's `get` gives it: each capability and the
+            // plugins each loaded, naming the part each is under.
+            ...(composition ? { composition } : {}),
           });
         }),
     });

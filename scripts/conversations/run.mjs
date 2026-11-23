@@ -463,6 +463,17 @@ async function counting(request, init) {
   if (frontDesk) spent.frontDesk++;
   if (hearing) spent.hearing++;
   const input = Array.isArray(body.input) ? body.input : [];
+  // What control's list answered, in characters, each time as the model is sent it.
+  const called = new Map(
+    input.filter((item) => item.type === "function_call").map((item) => [item.call_id, item.name]),
+  );
+  const listed = input
+    .filter(
+      (item) =>
+        item.type === "function_call_output" &&
+        called.get(item.call_id) === "control__capability_list",
+    )
+    .map((item) => String(item.output ?? "").length);
   // The message the front desk answers: the last one said to it.
   const said = frontDesk ? input.findLast((item) => item.role === "user") : undefined;
   const record = {
@@ -476,6 +487,7 @@ async function counting(request, init) {
       ? { message: textOf(said), offered: (body.tools ?? []).map((tool) => tool.name) }
       : {}),
     model: body.model,
+    ...(listed.length > 0 ? { listed } : {}),
     tools: [],
     input: 0,
     cached: 0,
@@ -1325,6 +1337,7 @@ async function playSteps(group, at, slot, files, { agent, name }) {
             cached: r.cached,
             output: r.output,
             tools: r.tools,
+            ...(r.listed ? { listed: r.listed } : {}),
           })),
       },
       tools: c.tools,

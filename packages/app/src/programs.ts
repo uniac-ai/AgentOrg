@@ -5,12 +5,15 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { join } from "node:path";
 import { startComputerProvider } from "@agentorg/computer-connector";
 import { HubState, PERSON } from "@agentorg/hub";
+import type { CapabilityDefinition } from "@agentorg/interfaces";
 import { type ManagerOptions, startManager } from "@agentorg/manager";
 import { startMcpProvider } from "@agentorg/mcp";
 import { memory } from "@agentorg/memory";
 import type { Log } from "@agentorg/sdk";
+import type { AgentPlugin } from "assistant/plugins";
 import { startAgentProvider } from "assistant/provider";
 import { startChatGPT } from "chatgpt";
+import type { z } from "zod";
 import type { PersonCalls } from "./oauth.js";
 
 export interface ProgramsOptions {
@@ -39,6 +42,11 @@ export interface ProgramsOptions {
    * default: the `agentorg` command turns it on.
    */
   assistant?: boolean;
+  /**
+   * Capabilities the agents' executor carries and offers beside memory and control, each a plugin
+   * with its definition, whose id is the plugin's name. For tests.
+   */
+  carried?: { plugin: AgentPlugin; offer: z.infer<typeof CapabilityDefinition> }[];
 }
 
 /**
@@ -225,9 +233,9 @@ export async function startPrograms(
         model: { actor: chatgpt, export: "session" },
         dir: dirOf("agents"),
         // The plugins an agent's capabilities may name: each loaded only in an agent that holds it.
-        plugins: [memory],
+        plugins: [memory, ...(options.carried ?? []).map(({ plugin }) => plugin)],
         // What it offers to be mounted on its agents, each by the plugin's own name.
-        offers: [MEMORY, CONTROL],
+        offers: [MEMORY, CONTROL, ...(options.carried ?? []).map(({ offer }) => offer)],
         log: programLog,
       });
       closers.unshift(() => running.close());
