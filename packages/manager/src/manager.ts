@@ -412,6 +412,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         serial: stacks.serial,
         providers: capabilityProviders,
         changed,
+        reachControl: async (agent, reach) => {
+          if (reach) await stacks.reachManagement(agent);
+          else await stacks.unreachManagement(agent);
+        },
       });
 
       /** An agent's own provider, which runs it and keeps its model. */

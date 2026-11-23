@@ -19,8 +19,15 @@ type Root = z.infer<typeof SettingsRoot>;
 
 /** The roots that are management's own: no caller mounts or unmounts them. */
 export const OWN_ROOTS = ["instructions", "skills"];
-/** The root an AgentOrg control unit gives its agent. */
+/** The root an AgentOrg control unit gives its agent, or that is mounted on it as `control`. */
 export const CONTROL_ROOT = "control";
+
+/** Whether its AgentOrg control unit gives the agent its control. */
+export const unitControls = (record: TheAgent, self: string) =>
+  record.units.some((unit) => unit.provider === self && unit.unit === AGENTS_UNIT);
+/** Whether the agent holds control: from its unit, or mounted on it. */
+export const holdsControl = (record: TheAgent, self: string) =>
+  unitControls(record, self) || record.mounted.some((one) => one.capability === CONTROL_ROOT);
 
 /**
  * The tree of what is mounted on an agent, in order: management's own roots, its control, its
@@ -34,7 +41,7 @@ export function treeOf(
   skills: z.infer<typeof SkillEntry>[],
 ): Root[] {
   const held = record.provider;
-  const control = record.units.some((unit) => unit.provider === self && unit.unit === AGENTS_UNIT);
+  const control = unitControls(record, self);
   return [
     { mounted: "instructions", capability: "instructions", arguments: { text: told } },
     { mounted: "skills", capability: "skills", arguments: { skills } },

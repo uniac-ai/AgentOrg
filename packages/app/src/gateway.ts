@@ -137,7 +137,7 @@ export interface AppOptions {
    * How the first run, at each start, logs, reaches ChatGPT and finds a computer service: the
    * app's own by default.
    */
-  firstRun?: Pick<ProgramsOptions, "fetch" | "log" | "computer" | "assistant" | "carried">;
+  firstRun?: Pick<ProgramsOptions, "fetch" | "log" | "computer" | "assistant">;
 }
 
 export interface App {

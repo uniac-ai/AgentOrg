@@ -382,6 +382,13 @@ const GITHUB = {
     required: ["owner", "token"],
   },
 };
+/** Control, as an agent's executor offers it. */
+const CONTROL = {
+  id: "control",
+  title: "Control",
+  description: "It mounts and unmounts capabilities.",
+  arguments: { type: "object" as const, properties: {} },
+};
 /** Memory as an agent says it holds it, and what memory mounted inside the agent. */
 const MEMORY_HELD = { name: "memory", title: "Memory", state: "mounted" as const };
 const TIDY_HELD = {
@@ -536,7 +543,7 @@ async function setup(t: test.TestContext) {
     exports: { provider: agentProvider, capabilities: capabilityProvider },
     start(ctx) {
       ctx.exports.capabilities.implement({
-        capabilities: () => ({ capabilities: [MEMORY, GITHUB] }),
+        capabilities: () => ({ capabilities: [MEMORY, GITHUB, CONTROL] }),
         mount(input) {
           given.mounted.push(input);
           if (script.mountProblems) return { problems: script.mountProblems };
@@ -4491,7 +4498,7 @@ test("the person, the agent itself and another program each list what may be mou
   for (const { calls, by } of callers)
     assert.deepEqual(
       (await calls.capabilities({})).capabilities,
-      [MEMORY, GITHUB].map((one) => ({ ...one, provider: s.agentActor.actorId })),
+      [MEMORY, GITHUB, CONTROL].map((one) => ({ ...one, provider: s.agentActor.actorId })),
       by,
     );
   const plugins = async () => (await settingsRead(s.agentChannel(agent))).held;
@@ -4657,7 +4664,7 @@ test("an agent holding the control unit reaches management's agents@1, answered 
   // Only what answers whoever is bound answers it; the rest is through its control unit.
   const itself = await s.exposedTo<AgentsCalls>(agent, "agents");
   assert.equal((await itself.get({ agent: plain })).agent, plain);
-  assert.equal((await itself.capabilities({})).capabilities.length, 2);
+  assert.equal((await itself.capabilities({})).capabilities.length, 3);
   await assert.rejects(itself.list({}), refused("forbidden"));
   // The agent's page shows its control unit's slot as before, and nothing of this.
   assert.deepEqual(
@@ -4718,6 +4725,43 @@ test("an agent kept as 0.0.38 kept it, its settings binding made while its execu
     { mounted: "instructions", capability: "instructions", arguments: { text: "Be plain." } },
     { mounted: "skills", capability: "skills", arguments: { skills: [] } },
   ]);
+});
+
+test("control mounted on an agent reaches management's agents@1 for as long as it or the control unit is there, and an agent holds one control", async (t) => {
+  const s = await delegating(t);
+  const agent = await s.makeStack([], "Plain");
+  const reach = async () =>
+    (await s.bindingsOf(agent))
+      .filter((b) => b.consumer === agent && b.slot === "agents")
+      .map((b) => `${b.provider} ${b.export}`);
+  const reached = [`${s.management.actorId} agents`];
+  const control = { agent, provider: s.agentActor.actorId, capability: "control", arguments: {} };
+  assert.deepEqual(await reach(), []);
+  const made = await s.calls.agents.mount(control);
+  assert.ok("mounted" in made);
+  assert.deepEqual(await reach(), reached);
+  // Its control unit added and removed: the reach stays while control is still mounted.
+  await s.calls.agents.addUnit({ agent, unit: s.agentsUnit({ templates: ["helper"] }) } as never);
+  // One control: mounted again, it is refused, and so it is with the unit alone.
+  await assert.rejects(s.calls.agents.mount(control), refused("state"));
+  const unit = (await s.calls.agents.get({ agent })).units.find((one) => one.unit === "control");
+  await s.calls.agents.removeUnit({ agent, instance: unit?.instance as string });
+  assert.deepEqual(await reach(), reached);
+  // Kept before it was given with the mount, it is given as management starts.
+  await s.person.slots.grants.call.unexpose({ to: agent, slot: "agents" });
+  await s.restart(() => {});
+  for (let i = 0; (await reach()).length === 0; i++) {
+    assert.ok(i < 300, "it was never given it");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  // Taken off, it reaches management no more.
+  await s.calls.agents.unmount({ agent, mounted: made.mounted });
+  assert.deepEqual(await reach(), []);
+  const { agent: parent } = await s.parent({ templates: ["helper"] });
+  await assert.rejects(
+    s.calls.agents.mount({ ...control, agent: parent }),
+    (error: Error) => refused("state")(error) && error.message === "It holds a Control already.",
+  );
 });
 
 test("a capability is held once, and one its provider doesn't make isn't kept", async (t) => {

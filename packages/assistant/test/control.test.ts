@@ -285,3 +285,49 @@ test("the agent's loops ask through its model capability: a loop's request goes 
   assert.equal(asked.length, 2);
   await plugins.close();
 });
+
+test("control tells the agent, once a turn, what it can mount and what it holds, by id and description; with management away, nothing", async () => {
+  const { call } = management();
+  let reached: object | undefined = call;
+  const exposed = () =>
+    reached
+      ? [
+          {
+            slot: "agents",
+            described: describeInterface(agents),
+            provider: { actor: "act_management", export: "agents" },
+            call: reached,
+            on: () => () => {},
+          },
+        ]
+      : [];
+  const hub = { exposed, onExposed: () => () => {} } as unknown as AgentHub;
+  const plugins = await createPluginHost(quiet, [control()]).open(SELF, {
+    store: memory(),
+    provides: ["hub"],
+  });
+  await plugins.mount({
+    name: "connector",
+    inject: [],
+    provide: "hub",
+    apply: (ctx: Context) => void ctx.provide("hub", hub),
+  });
+  await plugins.hold([{ name: "control" }]);
+  const told = () =>
+    plugins
+      .pass({ instructions: [], functions: [], input: [], leftOut: [] })
+      .instructions.filter(({ owner }) => owner === "plugin:control/capabilities")
+      .map(({ text }) => text);
+  await plugins.turn();
+  assert.deepEqual(told(), [
+    `## Capabilities
+A capability gives you more to do and know, from your next request. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
+- memory (Memory, mounted): It remembers what you tell it to.
+- github (GitHub): Its repositories.
+- notes (Notes): Notes, with a key if you have one.`,
+  ]);
+  reached = undefined;
+  await plugins.turn();
+  assert.deepEqual(told(), []);
+  await plugins.close();
+});

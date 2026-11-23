@@ -41,17 +41,57 @@ const AGENT = {
   description: "The id of an agent you made; leave it out for yourself.",
 };
 
+/** The most characters of the list of what it can mount, told in every request. */
+export const OFFERED_MAX = 4_000;
+
+/**
+ * What the agent is told it can mount: each capability on offer by its id and description, and
+ * whether it holds it now, as its skills are named. Nothing when none is on offer.
+ */
+export function offeredText(
+  capabilities: { id: string; title: string; description: string }[],
+  mounted: string[],
+): string | undefined {
+  if (capabilities.length === 0) return undefined;
+  const lines = capabilities.map(
+    ({ id, title, description }) =>
+      `- ${id} (${title}${mounted.includes(id) ? ", mounted" : ""}): ${description}`,
+  );
+  return `## Capabilities
+A capability gives you more to do and know, from your next request. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
+${lines.join("\n")}`;
+}
+
 /** The `control` capability, which an agent holding an AgentOrg control unit holds. */
 export const control = (): Capability => ({
   name: "control",
   title: "Control",
-  inject: ["tools", "hub", "agent"],
+  inject: ["tools", "prompt", "context", "hub", "agent"],
   apply(ctx: Context) {
     const self = ctx.agent.id;
     /** Management's `agents@1` as exposed to the agent now, if it is. */
     const management = () =>
       ctx.hub.exposed().find((one) => one.slot === SLOT && one.described.id === AGENTS_ID)
         ?.call as unknown as Agents | undefined;
+    // What it can mount, read once a turn and told in each of its requests; while management
+    // can't be reached, nothing.
+    let offered: string | undefined;
+    ctx.context.turn(async () => {
+      const calls = management();
+      if (!calls) {
+        offered = undefined;
+        return;
+      }
+      const [{ capabilities }, { mounted = [] }] = await Promise.all([
+        calls.capabilities({}),
+        calls.get({ agent: self }),
+      ]);
+      offered = offeredText(
+        capabilities,
+        mounted.map(({ capability }) => capability),
+      );
+    });
+    ctx.prompt.section({ name: "capabilities", text: () => offered, max: OFFERED_MAX });
     /**
      * Run `work` on management for `agent` (the agent itself if none), once it is the agent itself
      * or one it made; what refuses it is told to the model.

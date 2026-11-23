@@ -25,11 +25,9 @@ import { Computer } from "@agentorg/computer-sdk";
 import { HubState, PERSON } from "@agentorg/hub";
 import { agents } from "@agentorg/interfaces";
 import { connect } from "@agentorg/sdk/client";
-import type { AgentPlugin } from "assistant/plugins";
 import { completed, fakeOpenAI, type Script } from "chatgpt/fake-openai";
-import type { Context } from "cordis";
 import WebSocket from "ws";
-import { type App, type ProgramsOptions, startApp } from "../src/index.ts";
+import { type App, startApp } from "../src/index.ts";
 
 type Reply = {
   id?: number;
@@ -185,7 +183,6 @@ async function open(
   firstRun: {
     assistant?: boolean;
     log?: (line: string) => void;
-    carried?: ProgramsOptions["carried"];
   } = {},
 ) {
   const home = newFolder("agentorg-programs-");
@@ -201,7 +198,6 @@ async function open(
         ...(fetch ? { fetch } : {}),
         // Made only where a test asks for it, so no other test's agents change.
         assistant: firstRun.assistant ?? false,
-        ...(firstRun.carried ? { carried: firstRun.carried } : {}),
       },
     });
     const person = personOf(app, home);
@@ -1278,55 +1274,24 @@ test("an agent made from the Assistant template, with nothing mounted, is told t
   await person.call("agents", "remove", { agent });
 });
 
-test("the person, the agent itself and another program each mount memory on a running agent through management and take it off; get gives all three the same tree, and its lines outlast each and a restart", async (t) => {
+test("the person, the agent itself and another program each mount memory on a running agent through management and take it off; the agent mounts it through its control, which reaches management once mounted, and the lines outlast each and a restart", async (t) => {
   // The model, scripted: each of the agent's requests answered in turn, nothing once those run out.
-  // What each request is told is kept.
+  // What each request is told, and its input, are kept.
   const fake = await fakeOpenAI();
   const told: string[] = [];
+  const inputs: { type: string; call_id?: string; output?: string }[][] = [];
   const answers: object[][] = [];
-  // A test's control capability: what the agent reaches of management's agents@1, bound to it by
-  // hand, for the test to call as the agent.
-  let asAgent: ((method: string, input: object) => Promise<unknown>) | undefined;
-  const steering: AgentPlugin = {
-    name: "steering",
-    inject: ["hub"],
-    apply(ctx: Context) {
-      // What the agent reaches of the Hub, through its connector's `hub`.
-      const { hub } = ctx as unknown as {
-        hub: { exposed(): { slot: string; call: unknown }[] };
-      };
-      asAgent = (method, input) => {
-        const slot = hub.exposed().find((one) => one.slot === "agents");
-        if (!slot) throw new Error("management's agents@1 isn't bound to the agent");
-        return (slot.call as Record<string, (input: object) => Promise<unknown>>)[method]?.(
-          input,
-        ) as Promise<unknown>;
-      };
-    },
-  };
-  const carried = [
-    {
-      plugin: steering,
-      offer: {
-        id: "steering",
-        title: "Steering",
-        description: "The agent's own reach to management, for a test.",
-        arguments: { type: "object" as const, properties: {} },
-      },
-    },
-  ];
-  const s = await open(
-    t,
-    undefined,
-    async (request) => {
-      if (!request.url.endsWith("/responses")) return fake.handle(request);
-      const body = (await request.clone().json()) as { instructions: string };
-      told.push(body.instructions);
-      fake.script({ events: [completed((answers.shift() ?? []) as never)] });
-      return fake.handle(request);
-    },
-    { carried },
-  );
+  const s = await open(t, undefined, async (request) => {
+    if (!request.url.endsWith("/responses")) return fake.handle(request);
+    const body = (await request.clone().json()) as {
+      instructions: string;
+      input: (typeof inputs)[number];
+    };
+    told.push(body.instructions);
+    inputs.push(body.input);
+    fake.script({ events: [completed((answers.shift() ?? []) as never)] });
+    return fake.handle(request);
+  });
   let { person, app, ran } = await s.start();
   const { agents: executor, management } = ran as NonNullable<typeof ran>;
   assert.ok(executor && management);
@@ -1335,13 +1300,6 @@ test("the person, the agent itself and another program each mount memory on a ru
   });
   await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
   const agent = await createAssistant(person, "Keeper");
-  // The agent reaches management's agents@1 as itself, and so does another program on the Hub.
-  app.hub.state.expose(PERSON, {
-    provider: management,
-    export: "agents",
-    to: agent,
-    as: "agents",
-  });
   const made = app.hub.state.createActor(PERSON, {
     name: "Another program",
     bindings: [{ slot: "agents", provider: management, export: "agents" }],
@@ -1360,20 +1318,28 @@ test("the person, the agent itself and another program each mount memory on a ru
   let program = await joinProgram(app.hubUrl);
   type Mounted = { mounted?: { mounted: string; capability: string; by: string }[] };
   const memory = { agent, provider: executor, capability: "memory", arguments: {} };
-  /** A call of management's agents@1 as the agent makes it, through the control capability. */
-  const itself = (method: string, input: object) => {
-    if (!asAgent) throw new Error("The control capability isn't held.");
-    return asAgent(method, input);
-  };
-  /** The tree as each of the three reads it: the same, whoever asks. */
+  /** The tree as the person and the program read it: the same, whoever asks. */
   const tree = async () => {
     const byPerson = (await person.call<Mounted>("agents", "get", { agent })).mounted;
-    const byAgent = ((await itself("get", { agent })) as Mounted).mounted;
     const byProgram = (await program.get({ agent })).mounted;
-    assert.deepEqual(byAgent, byPerson);
     assert.deepEqual(byProgram, byPerson);
     return (byPerson ?? []).map(({ capability, by }) => `${capability} by ${by}`);
   };
+  const idOf = async (capability: string) =>
+    (await person.call<Mounted>("agents", "get", { agent })).mounted?.find(
+      (one) => one.capability === capability,
+    )?.mounted as string;
+  /** Whether management's agents@1 is exposed to the agent. */
+  const reaches = async () =>
+    (
+      await person.call<{ bindings: { consumer: string; slot: string; provider: string }[] }>(
+        "bindings",
+        "list",
+        { actor: agent },
+      )
+    ).bindings.some(
+      (b) => b.consumer === agent && b.slot === "agents" && b.provider === management,
+    );
   const slot = await chatSlot(person, agent);
   await until(
     () =>
@@ -1394,6 +1360,16 @@ test("the person, the agent itself and another program each mount memory on a ru
     );
     return told[from] as string;
   };
+  /** What a call of the agent's returned, by its id, as the model was next sent it. */
+  const output = (id: string) =>
+    inputs.flat().find((item) => item.type === "function_call_output" && item.call_id === id)
+      ?.output;
+  const call = (id: string, name: string, args: object) => ({
+    type: "function_call",
+    call_id: id,
+    name,
+    arguments: JSON.stringify(args),
+  });
   const line = /- \[1\] The person is called Sam\. \(\d{4}-\d{2}-\d{2}\)/;
   const mounted = async (by: string, mount: () => Promise<unknown>) => {
     const result = (await mount()) as { mounted?: string };
@@ -1401,45 +1377,51 @@ test("the person, the agent itself and another program each mount memory on a ru
     return result.mounted;
   };
 
-  // The person mounts the test's control capability, which the agent then reaches management by.
+  // The person mounts control, which reaches management's agents@1 for as long as it is mounted.
+  assert.equal(await reaches(), false);
   await mounted("person", () =>
-    person.call("agents", "mount", { ...memory, capability: "steering" }),
+    person.call("agents", "mount", { ...memory, capability: "control" }),
   );
-  await until(() => asAgent !== undefined, "the control capability to be held");
+  assert.equal(await reaches(), true);
 
   // The person mounts memory; told "Call me Sam.", the agent writes it down.
   const byPerson = await mounted("person", () => person.call("agents", "mount", memory));
-  assert.deepEqual(await tree(), ["steering by person", "memory by person"]);
-  answers.push([
-    {
-      type: "function_call",
-      call_id: "m1",
-      name: "memory__edit",
-      arguments: JSON.stringify({ action: "add", text: "The person is called Sam." }),
-    },
-  ]);
+  assert.deepEqual(await tree(), ["control by person", "memory by person"]);
+  answers.push([call("m1", "memory__edit", { action: "add", text: "The person is called Sam." })]);
   await turn("Call me Sam.");
   assert.match(await turn("What's my name?"), line);
   // Taken off by the person, it tells the agent nothing.
   await person.call("agents", "unmount", { agent, mounted: byPerson });
-  assert.deepEqual(await tree(), ["steering by person"]);
+  assert.deepEqual(await tree(), ["control by person"]);
   assert.doesNotMatch(await turn("Still there?"), line);
 
-  // The agent mounts it itself: the line is there again.
-  const byItself = await mounted(agent, () => itself("mount", memory));
-  assert.deepEqual(await tree(), ["steering by person", `memory by ${agent}`]);
+  // The agent mounts it itself, through its control: it lists what it may mount, and mounts it.
+  answers.push(
+    [call("l1", "control__capability_list", {})],
+    [call("c1", "control__capability_mount", { provider: executor, capability: "memory" })],
+  );
+  await turn("Remember things for me from now on.");
+  const listed = JSON.parse(output("l1") ?? "{}") as { capabilities?: { id: string }[] };
+  assert.ok(
+    listed.capabilities?.some((one) => one.id === "memory"),
+    output("l1"),
+  );
+  assert.match(output("c1") ?? "", /"mounted":"mnt_/);
+  assert.deepEqual(await tree(), ["control by person", `memory by ${agent}`]);
   assert.match(await turn("Remember me?"), line);
-  await itself("unmount", { agent, mounted: byItself });
-  assert.deepEqual(await tree(), ["steering by person"]);
+  // And takes it off itself.
+  answers.push([call("u1", "control__capability_unmount", { mounted: await idOf("memory") })]);
+  await turn("Forget all that.");
+  assert.equal(output("u1"), "{}");
+  assert.deepEqual(await tree(), ["control by person"]);
 
-  // Another program mounts it, and the app starts again: it is still mounted, and the line told.
+  // Another program mounts it, and the app starts again: it is still mounted, the line told, and
+  // control still reaches management.
   await mounted(made.actorId, () => program.mount(memory));
-  assert.deepEqual(await tree(), ["steering by person", `memory by ${made.actorId}`]);
+  assert.deepEqual(await tree(), ["control by person", `memory by ${made.actorId}`]);
   await s.stop();
-  asAgent = undefined;
   ({ person, app, ran } = await s.start());
   program = await joinProgram(app.hubUrl);
-  await until(() => asAgent !== undefined, "the control capability to be held again");
   const again = await chatSlot(person, agent);
   assert.equal(again, slot);
   await until(
@@ -1450,9 +1432,18 @@ test("the person, the agent itself and another program each mount memory on a ru
       ),
     "the chat to be exposed again",
   );
-  assert.deepEqual(await tree(), ["steering by person", `memory by ${made.actorId}`]);
+  assert.deepEqual(await tree(), ["control by person", `memory by ${made.actorId}`]);
   assert.match(await turn("And now?"), line);
-  const [, root] = (await person.call<Mounted>("agents", "get", { agent })).mounted ?? [];
-  await program.unmount({ agent, mounted: root?.mounted as string });
-  assert.deepEqual(await tree(), ["steering by person"]);
+  assert.equal(await reaches(), true);
+  await program.unmount({ agent, mounted: await idOf("memory") });
+  assert.deepEqual(await tree(), ["control by person"]);
+  // Control taken off, it reaches management no more.
+  await person.call("agents", "unmount", { agent, mounted: await idOf("control") });
+  assert.deepEqual(await tree(), []);
+  assert.equal(await reaches(), false);
+  // Removed with memory mounted on it, the agent goes, and memory with it.
+  await mounted("person", () => person.call("agents", "mount", memory));
+  await person.call("agents", "remove", { agent });
+  const { agents: left } = await person.call<{ agents: { agent: string }[] }>("agents", "list");
+  assert.ok(!left.some((one) => one.agent === agent));
 });

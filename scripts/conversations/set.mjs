@@ -8,6 +8,7 @@
 // 21 to 24 and 29 are memory's. Where what the person said before must be out of what the agent
 // reads, a step is `fresh`: the agent's conversations are cleared before it is sent and its memory
 // kept, as when a conversation is shortened or replaced. 29 is said to the agent by another agent.
+// 30 is said to an agent with control and no memory, which it mounts itself.
 
 /** The fixture each agent's workspace starts with: a small repository with 12 TODOs in 5 files. */
 export const FIXTURE = {
@@ -201,6 +202,7 @@ export const GROUPS = [
       { n: 24, say: "What do you know about me?", fresh: true },
     ],
   },
+  { stack: "control", steps: [{ n: 30, say: "Remember things for me from now on." }] },
   {
     steps: [
       {
@@ -344,6 +346,15 @@ export const CHECKS = {
       "plain, and nothing invented",
       // Lantern is in its workspace too: the answer is memory's only with the line.
       c.memory.some((line) => /lantern/i.test(line)),
+    ),
+  // It mounts memory on itself, through its control, and says so in a few words.
+  30: async (c) =>
+    verdict(
+      c.mounted.some((one) => one.capability === "memory" && one.by === c.agent) &&
+        c.replies.length > 0 &&
+        c.words <= 60,
+      c,
+      { mounted: c.mounted.map(({ capability, by }) => `${capability} by ${by}`) },
     ),
   // What it answered the other agent: nothing of its person's lines.
   29: async (c) =>
