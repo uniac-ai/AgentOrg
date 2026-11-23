@@ -51,6 +51,7 @@ import {
   type Worked,
   workedOut,
 } from "./form.js";
+import { CONTROL_ROOT, holdsControl } from "./settings.js";
 import type { SkillFiles, Skills } from "./skills.js";
 
 /** A unit an agent has: what its provider made, and what was filled in. Never a secret. */
@@ -1425,7 +1426,9 @@ export function createStacks(parts: StackParts) {
     if (unit.provider === self) {
       // Only the agents unit has a slot, and a reach to other agents, to take with it.
       if (unit.unit === AGENTS_UNIT) {
-        for (const slot of [AGENTS_SLOT, AGENTS_REACH])
+        // Its reach to management stays while control is mounted on it too.
+        const mounted = record.mounted.some((one) => one.capability === CONTROL_ROOT);
+        for (const slot of mounted ? [AGENTS_SLOT] : [AGENTS_SLOT, AGENTS_REACH])
           await hub.grants.unexpose({ to: agent, slot }).catch((error) => {
             if (!alreadyGone(error)) throw error;
           });
@@ -1475,6 +1478,11 @@ export function createStacks(parts: StackParts) {
   /** Expose management's `agents@1` to an agent, at `AGENTS_REACH`: it is there already, or made. */
   const reachManagement = (agent: string) =>
     hub.grants.expose({ provider: self, export: AGENTS_EXPORT, to: agent, as: AGENTS_REACH });
+  /** Take management's `agents@1` off an agent; one already gone is gone. */
+  const unreachManagement = (agent: string) =>
+    hub.grants.unexpose({ to: agent, slot: AGENTS_REACH }).catch((error) => {
+      if (!alreadyGone(error)) throw error;
+    });
   /**
    * Have every agent holding the control unit reach management's `agents@1`, or only `actor` if it
    * is one: one kept before it was given with the unit, too. Nothing changes where it is there.
@@ -1482,8 +1490,7 @@ export function createStacks(parts: StackParts) {
   const reachControl = async (actor?: string) => {
     for (const [agent, record] of Object.entries(records.agents)) {
       if (actor !== undefined && agent !== actor) continue;
-      if (!record.units.some((unit) => unit.provider === self && unit.unit === AGENTS_UNIT))
-        continue;
+      if (!holdsControl(record, self)) continue;
       await reachManagement(agent).catch((error) => {
         if (!alreadyGone(error)) log.warn(`Reaching management for control: ${messageOf(error)}`);
       });
@@ -1652,6 +1659,8 @@ export function createStacks(parts: StackParts) {
     fromUnit,
     reachHeld,
     reachControl,
+    reachManagement,
+    unreachManagement,
     holdOwns,
     reachAgents,
     refreshSkills,

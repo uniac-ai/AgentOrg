@@ -20,8 +20,7 @@
 import type { capabilityProvider, HeldCapability } from "@agentorg/interfaces";
 import { type Log, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
-import { AGENTS_UNIT } from "./control.js";
-import { CONTROL_ROOT, OWN_ROOTS } from "./settings.js";
+import { CONTROL_ROOT, holdsControl, OWN_ROOTS, unitControls } from "./settings.js";
 import type { AgentRecord, MountRecord } from "./stack.js";
 
 type Provider = Slot<typeof capabilityProvider>["call"];
@@ -43,6 +42,8 @@ export interface MountParts {
   providers(): { actor: string; call: Provider }[];
   /** Tell the agent its settings changed. */
   changed(agent: string): void;
+  /** Have an agent holding control reach management's `agents@1`, or no longer. */
+  reachControl(agent: string, reach: boolean): Promise<void>;
 }
 
 const alreadyGone = (error: unknown) => error instanceof Refused && error.code === "unknown";
@@ -95,7 +96,7 @@ export function createMounts(parts: MountParts) {
   /** Whether a root of the agent's tree came with a unit: its control, or a plugin of one. */
   const fromUnit = (record: TheAgent, mounted: string) =>
     mounted === CONTROL_ROOT
-      ? record.units.some((unit) => unit.provider === self && unit.unit === AGENTS_UNIT)
+      ? unitControls(record, self)
       : record.capabilities.some(({ plugins = [] }) =>
           plugins.some((plugin) => plugin.name === mounted),
         );
@@ -137,7 +138,8 @@ export function createMounts(parts: MountParts) {
         // Held once, whether it was mounted or built by a unit.
         if (
           record.mounted.some((one) => one.capability === capability) ||
-          record.capabilities.some((one) => one.id === capability)
+          record.capabilities.some((one) => one.id === capability) ||
+          (capability === CONTROL_ROOT && unitControls(record, self))
         )
           throw new Refused("state", `It holds a ${defined.title} already.`);
         const secrets = secretsOf(defined.arguments);
@@ -179,6 +181,8 @@ export function createMounts(parts: MountParts) {
         }
         root.providerMounted = made.mounted;
         save();
+        // Control reaches management's agents@1, as the control unit's does.
+        if (capability === CONTROL_ROOT) await parts.reachControl(agent, true);
         return { mounted: root.mounted };
       }),
 
@@ -208,26 +212,37 @@ export function createMounts(parts: MountParts) {
           changed(agent);
           throw error;
         }
+        if (root.capability === CONTROL_ROOT && !holdsControl(record, self))
+          await parts.reachControl(agent, false);
         return {};
       }),
 
     /**
-     * Every root of a removed agent, last first, through its provider: one whose provider is
-     * away, or has lost it, simply goes; one that can't go leaves the agent to be tried again.
+     * Every root of a removed agent, last first: off the record first, so the agent's settings no
+     * longer name it, then through its provider, as `unmount` does. One whose provider is away, or
+     * has lost it, simply goes; one that can't go is put back, and leaves the agent to be tried
+     * again.
      */
     async unmountAll(agent: string, record: TheAgent) {
       for (const root of [...record.mounted].reverse()) {
+        const at = record.mounted.indexOf(root);
+        record.mounted.splice(at, 1);
+        save();
+        changed(agent);
         try {
           await takeOff(agent, root);
         } catch (error) {
-          if (!(error instanceof Refused && error.code === "not_connected")) throw error;
+          if (!(error instanceof Refused && error.code === "not_connected")) {
+            record.mounted.splice(Math.min(at, record.mounted.length), 0, root);
+            save();
+            changed(agent);
+            throw error;
+          }
           log.warn("A capability's provider can't be reached as its agent is removed.", {
             agent,
             mounted: root.mounted,
           });
         }
-        record.mounted = record.mounted.filter((one) => one !== root);
-        save();
       }
     },
 

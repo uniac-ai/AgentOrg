@@ -838,23 +838,37 @@ process.exit(exitCode);
  * An agent measured: the Assistant's base, a computer, the web, and memory. Memory is on offer in
  * no template and no list of units, so this stack names management's Memory unit, as a test does,
  * finding management as the provider of its own Skill unit: a test's arrangement, not how a
- * person gets memory.
+ * person gets memory. With `stack` "control", it has control mounted in place of memory, which it
+ * mounts itself.
  */
-async function measuredAgent(name) {
+async function measuredAgent(name, stack) {
   const { units, bases } = await person.call("agents", "units");
   const by = (id) => units.find((one) => one.id === id)?.provider;
   const base = bases.find((one) => one.id === "assistant");
+  const controlled = stack === "control";
   const { agent } = await person.call("agents", "create", {
     stack: {
       base: { provider: base.provider, creatable: base.id },
       units: [
         { provider: by("computer"), unit: "computer", values: COMPUTER },
         { provider: by("web"), unit: "web", values: { service: "exa" } },
-        { provider: by("skill"), unit: "memory" },
+        ...(controlled ? [] : [{ provider: by("skill"), unit: "memory" }]),
       ],
     },
     name,
   });
+  if (controlled) {
+    const { capabilities } = await person.call("agents", "capabilities");
+    const offered = capabilities.find((one) => one.id === "control");
+    if (!offered) throw new Error("Control isn't on offer.");
+    const made = await person.call("agents", "mount", {
+      agent,
+      provider: offered.provider,
+      capability: "control",
+      arguments: {},
+    });
+    if (!made.mounted) throw new Error(`Control wasn't mounted: ${JSON.stringify(made)}`);
+  }
   return agent;
 }
 
@@ -936,7 +950,7 @@ async function playLong() {
 /** One group on an agent of its own: made, played, measured and removed. */
 async function playGroup(group, at, service) {
   const name = `Runner ${at + 1}`;
-  const agent = await measuredAgent(name);
+  const agent = await measuredAgent(name, group.stack);
   try {
     await until(
       `${name} running`,
@@ -1229,6 +1243,9 @@ async function playSteps(group, at, slot, files, { agent, name }) {
           : undefined,
       memory: memoryOf(agent),
       memoryBefore: before[i] ?? [],
+      // What is mounted on the agent after its turn, and by whom.
+      agent,
+      mounted: (await person.call("agents", "get", { agent })).mounted ?? [],
     };
     // What the check reads is kept with the conversation, as it was read.
     const read = {};

@@ -17,11 +17,6 @@ import { ACTIVITY, serveWork } from "./work.js";
 
 /** Where the agent keeps the model chosen for it, beside its conversations in the store. */
 const MODEL_KEY = "settings/model";
-/**
- * Its control, which it doesn't hold from its settings yet: holding it changes what the agent is
- * offered, so it comes with the change that measures that.
- */
-const CONTROL = "control";
 /** How a section a capability adds through `prompt` is owned. */
 const SECTION = "plugin:";
 
@@ -87,10 +82,7 @@ export function startEngine(
       if (!ctx.slots.settings.bound) return undefined;
       const { mounted } = await ctx.slots.settings.call.get({});
       const named = mounted
-        .filter(
-          ({ provider, capability }) =>
-            (provider === undefined || provider === options.self) && capability !== CONTROL,
-        )
+        .filter(({ provider }) => provider === undefined || provider === options.self)
         .map(({ capability, arguments: settings }) => ({ name: capability, settings }));
       return { mounted, given: await plugins.hold(named) };
     });

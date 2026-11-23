@@ -154,16 +154,18 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   const log = options.log ?? quiet;
   const { hubUrl, dir } = options;
   const offers = options.offers ?? [];
-  const carried = new Set((options.plugins ?? []).map((plugin) => plugin.name));
-  for (const { id } of offers)
-    if (!carried.has(id)) throw new Error(`It offers ${id}, which it doesn't carry.`);
-  /** Every agent's plugins, each agent in a context of its own. */
-  const host = createPluginHost(log, [
+  // Its own, then those it is given.
+  const plugins = [
     instructions({ now: () => ASSISTANT_INSTRUCTIONS, earlier: EARLIER_INSTRUCTIONS }),
     skills(),
     control(),
     ...(options.plugins ?? []),
-  ]);
+  ];
+  const carried = new Set(plugins.map((plugin) => plugin.name));
+  for (const { id } of offers)
+    if (!carried.has(id)) throw new Error(`It offers ${id}, which it doesn't carry.`);
+  /** Every agent's plugins, each agent in a context of its own. */
+  const host = createPluginHost(log, plugins);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, FILE);
