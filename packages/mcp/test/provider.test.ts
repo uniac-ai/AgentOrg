@@ -16,7 +16,14 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Hub, listen, PERSON } from "@agentorg/hub";
-import { hubActors, hubExports, hubGrants, tools, unitProvider } from "@agentorg/interfaces";
+import {
+  capabilityProvider,
+  hubActors,
+  hubExports,
+  hubGrants,
+  tools,
+  unitProvider,
+} from "@agentorg/interfaces";
 import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
@@ -142,7 +149,35 @@ async function setup(t: test.TestContext, timing?: Timing) {
   };
   const connected = (connection: string) =>
     until(async () => (await mcp.status({ connection })).state === "connected");
-  return { hub, person, mcp, units, dir, logged, provider, start, consumerOf, connected };
+  /** The provider's `capability.provider@1`, as management reaches it. */
+  const capabilitiesOf = async () => {
+    const manages = hub.state.createActor(PERSON, {
+      name: "Manages",
+      bindings: [{ slot: "capabilities", provider: made.actorId, export: "capabilities" }],
+    });
+    const client = await connect({
+      hubUrl: server.url,
+      actorId: manages.actorId,
+      credential: manages.credential as string,
+      slots: { capabilities: capabilityProvider },
+    });
+    leaving.push(() => client.close());
+    await until(() => client.slots.capabilities.bound);
+    return client.slots.capabilities.call;
+  };
+  return {
+    hub,
+    person,
+    mcp,
+    units,
+    dir,
+    logged,
+    provider,
+    start,
+    consumerOf,
+    connected,
+    capabilitiesOf,
+  };
 }
 
 test("the provider offers its two kinds as units, each making one connection", async (t) => {
@@ -816,4 +851,139 @@ test("connections stay across a restart, kept privately; removing one closes its
   await assert.rejects(mcp.status({ connection }), refused("unknown"));
   await assert.rejects(mcp.remove({ connection }), refused("unknown"));
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "connections.json"), "utf8")), {});
+});
+
+test("its two kinds are capabilities too, any number to an agent: each unit's form as its arguments, the token and the environment secret", async (t) => {
+  const { units, capabilitiesOf } = await setup(t);
+  const capabilities = await capabilitiesOf();
+  const offered = (await capabilities.capabilities({})).capabilities;
+  const forms = (await units.units({})).units;
+  assert.deepEqual(
+    offered.map(({ id, title, description, many }) => ({ id, title, description, many })),
+    forms.map(({ id, title, description }) => ({ id, title, description, many: true })),
+  );
+  for (const [at, capability] of offered.entries()) {
+    const properties = capability.arguments.properties as Record<string, Record<string, unknown>>;
+    // The unit's fields, by title, the environment's lines named as what they are.
+    assert.deepEqual(
+      Object.values(properties).map((one) => one.title),
+      forms[at]?.form.map((field) => field.title),
+    );
+    assert.equal(capability.arguments.additionalProperties, false);
+  }
+  const [url, command] = offered.map(
+    (one) => one.arguments as unknown as { properties: Record<string, Record<string, unknown>> },
+  );
+  assert.equal(url?.properties.token?.secret, true);
+  assert.equal(command?.properties.environment?.secret, true);
+  assert.deepEqual(
+    offered.map((one) => one.arguments.required),
+    [
+      ["url", "slot"],
+      ["command", "slot"],
+    ],
+  );
+  await assert.rejects(
+    capabilities.skill({ capability: "url", name: "x", path: "SKILL.md" }),
+    refused("unknown"),
+  );
+});
+
+test("two servers mounted on one agent are each its own connection at its slot, said mounted once up and down with why; one unmounted closes its Actor, and its secret goes with it", async (t) => {
+  const { hub, person, dir, consumerOf, capabilitiesOf, provider, start } = await setup(t, {
+    pingEveryMs: 100,
+    firstDelayMs: 200,
+  });
+  const capabilities = await capabilitiesOf();
+  const agent = hub.state.createActor(PERSON, { name: "Ada" }).actorId;
+  const other = hub.state.createActor(PERSON, { name: "Bea" }).actorId;
+  const token = randomUUID();
+  const server = await httpServer(t, token);
+  const local = await capabilities.mount({
+    agent,
+    capability: "command",
+    arguments: { ...command, environment: "AGENTORG_TEST_GIVEN=given", slot: "local" },
+  });
+  const remote = await capabilities.mount({
+    agent,
+    capability: "url",
+    arguments: { url: server.url, token, slot: "remote" },
+  });
+  assert.ok("mounted" in local && "mounted" in remote, JSON.stringify([local, remote]));
+  assert.notEqual(local.mounted, remote.mounted);
+  assert.deepEqual(local.made, {
+    connections: [
+      { slot: "local", connection: local.mounted, target: `${process.execPath} ${fixture}` },
+    ],
+  });
+  assert.deepEqual(
+    remote.made?.connections?.map(({ slot, target }) => [slot, target]),
+    [["remote", server.url]],
+  );
+  // Named as its agent is, as a unit's connection is.
+  assert.equal(
+    (await person.slots.actors.call.get({ actorId: local.mounted })).name,
+    "Ada: A local server this machine starts",
+  );
+  const stateOf = (mounted: string) => capabilities.status({ agent, mounted });
+  await until(async () => (await stateOf(local.mounted)).state === "mounted");
+  await until(async () => (await stateOf(remote.mounted)).state === "mounted");
+  // Each runs: the local one has its environment, the remote one its token.
+  const { call } = await consumerOf(local.mounted);
+  assert.deepEqual(await call.call({ name: "env", arguments: { name: "AGENTORG_TEST_GIVEN" } }), {
+    output: "given",
+  });
+  const { call: far } = await consumerOf(remote.mounted);
+  assert.deepEqual(await far.call({ name: "ping", arguments: { n: 1 } }), { output: "pong 1" });
+  // Kept privately with the agent, so it comes back after a restart; nothing read back says it.
+  const kept = JSON.parse(readFileSync(join(dir, "connections.json"), "utf8"));
+  assert.equal(kept[remote.mounted].agent, agent);
+  assert.equal(kept[remote.mounted].secrets.token, token);
+  await provider.current.close();
+  provider.current = await start();
+  const again = await capabilitiesOf();
+  await until(async () =>
+    again.status({ agent, mounted: remote.mounted }).then(
+      (one) => one.state === "mounted",
+      () => false,
+    ),
+  );
+  // Its server gone, it is down, with why.
+  server.stop();
+  await until(
+    async () => (await again.status({ agent, mounted: remote.mounted })).state === "down",
+  );
+  assert.ok((await again.status({ agent, mounted: remote.mounted })).detail);
+  // Another agent's are refused it, as one it doesn't have is.
+  await assert.rejects(again.status({ agent: other, mounted: local.mounted }), refused("unknown"));
+  await assert.rejects(again.unmount({ agent: other, mounted: local.mounted }), refused("unknown"));
+  await again.unmount({ agent, mounted: local.mounted });
+  assert.equal((await person.slots.actors.call.get({ actorId: local.mounted })).state, "closed");
+  await assert.rejects(again.status({ agent, mounted: local.mounted }), refused("unknown"));
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, "connections.json"), "utf8"))), [
+    remote.mounted,
+  ]);
+});
+
+test("a mount whose arguments don't fit its kind says why and makes nothing; a capability it doesn't make is refused", async (t) => {
+  const { hub, dir, capabilitiesOf } = await setup(t);
+  const capabilities = await capabilitiesOf();
+  const agent = hub.state.createActor(PERSON, { name: "Ada" }).actorId;
+  assert.deepEqual(await capabilities.mount({ agent, capability: "command", arguments: command }), {
+    problems: [{ path: "/slot", message: "Name must be given." }],
+  });
+  const wrong = await capabilities.mount({
+    agent,
+    capability: "url",
+    arguments: { url: "ftp://example.com", slot: "far" },
+  });
+  assert.ok("problems" in wrong && wrong.problems[0]?.message.startsWith("url:"));
+  await assert.rejects(
+    capabilities.mount({ agent, capability: "github", arguments: {} }),
+    refused("unknown"),
+  );
+  assert.deepEqual(
+    readdirSync(dir).filter((one) => one.startsWith("connections")),
+    [],
+  );
 });
