@@ -946,15 +946,19 @@ export function Thread({
 const SAME_SIDE = "-mt-5";
 const SIDE_CHANGES = "-mt-2";
 
-/** How soon after a person moves the room its having moved is theirs, and not what came. */
-const THEIRS_MS = 400;
+/** How near its end the room is at it, as the scroller counts it. */
+const AT_END = 8;
 
 /**
  * The room a chat is read in. The scroller keeps its end in view as what is said comes, so the
- * latest message is at its foot, until the person scrolls away; from the end it follows again. A
- * person who moved the room while all of it was in view hasn't scrolled away: the end is gone to
- * here when what came passes the foot. One who has is past the foot already, so nothing moves
- * them but a message of their own, which is always gone to.
+ * latest message is at its foot, until the room is scrolled away; from the end it follows again.
+ *
+ * The room itself only ever goes down, to its end. A scroll up that leaves it short of its end is
+ * therefore someone else's, however it was made: the wheel, a touch, a key, the browser finding
+ * words in an earlier message, or a script showing one. It is left where it was put, and nothing
+ * moves it but its being scrolled to its end again, or a message of the person's own, which is
+ * always gone to. A person who moved the wheel while all of it was in view has scrolled nothing:
+ * the end is gone to here when what came passes the foot.
  */
 function Room({
   sent,
@@ -966,12 +970,11 @@ function Room({
 }) {
   const { scrollToEnd } = useMessageScroller();
   const { end: more } = useMessageScrollerScrollable();
-  const moved = useRef(0);
-  const theirs = () => {
-    moved.current = Date.now();
-  };
+  /** Whether the room was scrolled away from its end, and where it was when it last scrolled. */
+  const away = useRef(false);
+  const top = useRef(0);
   useEffect(() => {
-    if (more && Date.now() - moved.current > THEIRS_MS) scrollToEnd({ behavior: "auto" });
+    if (more && !away.current) scrollToEnd({ behavior: "auto" });
   }, [more, scrollToEnd]);
   useEffect(() => {
     if (sent) scrollToEnd({ behavior: "auto" });
@@ -979,9 +982,17 @@ function Room({
   return (
     <MessageScrollerViewport
       className="no-bar"
-      onWheel={theirs}
-      onTouchMove={theirs}
-      onKeyDown={theirs}
+      onScroll={({ currentTarget: room }) => {
+        const up = room.scrollTop < top.current;
+        top.current = room.scrollTop;
+        if (room.scrollHeight - room.scrollTop - room.clientHeight <= AT_END) away.current = false;
+        else if (up) {
+          away.current = true;
+          // The scroller stops following at a wheel: it is told of this scroll as one, since for a
+          // moment after a scroll of its own it takes a scroll up for its own too.
+          room.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+        }
+      }}
     >
       {children}
     </MessageScrollerViewport>
