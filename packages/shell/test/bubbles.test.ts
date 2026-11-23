@@ -1,9 +1,8 @@
-// A message's bubbles, without a browser: the rule on texts of every shape, and on every prefix
-// of a long reply as it is written.
+// A message's bubbles, without a browser: the rule on texts of every shape.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { bubblesOf } from "../src/fixed/bubbles.ts";
-import { chunksOf, SAID } from "./design/samples.ts";
+import { SAID } from "./design/samples.ts";
 
 const fence = "```";
 const LONG_REPLY = SAID.long;
@@ -96,22 +95,7 @@ const cases: [string, string, string[]][] = [
 for (const [name, text, bubbles] of cases)
   test(name, () => assert.deepEqual(bubblesOf(text), bubbles));
 
-test("as a reply is written, the bubbles before the last never change, and one is added at a time", () => {
-  const chunks = chunksOf(LONG_REPLY);
-  let was: string[] = [];
-  for (let i = 1; i <= chunks.length; i++) {
-    const now = bubblesOf(chunks.slice(0, i).join(""));
-    assert.deepEqual(now.slice(0, was.length - 1), was.slice(0, -1), `kept, at chunk ${i}`);
-    assert.ok(
-      now.length >= was.length && now.length <= was.length + 1,
-      `one at a time, at chunk ${i}: ${was.length} → ${now.length}`,
-    );
-    was = now;
-  }
-  assert.equal(was.length, 6, "written out, the whole reply's six");
-});
-
-/** Replies of many shapes, each with its bubbles once written out. */
+/** Replies of many shapes, each with its bubbles. */
 const SHAPES: [string, string, string[]][] = [
   [
     "numbered, tight",
@@ -203,35 +187,5 @@ const SHAPES: [string, string, string[]][] = [
     ],
   ],
 ];
-for (const [name, text, written] of SHAPES)
-  test(`${name}: as it is written, a character at a time, no bubble drawn goes, splits or merges; written out, its bubbles are as before`, () => {
-    let before: string[] = [];
-    for (let n = 1; n <= text.length; n++) {
-      const now = bubblesOf(text.slice(0, n), true);
-      const at = JSON.stringify(text.slice(0, n));
-      assert.ok(now.length >= before.length, `none goes, at ${at}`);
-      assert.deepEqual(
-        now.slice(0, before.length - 1),
-        before.slice(0, -1),
-        `those before the last are the same, at ${at}`,
-      );
-      const last = before.at(-1);
-      if (last !== undefined)
-        assert.ok(
-          (now[before.length - 1] ?? "").startsWith(last),
-          `the last only gains words, at ${at}`,
-        );
-      before = now;
-    }
-    assert.deepEqual(bubblesOf(text), written);
-  });
-
-test("while written, a last paragraph that is only a number or a list's mark isn't drawn until the next piece says what it is; settled, it is", () => {
-  assert.deepEqual(bubblesOf("Here are the steps:\n\n1", true), ["Here are the steps:"]);
-  assert.deepEqual(bubblesOf("Here are the steps:\n\n1.", true), ["Here are the steps:", "1."]);
-  assert.deepEqual(bubblesOf("First line.\n\n*", true), ["First line."]);
-  assert.deepEqual(bubblesOf("First line.\n\n*r", true), ["First line.", "*r"]);
-  assert.deepEqual(bubblesOf("-", true), []);
-  assert.deepEqual(bubblesOf("First line.\n\n42", true), ["First line."]);
-  assert.deepEqual(bubblesOf("First line.\n\n42"), ["First line.", "42"]);
-});
+for (const [name, text, bubbles] of SHAPES)
+  test(`${name}: its bubbles`, () => assert.deepEqual(bubblesOf(text), bubbles));

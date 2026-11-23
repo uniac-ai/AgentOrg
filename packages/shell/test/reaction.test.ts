@@ -179,6 +179,14 @@ test(
     await emoji(thread).waitFor();
     gateway.addMessage("a-research", reply("v-a8", "Glad it helped."));
     await thread.getByText("Glad it helped.").waitFor();
+    // Once the reply has come in: it rises through a few pixels as it does.
+    await thread.evaluate((root) =>
+      Promise.all(
+        [...root.querySelectorAll('[data-slot="message"]')]
+          .flatMap((message) => message.getAnimations())
+          .map((one) => one.finished),
+      ),
+    );
     const changes = await read(thread);
     assert.equal(changes.next && changes.next.top - changes.pill.bottom, 16);
     await page.close();

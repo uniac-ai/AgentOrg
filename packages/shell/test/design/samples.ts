@@ -289,10 +289,6 @@ Half are in the cart folder, and four of those are about coupons.`,
 
 Should I add them?`,
 };
-/** A reply as the design writes it out: a word at a time, a list's mark with the word after it. */
-export const chunksOf = (text: string) => text.match(/(?:[-*+]|\d+\.)[ \t]+\S+\s*|\S+\s*/g) ?? [];
-/** The long reply as far as the design has written it 3.5 s in. */
-export const WRITTEN_SO_FAR = chunksOf(SAID.long).slice(0, 48).join("");
 
 /** Research's conversation at one of the design's moments for a reply's bubbles, by its control. */
 export const MOMENTS = {
@@ -307,7 +303,7 @@ export type Moment = keyof typeof MOMENTS;
 /**
  * Research's conversation, built, at one of those moments, as the design's control puts it: each
  * moment its own conversation, Research working while the work goes on or a reply is written. A
- * reply being written is written as far as the design has it at the moment it is shown.
+ * reply being written has not come yet: the built side shows the agent typing.
  */
 export function researchSays(gateway: Gateway, moment: Moment) {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -342,9 +338,6 @@ export function researchSays(gateway: Gateway, moment: Moment) {
     state: moment === "receipt" || moment === "writing" ? "working" : "idle",
   });
 }
-/** The reply being written, as far as the design has it: the words that have come. */
-export const writeSoFar = (gateway: Gateway) => gateway.delta("a-research", "v-a2", WRITTEN_SO_FAR);
-
 /** The person's second message, sent while the agent types after the first. */
 export const SECOND_ASK = "Also, which folder has the coupons?";
 /** The person's message that needs no reply. */

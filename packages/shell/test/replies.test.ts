@@ -113,21 +113,10 @@ async function receiptThenResult(gateway: Gateway, page: Page, thread: Locator) 
   await ask(gateway, thread, "Is #482 ready to merge?");
   gateway.addMessage("a-reviewer", reply("r-receipt", "Looking at #482 now."));
   await message(thread, "Looking at #482 now.").waitFor();
-  // While the result is being written, it offers no menu; the receipt, settled, does.
-  gateway.delta("a-reviewer", "r-result", "It is ready: ");
-  await message(thread, "It is ready:").waitFor();
-  let now = await said(thread);
-  assert.deepEqual(
-    now.agent.slice(-2).map(({ text, more }) => [text, more]),
-    [
-      ["Looking at #482 now.", true],
-      ["It is ready:", false],
-    ],
-  );
   gateway.addMessage("a-reviewer", reply("r-result", "It is ready: the tests pass."));
   gateway.setChatStatus("a-reviewer", { state: "idle" });
   await message(thread, "the tests pass.").getByRole("button", { name: "More" }).waitFor();
-  now = await said(thread);
+  const now = await said(thread);
   const [receipt, result] = now.agent.slice(-2);
   assert.ok(receipt && result && now.asked);
   assert.deepEqual(
@@ -172,29 +161,30 @@ test(
 );
 
 test(
-  "a message being written and the same one once recorded are one element, and nothing animates again",
+  "a message that has come is the same element when the next comes, and nothing of it moves again",
   withGateway(async (gateway) => {
     const { page, thread } = await conversation(gateway, "floating");
     await ask(gateway, thread, "Why did it fail?");
-    gateway.delta("a-reviewer", "r1", "Three causes ");
-    await thread.locator("[data-sd-animate]").first().waitFor();
-    gateway.delta("a-reviewer", "r1", "explain it.");
-    await message(thread, "explain it.").waitFor();
-    await message(thread, "explain it.").evaluate((e) => {
+    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    await message(thread, "Three causes explain it.").waitFor();
+    // Once it has come in: that is the one time it moves.
+    await message(thread, "Three causes explain it.").evaluate(async (e) => {
+      const whole = e.querySelector('[data-slot="message"]') as Element;
+      await Promise.all(whole.getAnimations().map((one) => one.finished));
       (e as HTMLElement & { kept?: true }).kept = true;
     });
-    gateway.addMessage("a-reviewer", reply("r1", "Three causes explain it."));
+    gateway.addMessage("a-reviewer", reply("r2", "The first is the lock file."));
     gateway.setChatStatus("a-reviewer", { state: "idle" });
-    await message(thread, "Three causes explain it.")
+    await message(thread, "The first is the lock file.")
       .getByRole("button", { name: "More" })
       .waitFor();
-    await thread.locator("[data-sd-animate]").waitFor({ state: "detached" });
-    // Its words: what its "⋯" does as it appears is its own.
+    // The message and its words: what its "⋯" does as it appears is its own.
     const after = await message(thread, "Three causes explain it.").evaluate((e) => ({
       kept: !!(e as HTMLElement & { kept?: true }).kept,
-      moving: (e.querySelector(".prose-chat") as Element)
-        .getAnimations({ subtree: true })
-        .filter((one) => one.playState === "running").length,
+      moving: [
+        ...(e.querySelector('[data-slot="message"]') as Element).getAnimations(),
+        ...(e.querySelector(".prose-chat") as Element).getAnimations({ subtree: true }),
+      ].filter((one) => one.playState === "running").length,
     }));
     assert.deepEqual(after, { kept: true, moving: 0 });
     assert.equal(await message(thread, "Three causes explain it.").count(), 1);

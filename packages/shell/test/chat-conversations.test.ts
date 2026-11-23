@@ -138,17 +138,14 @@ test(
     const page = await open(gateway);
     gateway.addMessage("a-reviewer", reply("r3", "Said to you."));
     await panel(page).getByText("Said to you.").waitFor();
-    // Its conversation with another agent speaks last, then yours streams: by then both readers
-    // have heard it.
+    // Its conversation with another agent speaks, then yours: by then both readers have heard it.
     gateway.sayWith("a-reviewer", "a-research", reply("x1", "Said to Research."));
-    gateway.delta("a-reviewer", "x2", "Writing to Research", "a-research");
-    gateway.delta("a-reviewer", "r4", "Still writing");
-    await panel(page).getByText("Still writing").waitFor();
+    gateway.addMessage("a-reviewer", reply("r4", "Said to you again."));
+    await panel(page).getByText("Said to you again.").waitFor();
     assert.equal(await panel(page).getByText("Said to Research.").count(), 0);
-    assert.equal(await panel(page).getByText("Writing to Research").count(), 0);
     await panel(page).getByRole("button", { name: "All chats" }).click();
     const listed = panel(page).getByRole("list", { name: "Chats" });
-    await listed.getByText("Said to you.").waitFor();
+    await listed.getByText("Said to you again.").waitFor();
     assert.equal(await listed.getByText("Said to Research.").count(), 0);
     assert.equal(await listed.getByRole("button").filter({ hasText: "Reviewer" }).count(), 1);
     await page.close();
@@ -212,8 +209,8 @@ test(
     const read = gateway.calls.find((c) => c.method === "history" && c.input.with);
     assert.equal(read?.input.with, "a-research");
     // What comes in it shows as it comes; what is said to you doesn't.
-    gateway.delta("a-reviewer", "q4", "Three touch the retry path.", "a-research");
-    gateway.delta("a-reviewer", "r9", "Said to you.");
+    gateway.addMessage("a-reviewer", reply("r9", "Said to you."));
+    gateway.sayWith("a-reviewer", "a-research", reply("q4", "Three touch the retry path."));
     await panel(page).getByText("Three touch the retry path.").waitFor();
     assert.equal(await panel(page).getByText("Said to you.").count(), 0);
     // Reading it marks nothing of yours as read.

@@ -2014,15 +2014,6 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
         release();
       };
     },
-    /** A piece of a reply as it is written: in the person's conversation, or another party's. */
-    delta: (agent: string, id: string, text: string, party = PERSON) =>
-      party === PERSON
-        ? say(agentOf(agent), "delta", { id, text })
-        : emit(
-            chatSlot(agent),
-            "delta",
-            chatInterface.events.delta.payload.parse({ with: party, id, text }),
-          ),
     /**
      * A message in the agent's conversation with another party, as the service tells the person:
      * the conversation as it now is, then the message. Its first message begins it.
