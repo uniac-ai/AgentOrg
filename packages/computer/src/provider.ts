@@ -34,6 +34,7 @@ import {
 } from "@agentorg/computer-sdk";
 import {
   capability,
+  capabilityProvider,
   type FactRow as FactRowShape,
   hubActors,
   type Problem,
@@ -45,6 +46,7 @@ import { type Log, Refused } from "@agentorg/sdk";
 import { type Client, connect } from "@agentorg/sdk/client";
 import WebSocket from "ws";
 import { z } from "zod";
+import { argumentsOf, settle, skillsOf } from "./arguments.js";
 import {
   type Access,
   BROWSER_SLOT,
@@ -1557,7 +1559,8 @@ export async function startComputerProvider(
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors },
-    exports: { provider: unitProvider },
+    // Its units, and the same as capabilities, while the page moves from one to the other.
+    exports: { provider: unitProvider, capabilities: capabilityProvider },
     log,
     start(ctx) {
       const known = (unit: string) => {
@@ -1572,150 +1575,241 @@ export async function startComputerProvider(
           return !(error instanceof Refused && error.code === "unknown");
         }
       };
+      /**
+       * Make what a unit's answers ask for: its computer or the web's server, the Actors the agent
+       * reaches them by, and the capability's own Actor beside a computer. All of it or none.
+       */
+      const make = async ({
+        unit,
+        values,
+        secrets,
+        name,
+        agent,
+        agentName,
+      }: {
+        unit: string;
+        values: Record<string, unknown>;
+        secrets: Record<string, string>;
+        name: string;
+        agent: string;
+        agentName?: string | undefined;
+      }) => {
+        const which = await asksWhich();
+        const wrong = problems(unit, values, await findLocal(), Object.keys(secrets), which);
+        if (wrong.length > 0)
+          throw new Refused("invalid", wrong.map((problem) => problem.message).join(" "));
+        const instance = `${unit}_${randomBytes(9).toString("hex")}`;
+        const web = { url: options.webUrl ?? EXA_URL };
+        const { servers, computer, rows } =
+          unit === WEB
+            ? {
+                servers: [{ slot: WEB, url: web.url, target: new URL(web.url).host }],
+                computer: undefined,
+                rows: undefined,
+              }
+            : await makeComputer(values, secrets, name, agent, which, agentName);
+        const entry: Instance = {
+          agent,
+          links: [],
+          ...(computer
+            ? { computer, words: WORDS, kind: kindOf(values, which) === THIS ? THIS : NEW }
+            : {}),
+        };
+        const made: Connection[] = [];
+        const connections: { slot: string; connection: string; target: string }[] = [];
+        try {
+          for (const { slot, url, target } of servers) {
+            // A name of its own for each, as a computer can be two Actors.
+            const { actorId, credential } = await ctx.slots.actors.call.create({
+              name: servers.length > 1 ? `${name} (${slot})`.slice(0, 128) : name,
+            });
+            const link = { slot, actor: actorId, credential: credential as string, url };
+            entry.links.push(link);
+            made.push(await open(link, computer));
+            connections.push({ slot, connection: actorId, target });
+          }
+          // The capability is an Actor of its own, beside the computer's connections.
+          if (computer) {
+            const { actorId, credential } = await ctx.slots.actors.call.create({
+              name: `${name} (windows)`.slice(0, 128),
+            });
+            entry.capability = { actor: actorId, credential: credential as string };
+          }
+          if (entry.capability) await joinCapability(instance, entry.capability, made);
+          // Checked after the last wait: a stop meanwhile ended only what was running then.
+          if (closing) throw new Refused("unavailable", "This provider is stopping.");
+          running.set(instance, made);
+          stored[instance] = entry;
+          save();
+          // The agent's next computer is this one: a folder kept from before is used up.
+          if (computer && earlier[agent] !== undefined) {
+            delete earlier[agent];
+            keepEarlier();
+          }
+          // It has a computer here again: what it had before no longer keeps the form asking.
+          if (computer && hadNew.delete(agent)) keepHadNew();
+          for (const server of made) server.run();
+        } catch (error) {
+          running.delete(instance);
+          delete stored[instance];
+          capabilities.get(instance)?.close();
+          capabilities.delete(instance);
+          await Promise.all(made.map((server) => server.end()));
+          for (const { actor } of [...entry.links, ...(entry.capability ? [entry.capability] : [])])
+            await ctx.slots.actors.call.close({ actorId: actor }).catch(() => {});
+          if (computer)
+            await killComputer(computer).catch((failed) =>
+              log.warn(`A computer may be left on its service: ${String(failed)}`),
+            );
+          throw error;
+        }
+        return {
+          instance,
+          connections,
+          results: [],
+          ...(entry.capability && rows
+            ? { capability: { actor: entry.capability.actor, rows } }
+            : {}),
+        };
+      };
+      /** A file of a skill a unit gives, with the hashes of the texts it had when shipped before. */
+      const skillText = async (unit: string, name: string, file: string) => {
+        if (!SKILLS[unit]?.includes(name) || !skillFiles(name).includes(file))
+          throw new Refused("unknown", `${unit} has no file ${file} of a skill ${name}.`);
+        const text = await readFile(join(SKILLS_DIR, name, file), "utf8");
+        const now = createHash("sha256").update(text).digest("hex");
+        const shipped = (SKILLS_SHIPPED[`${name}/${file}`] ?? []).filter((hash) => hash !== now);
+        return { text, ...(shipped.length > 0 ? { shipped } : {}) };
+      };
+      /** Undo what an instance made: its computer, its Actors and its servers. */
+      const takeOff = async (instance: string) => {
+        const { found, servers } = held(instance);
+        // Nothing more is tried on its computer, which goes: a try under way ends first.
+        const under = mending.get(instance);
+        clearTimeout(under?.timer);
+        mending.set(instance, { trying: false });
+        tried.delete(instance);
+        try {
+          await under?.going;
+          // First: if the service refuses, the rest is still here to be tried again.
+          if (found.computer) await killComputer(found.computer);
+        } finally {
+          mending.delete(instance);
+        }
+        // One made as a new one: the form keeps asking which while its agent may have it again.
+        if (madeNew(found)) {
+          hadNew.add(found.agent);
+          keepHadNew();
+        }
+        // One from before: the agent's next computer, as a container, starts with its folder.
+        const earlierOne = before.get(instance);
+        if (earlierOne?.folder && earlierOne.access !== "none") {
+          earlier[found.agent] = earlierOne.folder;
+          keepEarlier();
+        }
+        for (const { actor } of [...found.links, ...(found.capability ? [found.capability] : [])])
+          await ctx.slots.actors.call.close({ actorId: actor });
+        capabilities.get(instance)?.close();
+        capabilities.delete(instance);
+        running.delete(instance);
+        before.delete(instance);
+        stood.delete(instance);
+        was.delete(instance);
+        delete stored[instance];
+        try {
+          save();
+        } finally {
+          await Promise.all(servers.map((server) => server.end()));
+        }
+        return {};
+      };
       ctx.exports.provider.implement({
         units: async () => ({
           units: [computerUnit(await findLocal(), await asksWhich()), WEB_UNIT],
         }),
-        async skill({ unit, name, path: file }) {
-          if (!SKILLS[unit]?.includes(name) || !skillFiles(name).includes(file))
-            throw new Refused("unknown", `${unit} has no file ${file} of a skill ${name}.`);
-          const text = await readFile(join(SKILLS_DIR, name, file), "utf8");
-          const now = createHash("sha256").update(text).digest("hex");
-          const shipped = (SKILLS_SHIPPED[`${name}/${file}`] ?? []).filter((hash) => hash !== now);
-          return { text, ...(shipped.length > 0 ? { shipped } : {}) };
-        },
+        skill: ({ unit, name, path: file }) => skillText(unit, name, file),
         async check({ unit, values, secrets }) {
           known(unit);
           return {
             problems: problems(unit, values, await findLocal(), secrets, await asksWhich()),
           };
         },
-        async apply({ unit, values, secrets, name, agent, agentName }) {
-          known(unit);
-          const which = await asksWhich();
-          const wrong = problems(unit, values, await findLocal(), Object.keys(secrets), which);
-          if (wrong.length > 0)
-            throw new Refused("invalid", wrong.map((problem) => problem.message).join(" "));
-          const instance = `${unit}_${randomBytes(9).toString("hex")}`;
-          const web = { url: options.webUrl ?? EXA_URL };
-          const { servers, computer, rows } =
-            unit === WEB
-              ? {
-                  servers: [{ slot: WEB, url: web.url, target: new URL(web.url).host }],
-                  computer: undefined,
-                  rows: undefined,
-                }
-              : await makeComputer(values, secrets, name, agent, which, agentName);
-          const entry: Instance = {
-            agent,
-            links: [],
-            ...(computer
-              ? { computer, words: WORDS, kind: kindOf(values, which) === THIS ? THIS : NEW }
-              : {}),
-          };
-          const made: Connection[] = [];
-          const connections: { slot: string; connection: string; target: string }[] = [];
-          try {
-            for (const { slot, url, target } of servers) {
-              // A name of its own for each, as a computer can be two Actors.
-              const { actorId, credential } = await ctx.slots.actors.call.create({
-                name: servers.length > 1 ? `${name} (${slot})`.slice(0, 128) : name,
-              });
-              const link = { slot, actor: actorId, credential: credential as string, url };
-              entry.links.push(link);
-              made.push(await open(link, computer));
-              connections.push({ slot, connection: actorId, target });
-            }
-            // The capability is an Actor of its own, beside the computer's connections.
-            if (computer) {
-              const { actorId, credential } = await ctx.slots.actors.call.create({
-                name: `${name} (windows)`.slice(0, 128),
-              });
-              entry.capability = { actor: actorId, credential: credential as string };
-            }
-            if (entry.capability) await joinCapability(instance, entry.capability, made);
-            // Checked after the last wait: a stop meanwhile ended only what was running then.
-            if (closing) throw new Refused("unavailable", "This provider is stopping.");
-            running.set(instance, made);
-            stored[instance] = entry;
-            save();
-            // The agent's next computer is this one: a folder kept from before is used up.
-            if (computer && earlier[agent] !== undefined) {
-              delete earlier[agent];
-              keepEarlier();
-            }
-            // It has a computer here again: what it had before no longer keeps the form asking.
-            if (computer && hadNew.delete(agent)) keepHadNew();
-            for (const server of made) server.run();
-          } catch (error) {
-            running.delete(instance);
-            delete stored[instance];
-            capabilities.get(instance)?.close();
-            capabilities.delete(instance);
-            await Promise.all(made.map((server) => server.end()));
-            for (const { actor } of [
-              ...entry.links,
-              ...(entry.capability ? [entry.capability] : []),
-            ])
-              await ctx.slots.actors.call.close({ actorId: actor }).catch(() => {});
-            if (computer)
-              await killComputer(computer).catch((failed) =>
-                log.warn(`A computer may be left on its service: ${String(failed)}`),
-              );
-            throw error;
-          }
-          return {
-            instance,
-            connections,
-            results: [],
-            ...(entry.capability && rows
-              ? { capability: { actor: entry.capability.actor, rows } }
-              : {}),
-          };
+        async apply(input) {
+          known(input.unit);
+          return make(input);
         },
         status: ({ instance }) => stateOf(instance),
         live: ({ instance, surface, mode }) => ticket(instance, surface, mode),
-        async remove({ instance }) {
-          const { found, servers } = held(instance);
-          // Nothing more is tried on its computer, which goes: a try under way ends first.
-          const under = mending.get(instance);
-          clearTimeout(under?.timer);
-          mending.set(instance, { trying: false });
-          tried.delete(instance);
-          try {
-            await under?.going;
-            // First: if the service refuses, the rest is still here to be tried again.
-            if (found.computer) await killComputer(found.computer);
-          } finally {
-            mending.delete(instance);
-          }
-          // One made as a new one: the form keeps asking which while its agent may have it again.
-          if (madeNew(found)) {
-            hadNew.add(found.agent);
-            keepHadNew();
-          }
-          // One from before: the agent's next computer, as a container, starts with its folder.
-          const earlierOne = before.get(instance);
-          if (earlierOne?.folder && earlierOne.access !== "none") {
-            earlier[found.agent] = earlierOne.folder;
-            keepEarlier();
-          }
-          for (const { actor } of [...found.links, ...(found.capability ? [found.capability] : [])])
-            await ctx.slots.actors.call.close({ actorId: actor });
-          capabilities.get(instance)?.close();
-          capabilities.delete(instance);
-          running.delete(instance);
-          before.delete(instance);
-          stood.delete(instance);
-          was.delete(instance);
-          delete stored[instance];
-          try {
-            save();
-          } finally {
-            await Promise.all(servers.map((server) => server.end()));
-          }
-          return {};
+        remove: ({ instance }) => takeOff(instance),
+      });
+
+      /** Each unit as the capability it makes, by the same id. */
+      const unitOf = async (id: string) =>
+        id === WEB ? WEB_UNIT : computerUnit(await findLocal(), await asksWhich());
+      const knownCapability = (id: string) => {
+        if (id !== COMPUTER && id !== WEB)
+          throw new Refused("unknown", `This provider makes no capability ${id}.`);
+      };
+      ctx.exports.capabilities.implement({
+        capabilities: async () => ({
+          capabilities: await Promise.all(
+            [COMPUTER, WEB].map(async (id) => {
+              const unit = await unitOf(id);
+              return {
+                id,
+                title: unit.title,
+                description: unit.description ?? "",
+                arguments: argumentsOf(unit),
+              };
+            }),
+          ),
+        }),
+        async mount({ agent, capability: id, arguments: given }) {
+          knownCapability(id);
+          const unit = await unitOf(id);
+          // Settled as management settles a unit's answers, then the unit's own checks.
+          const settled = settle(unit, given);
+          const { values, secrets } = settled;
+          const wrong = [
+            ...settled.problems,
+            ...(settled.problems.length > 0
+              ? []
+              : problems(id, values, await findLocal(), Object.keys(secrets), await asksWhich())),
+          ];
+          if (wrong.length > 0)
+            return {
+              problems: wrong.map(({ field, message }) => ({
+                ...(field ? { path: `/${field}` } : {}),
+                message,
+              })),
+            };
+          // Named, with its folder, as its agent is named.
+          const { name: agentName } = await ctx.slots.actors.call.get({ actorId: agent });
+          const made = await make({
+            unit: id,
+            values,
+            secrets,
+            name: `${agentName}: ${unit.title}`.slice(0, 128),
+            agent,
+            agentName,
+          });
+          return {
+            mounted: made.instance,
+            made: {
+              connections: made.connections,
+              skills: skillsOf(unit, values),
+              ...(made.capability?.actor
+                ? { capability: { actor: made.capability.actor, rows: made.capability.rows ?? {} } }
+                : {}),
+            },
+          };
         },
+        async unmount({ agent, mounted }) {
+          if (stored[mounted]?.agent !== agent)
+            throw new Refused("unknown", `${agent} has nothing mounted as ${mounted} here.`);
+          return takeOff(mounted);
+        },
+        skill: ({ capability: id, name, path: file }) => skillText(id, name, file),
       });
     },
   }).catch(async (error) => {
