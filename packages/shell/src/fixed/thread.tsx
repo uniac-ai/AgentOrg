@@ -387,7 +387,7 @@ const TypingSign = ({ name }: { name: string }) => (
 export interface OnPage {
   back?: () => void;
   /** Opens the agent's details beside the conversation, or closes them, where there is room. */
-  details?: () => void;
+  details?: (() => void) | undefined;
 }
 
 /**

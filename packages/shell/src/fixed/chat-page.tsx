@@ -31,10 +31,17 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
     showOnPage(split);
     return () => showOnPage(false);
   }, [split, showOnPage]);
-  // Wide, the open conversation's agent's details are shown there too, in the computer's place: a
-  // computer opened after them takes it.
+  // Its agent's details are shown there too, in the computer's place, which a computer opened after
+  // them takes. The face opens and closes them where the page has room for their column.
   const [detailed, setDetailed] = useState(false);
   if (detailed && shown) setDetailed(false);
+  const details =
+    width - KEPT >= DETAILS
+      ? () => {
+          setDetailed(!detailed);
+          if (shown) close();
+        }
+      : undefined;
   // The first start: while no conversation has begun at all, once that is known, the first agent's
   // conversation is open, empty. Its row comes with its first message.
   const fresh = listed && chats.length === 0 && !agents.unread ? agents.list[0]?.agent : undefined;
@@ -100,12 +107,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
             chat={chats.find((chat) => chat.agent.id === open)}
             page={
               split
-                ? {
-                    details: () => {
-                      setDetailed(!detailed);
-                      if (shown) close();
-                    },
-                  }
+                ? { details }
                 : {
                     back: () => {
                       setBack(true);
@@ -119,7 +121,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
       {split && (
         <Beside
           room={width}
-          details={detailed ? open : undefined}
+          details={detailed && details ? open : undefined}
           onClose={() => setDetailed(false)}
         />
       )}
@@ -128,14 +130,18 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   );
 }
 
-/** The sidebar's width: what the page has beyond its list and a conversation of 460, within 480 to 720. */
-export const besideWidth = (page: number) => Math.min(720, Math.max(480, page - 780));
+/** What the page keeps beside its sidebar: its list, and a conversation of 460. */
+const KEPT = 780;
+/** The computer's sidebar: what the page has beyond what it keeps, within 480 to 720. */
+export const besideWidth = (page: number) => Math.min(720, Math.max(480, page - KEPT));
+/** An agent's details are a column, not a place to work in. */
+const DETAILS = 360;
 
 /**
  * What is open beside the conversation: an agent's details, or else the open computer. It grows
  * from the page's right edge as it opens, the conversation narrowing with it, while what it shows
  * slides in and fades in; it closes the same way back, and keeps what it shows until it has gone.
- * One takes the other's place as it is. Its times are the page's window times.
+ * One takes the other's place as it is, at its own width. Its times are the page's window times.
  */
 function Beside({
   room,
@@ -143,9 +149,8 @@ function Beside({
   onClose,
 }: {
   room: number;
-  /** The agent whose details are open. */
+  /** The agent whose details are open, and what closes them. */
   details: string | undefined;
-  /** Closes the details. */
   onClose(): void;
 }) {
   const { shown } = useComputers();
@@ -179,7 +184,7 @@ function Beside({
   }, [open, there, drawn]);
   const agent = drawn ? byId.get(drawn.agent) : undefined;
   if (!drawn || !agent) return null;
-  const wide = besideWidth(room);
+  const wide = drawn.detailed ? DETAILS : besideWidth(room);
   const motion = open
     ? "duration-[var(--window-open)] ease-out"
     : "duration-[var(--window-close)] ease-in";

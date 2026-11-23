@@ -34,13 +34,12 @@ export function AgentPage({
   agent: string;
   tab?: AgentTab | undefined;
   /**
-   * Drawn beside your conversation with it, on the chat page: the conversation is there, so it has
-   * no Message and no Chats, and its tab is its own rather than the address's.
+   * Drawn beside your conversation with it, on the chat page: its head and its Overview alone. The
+   * conversation is there, and its computer opens from the conversation's head.
    */
   beside?: boolean;
 }) {
-  const [picked, setPicked] = useState(asked);
-  const onTab = beside ? setPicked : (tab: AgentTab) => go({ screen: "team", agent: id, tab });
+  const onTab = (tab: AgentTab) => go({ screen: "team", agent: id, tab });
   const { byId, list, unread, reads } = useAgents();
   // The list as it was when the page opened may not have an agent just made: only a read since says.
   const [opened] = useState(reads);
@@ -92,11 +91,11 @@ export function AgentPage({
   const taken = taking && unitOf(taking);
   // Overview comes last, so the page opens as it did.
   const tabs: { id: AgentTab; title: string }[] = [
-    ...(computer ? [{ id: "computer" as const, title: "Computer" }] : []),
+    ...(computer && !beside ? [{ id: "computer" as const, title: "Computer" }] : []),
     ...(beside ? [] : [{ id: "chats" as const, title: "Chats" }]),
     { id: "overview", title: "Overview" },
   ];
-  const tab = tabs.find((t) => t.id === (beside ? picked : asked)) ?? tabs[0];
+  const tab = tabs.find((t) => t.id === asked) ?? tabs[0];
   // Your conversation with it, listed on its page while it is stopped too.
   const mine = chats.find((chat) => chat.agent.id === id);
   // Its conversations with other agents, either way: its own with them, and theirs with it. Each is
@@ -121,7 +120,8 @@ export function AgentPage({
             <h1 className="truncate text-[30px] leading-9 font-semibold tracking-tight">
               {entry.name}
             </h1>
-            <p className="truncate text-[15px] text-muted-foreground">
+            {/* In a column it is read whole, on as many lines as it takes. */}
+            <p className={`text-[15px] text-muted-foreground ${beside ? "" : "truncate"}`}>
               {entry.purpose ?? creatable?.description}
             </p>
           </div>
@@ -186,7 +186,7 @@ export function AgentPage({
             ))}
           </div>
         ) : (
-          <div className="mt-4 h-11 border-b" />
+          <div className="mt-4 border-b" />
         )}
         <div
           {...(tabs.length > 1 ? { role: "tabpanel", "aria-label": tab?.title } : {})}
