@@ -1,8 +1,7 @@
-// The team page: your agents, with the chosen one's details beside them. Each row says how its
-// agent stands, in the words its page says under its head. Where there is no room for both, the
-// list comes first and an agent's details take its place, with a way back.
-import { ChevronLeftIcon, PlusIcon } from "lucide-react";
-import { useState } from "react";
+// The team page: your agents, with the chosen one's details in a card beside them. Each row says
+// how its agent stands, in the words its page says under its head. Where there is no room for
+// both, the list comes first and an agent's details take its place, with a way back.
+import { ChevronLeftIcon } from "lucide-react";
 import { type AgentTab, go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
 import { AgentPage } from "./agent-page.tsx";
@@ -10,8 +9,9 @@ import { useBuilding } from "./building.tsx";
 import type { AgentEntry } from "./data.ts";
 import { Face } from "./face.tsx";
 import { needsOf, useLogin } from "./login.tsx";
+import { ListHead, ListPanel, PAGE_CARD } from "./page-frame.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
-import { useSplit } from "./split.ts";
+import { useCollapsed, useSplit } from "./split.ts";
 import { useAgents } from "./watch.tsx";
 
 /** One agent in the list: its face with its state's mark, its name, and how it stands. */
@@ -62,12 +62,11 @@ export function TeamPage({
   const agents = useAgents();
   const building = useBuilding();
   const [ref, split] = useSplit<HTMLDivElement>();
-  const [query, setQuery] = useState("");
-  const wanted = query.trim().toLowerCase();
-  const found = agents.list.filter((entry) => entry.name.toLowerCase().includes(wanted));
   // Wide, it opens on the first agent; narrower, on the list until one is chosen.
   const chosen = agent ?? (split ? agents.list[0]?.agent : undefined);
-  const listing = split || !chosen;
+  // Put away, the list is shown only while no agent is chosen.
+  const collapsed = useCollapsed();
+  const listing = (split && !collapsed) || !chosen;
   // With nothing to list, it says which nothing it is.
   const nothing = agents.unread
     ? UNREAD
@@ -77,28 +76,10 @@ export function TeamPage({
   return (
     <div ref={ref} className="flex h-full min-h-0">
       {listing && (
-        <section
-          aria-label="Team"
-          className={`flex min-h-0 flex-col ${split ? "w-[280px] shrink-0 border-r" : "min-w-0 flex-1"}`}
-        >
-          <header className="flex h-14 shrink-0 items-center gap-1 pr-2 pl-4">
-            <h1 className="min-w-0 flex-1 text-[17px] font-semibold">Team</h1>
-            <Button variant="ghost" size="icon" aria-label="Create" onClick={building.show}>
-              <PlusIcon />
-            </Button>
-          </header>
-          <search className="shrink-0 px-2 pb-2">
-            <input
-              type="search"
-              aria-label="Search"
-              placeholder="Search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="h-9 w-full rounded-full bg-[var(--raised)] px-3.5 text-sm outline-none placeholder:text-muted-foreground"
-            />
-          </search>
+        <ListPanel label="Team">
+          <ListHead label="Agents" add="Create" onAdd={building.show} />
           {nothing ? (
-            <div className="flex items-center gap-4 px-4">
+            <div className="flex items-center gap-4 px-[18px]">
               <Nothing>{nothing}</Nothing>
               {nothing === "No agents" && (
                 <Button className="h-8 rounded-full px-4" onClick={building.show}>
@@ -109,9 +90,9 @@ export function TeamPage({
           ) : (
             <ul
               aria-label="Agents"
-              className="no-bar flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pt-1 pb-24"
+              className="no-bar flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 pb-24"
             >
-              {found.map((entry) => (
+              {agents.list.map((entry) => (
                 <li key={entry.agent}>
                   <AgentRow
                     entry={entry}
@@ -122,10 +103,10 @@ export function TeamPage({
               ))}
             </ul>
           )}
-        </section>
+        </ListPanel>
       )}
       {chosen && (
-        <div className="@container/main relative flex min-w-0 flex-1 flex-col">
+        <div className={`@container/main relative flex flex-1 flex-col ${PAGE_CARD}`}>
           {!split && (
             <header className="flex h-12 shrink-0 items-center px-2">
               <Button

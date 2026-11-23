@@ -1,6 +1,7 @@
-// Who to message, from Chat's head, in a real browser over the stand-in gateway: "Chats" with a
-// line under it and a compose icon at its end, which opens a "To" picker over the agents; a pick
-// opens that agent's conversation, or its empty one, which its first message makes.
+// Who to message, from Chat's list, in a real browser over the stand-in gateway: a small label,
+// "Chats", with a plus at its end, which opens a "To" picker over the agents; a pick opens that
+// agent's conversation, or its empty one, which its first message makes. Its last line, whatever
+// is typed, is the way to a new agent.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
@@ -29,29 +30,32 @@ const offered = (page: Page) =>
     .evaluateAll((options) => options.map((one) => one.textContent?.trim()));
 
 test(
-  'Chat\'s head is "Chats" with a compose icon, "Message", at its end, and a line the column\'s width under it, wide and on a phone',
+  'Chat\'s list is 300 wide beside a conversation, under a small label, "Chats", with a plus, "Message", at its end and no line under it, wide and on a phone',
   withGateway(async (gateway) => {
-    for (const width of [1440, 390]) {
+    for (const [width, across] of [
+      [1440, 300],
+      [390, 390],
+    ] as const) {
       // On a phone the page opens on the list.
       const page = await open(gateway, width);
       await compose(page).waitFor();
       const seen = await list(page).evaluate((section) => {
         const head = section.querySelector("header") as Element;
+        const words = head.querySelector("h1") as Element;
         const icon = head.querySelector('button[aria-label="Message"]');
-        const s = getComputedStyle(head);
         const h = head.getBoundingClientRect();
         return {
-          words: head.querySelector("h1")?.textContent,
-          line: `${s.borderBottomWidth} ${s.borderBottomStyle}`,
-          // Across the column, inside the line at its side.
-          across: h.width === (section as HTMLElement).clientWidth,
+          across: section.getBoundingClientRect().width,
+          words: words.textContent,
+          size: getComputedStyle(words).fontSize,
+          line: getComputedStyle(head).borderBottomWidth,
           end: icon ? Math.round(h.right - icon.getBoundingClientRect().right) : null,
-          icon: !!icon?.querySelector("svg.lucide-square-pen"),
+          icon: !!icon?.querySelector("svg.lucide-plus"),
         };
       });
       assert.deepEqual(
         seen,
-        { words: "Chats", line: "1px solid", across: true, end: 8, icon: true },
+        { across, words: "Chats", size: "13px", line: "0px", end: 12, icon: true },
         `at ${width}`,
       );
       await page.close();
@@ -60,7 +64,7 @@ test(
 );
 
 test(
-  'the compose icon opens the picker: "To", "Name", and every agent in Team\'s order, each with its face; typing keeps the names that hold it',
+  'the plus opens the picker: "To", "Name", and every agent in Team\'s order, each with its face, then "New agent"; typing keeps the names that hold it, and "New agent"',
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await compose(page).click();
@@ -80,13 +84,43 @@ test(
       "TTriage",
       "WRWeekly report",
       "BBroken",
+      "New agent",
     ]);
     await input.fill("re");
-    assert.deepEqual(await offered(page), ["RResearch", "RReviewer", "WRWeekly report"]);
+    assert.deepEqual(await offered(page), [
+      "RResearch",
+      "RReviewer",
+      "WRWeekly report",
+      "New agent",
+    ]);
     await input.fill("tri");
-    assert.deepEqual(await offered(page), ["TTriage"]);
+    assert.deepEqual(await offered(page), ["TTriage", "New agent"]);
     await page.keyboard.press("Escape");
     await picker(page).waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  '"New agent" is the picker\'s last line, under the agents and apart from them, there whatever is typed: it closes the picker and opens the creation window',
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await compose(page).click();
+    const last = picker(page).getByRole("option", { name: "New agent" });
+    // Under a line of its own, after the last agent.
+    assert.equal(
+      await last.evaluate((line) => {
+        const group = line.closest("[cmdk-group]") as Element;
+        return getComputedStyle(group).borderTopWidth;
+      }),
+      "1px",
+    );
+    // No agent holds what is typed: it is the one line left, and the one Enter takes.
+    await picker(page).getByRole("combobox").fill("nobody of that name");
+    assert.deepEqual(await offered(page), ["New agent"]);
+    await page.keyboard.press("Enter");
+    await picker(page).waitFor({ state: "detached" });
+    await page.getByRole("dialog", { name: "Create" }).waitFor();
     await page.close();
   }),
 );
@@ -122,7 +156,7 @@ test(
 );
 
 test(
-  'on a phone with "No chats", the compose icon is the way to a conversation',
+  'on a phone with "No chats", the plus is the way to a conversation',
   withGateway(async (gateway) => {
     gateway.noChats();
     const page = await open(gateway, 390);

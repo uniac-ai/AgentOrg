@@ -103,30 +103,25 @@ for (const [where, hash, list] of [
     }),
   );
 
-test(
-  "Chat's first row is 12 under its head, and Team's first row 12 under its search",
-  withGateway(async (gateway) => {
-    let page = await open(gateway, "#/chat");
-    const first = page.locator('main ul[aria-label="Chats"] > li > button').first();
-    await first.waitFor();
-    assert.equal(
-      await first.evaluate((row) => {
-        const head = row.closest("section")?.querySelector("header") as Element;
-        return row.getBoundingClientRect().top - head.getBoundingClientRect().bottom;
-      }),
-      12,
-    );
-    await page.close();
-    page = await open(gateway, "#/team");
-    const agent = page.locator('main ul[aria-label="Agents"] > li > button').first();
-    await agent.waitFor();
-    assert.equal(
-      await agent.evaluate((row) => {
-        const search = document.querySelector('main input[type="search"]') as Element;
-        return row.getBoundingClientRect().top - search.getBoundingClientRect().bottom;
-      }),
-      12,
-    );
-    await page.close();
-  }),
-);
+for (const [where, hash, list] of [
+  ["Chat's", "#/chat", 'main ul[aria-label="Chats"]'],
+  ["Team's", "#/team", 'main ul[aria-label="Agents"]'],
+] as const)
+  test(
+    `${where} first row is right under its list's label, 92 from the list's top: the strip's 52 and the label's 40`,
+    withGateway(async (gateway) => {
+      const page = await open(gateway, hash);
+      const first = page.locator(`${list} > li > button`).first();
+      await first.waitFor();
+      assert.deepEqual(
+        await first.evaluate((row) => {
+          const panel = row.closest("section") as Element;
+          const head = (panel.querySelector("header") as Element).getBoundingClientRect();
+          const top = row.getBoundingClientRect().top;
+          return [top - head.bottom, top - panel.getBoundingClientRect().top];
+        }),
+        [0, 92],
+      );
+      await page.close();
+    }),
+  );

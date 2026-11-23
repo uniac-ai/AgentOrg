@@ -1,5 +1,6 @@
 // The frame around the pages, wide and on a phone, in a real browser over the stand-in gateway:
-// the bar of places, where the app opens, and where an agent's address leads.
+// its rows of places, where the app opens, and where an agent's address leads. The ground and the
+// page's cards on it are in frame-card.test.ts.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Locator, type Page } from "@playwright/test";
@@ -54,11 +55,11 @@ const reply = (id: string, text: string) => ({
 });
 
 test(
-  "the bar runs the page's height, 62 wide with no line at its edge: Search, Chat and Team in its middle, Settings at its foot, and no words, agents, search box or Create",
+  "the frame's rows lie over the page's left 300 with no line: Search at the end of a strip along the top, Chat and Team from the start of a row along the foot and Settings at its end, and no words, agents, search box or Create",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
-    assert.deepEqual(await boxOf(bar(page)), [0, 0, 62, 900]);
+    assert.deepEqual(await boxOf(bar(page)), [0, 0, 300, 900]);
     assert.deepEqual(
       await bar(page).evaluate((nav) => {
         const style = getComputedStyle(nav);
@@ -66,33 +67,45 @@ test(
       }),
       ["0px", "0px"],
     );
-    // Four places, each an icon of 22 in a place of 44, with 9 at each side: the first three 10
-    // apart, centred on the bar's height.
+    // Four places. Search is 44 square, 4 from the strip's end, in a strip 52 tall. The others are
+    // 44 wide and a little less tall, 36, in a row 56 tall, 12 from the window's foot: Chat and
+    // Team 4 apart from 8 in, Settings 8 from its end. Each of those holds an icon of 22.
     assert.deepEqual(
       await bar(page)
         .getByRole("button")
         .evaluateAll((places) => places.map((one) => one.getAttribute("aria-label"))),
       ["Search", "Chat", "Team", "Settings"],
     );
-    assert.deepEqual(await boxOf(place(page, "Search")), [9, 374, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Chat")), [9, 428, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Team")), [9, 482, 44, 44]);
-    assert.deepEqual(await boxOf(place(page, "Settings")), [9, 844, 44, 44]);
-    for (const name of ["Search", "Chat", "Team", "Settings"]) {
+    assert.deepEqual(await boxOf(place(page, "Search")), [252, 4, 44, 44]);
+    assert.deepEqual(await boxOf(place(page, "Chat")), [8, 852, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Team")), [56, 852, 44, 36]);
+    assert.deepEqual(await boxOf(place(page, "Settings")), [248, 852, 44, 36]);
+    for (const name of ["Chat", "Team", "Settings"]) {
       const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
       const [px, py] = await boxOf(place(page, name));
       assert.deepEqual([width, height], [22, 22], name);
-      assert.deepEqual([x - px, y - py], [11, 11], `${name}'s icon in the middle of its place`);
+      assert.deepEqual([x - px, y - py], [11, 7], `${name}'s icon in the middle of its place`);
     }
+    // Search is quieter than the places: an icon of 18 in the middle of its place, with a thinner
+    // line, in the grey of what is said quietly.
+    const search = place(page, "Search").locator("svg");
+    const [sx, sy, sw, sh] = await boxOf(search);
+    assert.deepEqual([sw, sh, sx - 252, sy - 4], [18, 18, 13, 13]);
+    assert.deepEqual(
+      await search.evaluate((icon) => {
+        const style = getComputedStyle(icon);
+        return [style.strokeWidth, style.color];
+      }),
+      ["1.5px", "rgb(161, 161, 161)"],
+    );
     assert.equal(await bar(page).innerText(), "", "no words");
     assert.equal(await bar(page).getByRole("list").count(), 0, "no agents");
     assert.equal(await bar(page).getByRole("searchbox").count(), 0, "no search box");
     assert.equal(await bar(page).getByRole("button", { name: "Create" }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Home" }).count(), 0, "no Home");
-    // The page is everything beside the bar, inside the card: 6 in from the bar and the window's
-    // edges, less the card's line.
+    // The page has the whole window, under the frame's rows.
     const main = page.locator("main");
-    assert.deepEqual(await boxOf(main), [69, 7, 1364, 886]);
+    assert.deepEqual(await boxOf(main), [0, 0, 1440, 900]);
     assert.deepEqual(
       await main.evaluate((e) => {
         const style = getComputedStyle(e);
@@ -153,23 +166,27 @@ test(
 );
 
 test(
-  "a place's label shows beside it while the pointer rests on it or the keyboard is on it, fading in and out",
+  "a place's label shows over it once the pointer has rested on it for a second, or as the keyboard comes to it, fading in and out: a rounded card 24 tall, with no arrow",
   withGateway(async (gateway) => {
     const page = await open(gateway, WIDE);
     await place(page, "Team").waitFor();
     assert.equal(await label(page).count(), 0, "no label at first");
     await place(page, "Team").hover();
+    await page.waitForTimeout(600);
+    assert.equal(await label(page).count(), 0, "not before the pointer has rested a second");
     await label(page).waitFor();
     assert.equal(await label(page).innerText(), "Team");
     const animation = () => label(page).evaluate((one) => getComputedStyle(one).animationName);
     assert.equal(await animation(), "enter", "it fades in");
-    // Once it has come in: beside its place, past its arrow, on the place's middle.
+    // Once it has come in: over its place, on the place's middle.
     await label(page).evaluate((one) =>
       Promise.all(one.getAnimations().map((moving) => moving.finished)),
     );
-    const [x, y, , height] = await boxOf(label(page));
-    assert.equal(Math.round(x * 10) / 10, 69);
-    assert.ok(Math.abs(y + height / 2 - 504) < 1, "on the place's middle");
+    const [x, y, width, height] = await boxOf(label(page));
+    assert.ok(y + height <= 852 - 6, "over the place");
+    assert.equal(height, 24);
+    assert.equal(await label(page).locator("svg").count(), 0, "no arrow");
+    assert.ok(Math.abs(x + width / 2 - 78) < 1, "on the place's middle");
     // Away from it: the pointer leaves the place and goes on, as a hand moves it.
     await page.mouse.move(700, 450, { steps: 4 });
     await page.locator('[data-slot="tooltip-content"][data-state="closed"]').waitFor();
@@ -184,6 +201,48 @@ test(
     await label(page).filter({ hasText: "Chat" }).waitFor({ state: "detached" });
     await page.keyboard.press("Escape");
     await label(page).waitFor({ state: "detached" });
+    await page.close();
+  }),
+);
+
+test(
+  "a sideways scroll over the list or the frame's rows goes to the next place and back, one place a gesture; a scroll up or down, or one over a card, changes nothing",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, WIDE, "#/chat");
+    await page.getByRole("main").getByRole("list", { name: "Chats" }).waitFor();
+    /** The place, a moment after a scroll that should change nothing. */
+    const after = async () => {
+      await page.waitForTimeout(120);
+      return new URL(page.url()).hash;
+    };
+    /** A gesture is over once nothing has come of it for a moment. */
+    const ended = () => page.waitForTimeout(600);
+    // Over the list: down is the list's own.
+    await page.mouse.move(150, 450);
+    await page.mouse.wheel(0, 120);
+    assert.equal(await after(), "#/chat");
+    // One gesture is one place, however far it runs on, and even turned back: its scrolls come
+    // one on another, so they are sent at once.
+    await page.evaluate(() => {
+      const over = document.elementFromPoint(150, 450) as Element;
+      for (const deltaX of [60, 200, -400])
+        over.dispatchEvent(new WheelEvent("wheel", { deltaX, bubbles: true, cancelable: true }));
+    });
+    await page.waitForURL(/#\/team$/);
+    assert.equal(await after(), "#/team");
+    await ended();
+    // Over the row of places, back: and before the first place there is none.
+    await page.mouse.move(150, 890);
+    await page.mouse.wheel(-120, 0);
+    await page.waitForURL(/#\/chat$/);
+    await ended();
+    await page.mouse.wheel(-120, 0);
+    assert.equal(await after(), "#/chat");
+    await ended();
+    // Over the conversation's card it is the card's own.
+    await page.mouse.move(800, 450);
+    await page.mouse.wheel(120, 0);
+    assert.equal(await after(), "#/chat");
     await page.close();
   }),
 );
@@ -279,10 +338,11 @@ test(
     assert.deepEqual(await boxOf(place(page, "Chat")), [97.5, 789, 97.5, 55]);
     assert.deepEqual(await boxOf(place(page, "Team")), [195, 789, 97.5, 55]);
     assert.deepEqual(await boxOf(place(page, "Settings")), [292.5, 789, 97.5, 55]);
-    // Each label is under its icon.
+    // Each label is under its icon, and the four icons are one size, Search's too.
     for (const name of ["Search", "Chat", "Team", "Settings"]) {
       assert.equal(await place(page, name).innerText(), name);
       const icon = await boxOf(place(page, name).locator("svg"));
+      assert.equal(icon[2], 22, `${name}'s icon`);
       const words = await boxOf(place(page, name).getByText(name, { exact: true }));
       assert.ok(words[1] >= icon[1] + icon[3], `${name}'s label under its icon`);
       assert.equal(
@@ -307,9 +367,13 @@ test(
       ["Team", "rgb(250, 250, 250)", "rgba(0, 0, 0, 0)"],
       ["Settings", "rgb(161, 161, 161)", "rgba(0, 0, 0, 0)"],
     ]);
-    // No menu button and no head: the page has the room above the row, to the window's edges.
+    // No menu button and no head: once the plan's notice is dismissed, the page has the room
+    // above the row, to the window's edges.
     assert.equal(await page.getByRole("button", { name: "Menu" }).count(), 0);
     assert.equal(await page.getByRole("banner").filter({ visible: true }).count(), 0);
+    const notice = page.getByRole("status").filter({ hasText: "ChatGPT plan" });
+    await notice.getByRole("button", { name: "Dismiss" }).click();
+    await notice.waitFor({ state: "detached" });
     assert.deepEqual(await boxOf(page.locator("main")), [0, 0, 390, 788]);
     // The floating chat's button sits above the row.
     const pill = await boxOf(page.getByRole("group", { name: "Chats, collapsed" }));
@@ -319,28 +383,6 @@ test(
     await page.waitForTimeout(300);
     assert.equal(await label(page).filter({ visible: true }).count(), 0);
     assert.equal(await fits(page), true);
-    await page.close();
-  }),
-);
-
-test(
-  "the page's card is rgb(25, 25, 25) in dark and rgb(243, 243, 243) in light, on a ground a step darker",
-  withGateway(async (gateway) => {
-    const page = await open(gateway, WIDE);
-    await bar(page).waitFor();
-    /** The ground under the bar and around the card, and the card. */
-    const backgrounds = () =>
-      page.evaluate(() =>
-        [
-          document.querySelector("[data-shell]") as Element,
-          document.querySelector("main")?.parentElement as Element,
-        ].map((one) => getComputedStyle(one).backgroundColor),
-      );
-    assert.deepEqual(await backgrounds(), ["rgb(17, 17, 17)", "rgb(25, 25, 25)"]);
-    await page.evaluate(() => {
-      document.documentElement.dataset.theme = "light";
-    });
-    assert.deepEqual(await backgrounds(), ["rgb(232, 232, 232)", "rgb(243, 243, 243)"]);
     await page.close();
   }),
 );

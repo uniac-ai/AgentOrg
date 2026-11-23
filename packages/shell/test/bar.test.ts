@@ -41,32 +41,39 @@ const pressable = (locator: Locator) =>
   });
 const bar = (page: Page) =>
   page.getByRole("status").filter({ hasText: /ChatGPT plan|Reconnecting/ });
-/** The page's card is 6 in from the bar and the window's edges, inside its 1 px line. */
-const CARD = 7;
+/** The row of places along the foot, and the page's list beside what is chosen. */
+const FOOT = 56;
+const SIDE = 300;
 
 test(
-  "the plan's notice is the bar at the foot of the page beside the bar of places; beside an open chat it ends short of it, its link and close whole",
+  "the plan's notice is the bar over the list's foot, above the row of places and no wider than the list; where the page holds one thing at a time it is beside the row, and above it while a chat is open, short of it, its link and close whole",
   withGateway(async (gateway) => {
     for (const width of [1440, 1024, 820]) {
       // A page with the floating chat on it: Team.
       const page = await open(gateway, "#/team", width);
       const notice = bar(page);
       await notice.getByText("You're using your ChatGPT plan").waitFor();
-      const left = await boxOf(page.getByRole("navigation", { name: "Main" }));
-      const box = await boxOf(notice);
-      assert.equal(
-        box.x,
-        left.x + left.width + CARD + 20,
-        `${width}: an inset from the card's side`,
-      );
-      assert.equal(box.y + box.height, 900 - CARD - 20, `${width}: an inset from the card's foot`);
+      const above = async (when: string) => {
+        const box = await boxOf(notice);
+        assert.equal(box.x, 12, `${width}, ${when}: 12 from the window's side`);
+        assert.equal(box.y + box.height, 900 - FOOT - 6, `${width}, ${when}: over the places`);
+        assert.ok(box.x + box.width <= SIDE - 12, `${width}, ${when}: no wider than the list`);
+      };
+      if (width >= 896) await above("beside the details");
+      else {
+        const box = await boxOf(notice);
+        assert.equal(box.x, SIDE + 12, `${width}: beside the row of places`);
+        assert.equal(box.y + box.height, 900 - 10, `${width}: level with the row's places`);
+      }
       assert.equal(
         await notice.getByRole("link", { name: "Manage usage" }).getAttribute("href"),
         "https://chatgpt.com/settings/usage",
       );
-      // With a chat open, the bar ends one gap short of the panel, and nothing of it is under it.
+      // With a chat open, the bar is above the places at every width, a gap or more short of the
+      // panel, and nothing of it is under it.
       await page.getByRole("button", { name: /^Chats/ }).click();
       const panel = await boxOf(page.getByRole("complementary", { name: "Chats" }));
+      await above("with a chat open");
       const beside = await boxOf(notice);
       assert.ok(
         beside.x + beside.width <= panel.x - 12 + 0.5,
@@ -83,6 +90,23 @@ test(
       // It is shown once: shown again on the next page only as if it never was.
       gateway.notes.delete("ui/plan-notice");
     }
+  }),
+);
+
+test(
+  "on a phone the plan's notice has a row of its own along the top, and the page starts under it: it lies over nothing of a conversation",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, "#/chat/a-reviewer", 390);
+    const notice = bar(page);
+    await notice.getByText("You're using your ChatGPT plan").waitFor();
+    const box = await boxOf(notice);
+    assert.deepEqual([box.x, box.y, box.width, box.height], [12, 8, 366, 40]);
+    const main = await boxOf(page.locator("main"));
+    assert.deepEqual([main.y, main.y + main.height], [56, 900 - FOOT]);
+    await notice.getByRole("button", { name: "Dismiss" }).click();
+    await notice.waitFor({ state: "detached" });
+    assert.equal((await boxOf(page.locator("main"))).y, 0, "the page has its row back");
+    await page.close();
   }),
 );
 

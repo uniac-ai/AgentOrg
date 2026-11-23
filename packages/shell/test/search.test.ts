@@ -51,7 +51,7 @@ const listed = (page: Page) =>
   );
 
 test(
-  "Search is at the top of the bar's places, above Chat, wide; on a phone it is first along the foot, with its label under it",
+  "Search is the first of the frame's places, at the end of the strip along the top, wide; on a phone it is first along the foot, with its label under it",
   withGateway(async (gateway) => {
     let page = await open(gateway);
     assert.deepEqual(
@@ -67,7 +67,8 @@ test(
           .evaluate((e) => e.getBoundingClientRect().toJSON()),
       ),
     );
-    assert.ok(search && chat && search.x === chat.x && search.bottom < chat.top, "above Chat");
+    assert.ok(search && chat && search.bottom <= 52 && search.bottom < chat.top, "above Chat");
+    assert.equal(search.right, 300 - 4, "at the strip's end");
     assert.equal(await place(page).getAttribute("aria-haspopup"), "dialog");
     await page.close();
     page = await open(gateway, 390);

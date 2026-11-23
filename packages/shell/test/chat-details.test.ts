@@ -1,6 +1,7 @@
 // An agent's details on the chat page: where the page has room for their column beside the list and
-// a conversation of 460, the face in the conversation's head opens them beside the conversation, in
-// the place its computer opens in; where it hasn't, the face goes to the team page as before.
+// a conversation of 468, the face in the conversation's head opens them beside the conversation, in
+// the place its computer opens in, in a card on a ground a step off the conversation's; where it
+// hasn't, the face goes to the team page as before.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
@@ -67,21 +68,37 @@ async function openDetails(page: Page) {
 }
 /** The details' column. */
 const COLUMN = 360;
+/** The 6 between the conversation's card and the one beside it, and beside that one. */
+const GAP = 6;
 /**
- * The narrowest screen with room for it: the page is the screen less the bar's 62 and the card's 6
- * at each side with its line, and holds its list's 320, a conversation of 460 and the column.
+ * The narrowest screen with room for it: the page is the screen, and holds its list's 300, a
+ * conversation of 468, the column, and the 6 between the two cards and beside the second.
  */
-const ROOM = 62 + 14 + 320 + 460 + COLUMN;
+const ROOM = 300 + 468 + GAP + COLUMN + GAP;
 
 test(
-  "wide, a conversation's face opens its agent's details beside it in a column of 360, the conversation narrower by it and the page where it was; their Close closes them, and so does the face again",
+  "wide, a conversation's face opens its agent's details beside it in a card of 360, on a ground a step lighter than the conversation's, the conversation narrower by it and the 6 between them, and the page where it was; their Close closes them, and so does the face again",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await face(page).waitFor();
     const before = await widthOf(conversation(page));
     await openDetails(page);
     assert.equal(await widthOf(side(page)), COLUMN);
-    assert.equal(before - (await widthOf(conversation(page))), COLUMN);
+    assert.equal(before - (await widthOf(conversation(page))), COLUMN + GAP);
+    const ground = (part: ReturnType<Page["locator"]>) =>
+      part.evaluate((e) => getComputedStyle(e).backgroundColor);
+    assert.deepEqual(
+      [await ground(conversation(page)), await ground(side(page))],
+      ["rgb(25, 25, 25)", "rgb(31, 31, 31)"],
+    );
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "light";
+    });
+    assert.deepEqual(
+      [await ground(conversation(page)), await ground(side(page))],
+      ["rgb(250, 250, 250)", "rgb(245, 245, 245)"],
+      "in light, a step darker",
+    );
     assert.match(page.url(), /#\/chat$/);
     await details(page).getByRole("button", { name: "Close Research's details" }).click();
     await side(page).waitFor({ state: "detached" });
@@ -95,12 +112,12 @@ test(
 );
 
 test(
-  "the details open on the narrowest screen that leaves the conversation its 460 beside them, and one pixel narrower the face goes to the team page",
+  "the details open on the narrowest screen that leaves the conversation its 468 beside them, and one pixel narrower the face goes to the team page; with the list put away the page has the list's room too, and they open there",
   withGateway(async (gateway) => {
     let page = await open(gateway, "#/chat/a-research", ROOM);
     await openDetails(page);
     assert.equal(await widthOf(side(page)), COLUMN);
-    assert.equal(await widthOf(conversation(page)), 460);
+    assert.equal(await widthOf(conversation(page)), 468);
     await page.close();
 
     page = await open(gateway, "#/chat/a-research", ROOM - 1);
@@ -109,6 +126,18 @@ test(
     await face(page).click();
     await page.waitForURL(/#\/team\/a-research$/);
     assert.equal(await side(page).count(), 0);
+    await page.close();
+
+    page = await open(gateway, "#/chat/a-research", ROOM - 1);
+    await page.getByRole("button", { name: "Hide list" }).click();
+    await page
+      .getByRole("main")
+      .getByRole("region", { name: "Chats" })
+      .waitFor({ state: "detached" });
+    await openDetails(page);
+    assert.equal(await widthOf(side(page)), COLUMN);
+    // The conversation has what the page has beside the column, less the 6 at its own side too.
+    assert.equal(await widthOf(conversation(page)), ROOM - 1 - 3 * GAP - COLUMN);
     await page.close();
   }),
 );
@@ -200,6 +229,9 @@ test(
     await still(page);
     const sidebar = await widthOf(side(page));
     assert.ok(sidebar > COLUMN, `${sidebar}`);
+    // The computer's card is on the conversation's ground; the details' is a step off it.
+    const ground = () => side(page).evaluate((e) => getComputedStyle(e).backgroundColor);
+    assert.equal(await ground(), "rgb(25, 25, 25)");
     await face(page).click();
     await details(page).waitFor();
     assert.equal(await computer(page).count(), 0);
@@ -207,6 +239,7 @@ test(
     assert.equal(await computerButton(page).getAttribute("aria-pressed"), "false");
     await still(page);
     assert.equal(await widthOf(side(page)), COLUMN);
+    assert.equal(await ground(), "rgb(31, 31, 31)");
     await computerButton(page).click();
     await computer(page).waitFor();
     assert.equal(await details(page).count(), 0);

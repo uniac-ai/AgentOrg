@@ -18,15 +18,11 @@ async function open(gateway: Gateway, width: number, hash: string): Promise<Page
 const sizeOf = (field: Locator) => field.evaluate((e) => getComputedStyle(e).fontSize);
 const size = (page: Page, selector: string) => sizeOf(page.locator(selector).first());
 
-/** The four fields' words: the message box, Team's search, compose's "To" and the search's. */
+/** The three fields' words: the message box, compose's "To" and the search's. */
 async function fields(gateway: Gateway, width: number) {
   let page = await open(gateway, width, "#/chat/a-reviewer");
   await page.locator('main textarea[aria-label="Message"]').waitFor();
   const message = await size(page, 'main textarea[aria-label="Message"]');
-  await page.close();
-  page = await open(gateway, width, "#/team");
-  await page.locator('main input[type="search"]').waitFor();
-  const team = await size(page, 'main input[type="search"]');
   await page.close();
   page = await open(gateway, width, "#/chat");
   await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
@@ -40,15 +36,14 @@ async function fields(gateway: Gateway, width: number) {
   await page.getByRole("dialog", { name: "Search" }).getByRole("combobox").waitFor();
   const search = await sizeOf(page.getByRole("dialog", { name: "Search" }).locator("input"));
   await page.close();
-  return { message, team, to, search };
+  return { message, to, search };
 }
 
 test(
-  "on a phone, the message box, Team's search, compose's field and the search's field have 16 px words",
+  "on a phone, the message box, compose's field and the search's field have 16 px words",
   withGateway(async (gateway) => {
     assert.deepEqual(await fields(gateway, 390), {
       message: "16px",
-      team: "16px",
       to: "16px",
       search: "16px",
     });
@@ -60,7 +55,6 @@ test(
   withGateway(async (gateway) => {
     assert.deepEqual(await fields(gateway, 1440), {
       message: "14px",
-      team: "14px",
       to: "15px",
       search: "15px",
     });

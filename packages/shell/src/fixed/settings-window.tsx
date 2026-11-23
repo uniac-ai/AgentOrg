@@ -74,7 +74,7 @@ export function SettingsWindow() {
         <DialogDescription className="sr-only">AgentOrg's settings, by section</DialogDescription>
         <nav
           aria-label="Settings"
-          className={`flex w-[220px] shrink-0 flex-col gap-0.5 border-r bg-[var(--canvas)] p-2 max-sm:w-full max-sm:border-r-0 ${listing ? "" : "max-sm:hidden"}`}
+          className={`flex w-[220px] shrink-0 flex-col gap-0.5 border-r bg-[var(--ground)] p-2 max-sm:w-full max-sm:border-r-0 ${listing ? "" : "max-sm:hidden"}`}
         >
           <div className="flex h-12 shrink-0 items-center">
             <DialogTitle className="min-w-0 flex-1 px-3 text-[17px] font-semibold">

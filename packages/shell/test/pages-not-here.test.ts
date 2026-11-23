@@ -15,8 +15,8 @@ test(
     await main.getByText("This agent isn't here", { exact: true }).waitFor();
     assert.deepEqual(
       await main.getByRole("heading").allInnerTexts(),
-      ["Team"],
-      "nothing of an agent is drawn: the team page's head alone",
+      ["Agents"],
+      "nothing of an agent is drawn: the team page's list's label alone",
     );
     await main.getByRole("button", { name: "Team", exact: true }).click();
     await page.waitForURL(/#\/team$/);
