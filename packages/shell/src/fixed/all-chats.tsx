@@ -36,7 +36,10 @@ interface AllChats {
   chats: ListedChat[];
   /** The agents' conversations with other agents, what was said last first. */
   others: ListedChat[];
-  /** Every agent there is has had its chats listed once, or said it couldn't: all are here. */
+  /**
+   * Every agent there is has had its chats listed once, or said it couldn't, and which of yours
+   * are off the list is known: all are here.
+   */
   listed: boolean;
   /** Your conversation with an agent has shown a reply of its, said at `at`. */
   read(agent: string, at: string): void;
@@ -165,8 +168,9 @@ function useRead() {
 }
 
 /**
- * A value in the app's store that any tab may change: `none` until it is read, and for a stored
- * value that isn't one. A change is made to what is stored, since another tab may have changed it
+ * A value in the app's store that any tab may change, and whether it has been read: `none` until
+ * then, and for a stored value that isn't one. A change is made to what is stored, since another
+ * tab may have changed it
  * after this one read it; one that leaves it as it is writes nothing. This tab's changes are made
  * one after another, each to what the one before it stored.
  */
@@ -209,7 +213,7 @@ function useStored<T>(key: string, is: (value: unknown) => value is T, none: T) 
     },
     [key, is, none],
   );
-  return [value ?? none, change] as const;
+  return [value ?? none, change, value !== undefined] as const;
 }
 
 /** The pins in the app's store: the agents whose conversations with you are pinned, in the order pinned. */
@@ -434,7 +438,7 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
   const others = useMemo(() => all.filter((one) => one.with !== PERSON), [all]);
   const read = useCallback<AllChats["read"]>((agent, at) => mark(keyOf(agent, PERSON), at), [mark]);
   const { pins, pin } = usePins();
-  const [off, change] = useStored(HIDDEN, isHidden, NONE_HIDDEN);
+  const [off, change, offRead] = useStored(HIDDEN, isHidden, NONE_HIDDEN);
   /** Whether something was said in a conversation after it was taken off the list. */
   const saidSince = useCallback(
     (agent: string, at: string) => {
@@ -450,7 +454,12 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
     },
     [off, saidSince],
   );
-  const chats = useMemo(() => mine.filter((one) => !isOff(one)), [mine, isOff]);
+  // Until which are off the list is read, none is listed: one that is off is never shown, or
+  // opened by the page, in the meantime.
+  const chats = useMemo(
+    () => (offRead ? mine.filter((one) => !isOff(one)) : []),
+    [mine, isOff, offRead],
+  );
   const hidden = useMemo(() => mine.filter(isOff).map((one) => one.agent.id), [mine, isOff]);
   // One that is back on the list because something was said in it is no longer kept as taken off.
   const back = Object.entries(off).some(([agent, at]) => saidSince(agent, at));
@@ -476,8 +485,8 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
     [change],
   );
   const value = useMemo(
-    () => ({ chats, others, listed, read, pins, pin, hidden, hide, opened }),
-    [chats, others, listed, read, pins, pin, hidden, hide, opened],
+    () => ({ chats, others, listed: listed && offRead, read, pins, pin, hidden, hide, opened }),
+    [chats, others, listed, offRead, read, pins, pin, hidden, hide, opened],
   );
   return (
     <Context.Provider value={value}>

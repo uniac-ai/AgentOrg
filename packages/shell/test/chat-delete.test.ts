@@ -232,13 +232,34 @@ test(
     const region = page.getByRole("main").getByRole("region", { name: "Chats" });
     await region.getByText("No chats", { exact: true }).waitFor();
     const any = page.getByRole("main").getByRole("region", { name: /^Conversation with / });
-    assert.equal(await any.count(), 0);
+    await until(() => any.count(), 0);
     await until(() => hidden(gateway).sort(), ["a-research", "a-reviewer", "a-triage"]);
     await page.reload();
     await region.getByText("No chats", { exact: true }).waitFor();
     await page.waitForTimeout(300);
     assert.equal(await any.count(), 0);
     assert.deepEqual(hidden(gateway).sort(), ["a-research", "a-reviewer", "a-triage"]);
+    await page.close();
+  }),
+);
+
+test(
+  "until the store says which chats are deleted none is listed, so the page never opens a deleted one in the meantime and brings it back",
+  withGateway(async (gateway) => {
+    // Research's, the most recent and so the one the page would open, was deleted.
+    gateway.notes.set(HIDDEN, { "a-research": new Date().toISOString() });
+    gateway.refuseNext(`store.get.${HIDDEN}`, "busy", "Too much at once.");
+    const page = await open(gateway, "#/chat");
+    const list = chatsOf(page);
+    // The store is asked again after five seconds. Until it answers, long after the agents'
+    // conversations are read, nothing is listed or open.
+    await page.waitForTimeout(2500);
+    assert.equal(await list.count(), 0);
+    const any = page.getByRole("main").getByRole("region", { name: /^Conversation with / });
+    assert.equal(await any.count(), 0);
+    await until(() => rowNames(list), ["Reviewer"]);
+    await conversation(page, "Reviewer").waitFor();
+    assert.deepEqual(hidden(gateway), ["a-research"]);
     await page.close();
   }),
 );
