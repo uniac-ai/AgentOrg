@@ -42,11 +42,13 @@ declare module "cordis" {
 }
 
 type Fibers = Host["fibers"];
+/** Which part of the agent registered each function and section a request carries. */
+type Parts = WeakMap<object, string>;
 
 /** Functions capabilities give the model, each offered as `<capability>__<name>`. */
 export class Tools extends Service {
-  private kept: { fibers: Fibers; tools: Map<symbol, Candidate> };
-  constructor(ctx: Context, kept: { fibers: Fibers; tools: Map<symbol, Candidate> }) {
+  private kept: { fibers: Fibers; tools: Map<symbol, Candidate>; parts: Parts };
+  constructor(ctx: Context, kept: { fibers: Fibers; tools: Map<symbol, Candidate>; parts: Parts }) {
     super(ctx, "tools");
     this.kept = kept;
   }
@@ -56,7 +58,7 @@ export class Tools extends Service {
    * the function is no longer held, and nothing of the capability runs.
    */
   register(tool: Omit<Candidate, "slot">): () => void {
-    const { name: slot, ctx } = callerOf(this.kept.fibers, this);
+    const { name: slot, ctx, part } = callerOf(this.kept.fibers, this);
     let held = true;
     const run: Candidate["run"] = async (input, group) =>
       held
@@ -64,7 +66,9 @@ export class Tools extends Service {
         : { output: `The function ${slot}__${tool.name} is no longer held.`, ok: false };
     const gone = ctx.effect(() => {
       const key = Symbol(tool.name);
-      this.kept.tools.set(key, { ...tool, slot, run });
+      const candidate = { ...tool, slot, run };
+      this.kept.parts.set(candidate, part);
+      this.kept.tools.set(key, candidate);
       return () => {
         held = false;
         this.kept.tools.delete(key);
@@ -74,7 +78,7 @@ export class Tools extends Service {
   }
 }
 
-type Kept = Section & { plugin: string };
+type Kept = Section & { plugin: string; part: string };
 
 /** What capabilities add to what the model is told. */
 export class Prompt extends Service {
@@ -89,12 +93,12 @@ export class Prompt extends Service {
    * after who it speaks as. A second of the same name from the same capability is refused.
    */
   section(section: Section): () => void {
-    const { name: plugin, ctx } = callerOf(this.kept.fibers, this);
+    const { name: plugin, ctx, part } = callerOf(this.kept.fibers, this);
     const key = `${plugin}/${section.name}`;
     if (this.kept.sections.has(key))
       throw new Error(`The plugin ${plugin} has a section named ${section.name} already.`);
     const gone = ctx.effect(() => {
-      this.kept.sections.set(key, { ...section, plugin });
+      this.kept.sections.set(key, { ...section, plugin, part });
       return () => void this.kept.sections.delete(key);
     });
     return () => void gone();
@@ -163,9 +167,12 @@ export function bundled(options: { agent: string; kv: KvStore; fibers: Fibers; l
   const { agent, kv, fibers, log } = options;
   const tools = new Map<symbol, Candidate>();
   const sections = new Map<string, Kept>();
+  const parts: Parts = new WeakMap();
+  /** Each section a request carries, by the name its capability gave it. */
+  const sectionNames = new WeakMap<object, string>();
   /** The sections, in order, each read afresh; one that throws is logged and left out. */
   const blocks = (): Part[] =>
-    [...sections.values()].sort(inOrder).flatMap(({ plugin, name, text, max }) => {
+    [...sections.values()].sort(inOrder).flatMap(({ plugin, name, text, max, part }) => {
       const owner = `plugin:${plugin}/${name}`;
       let words: string | undefined;
       try {
@@ -177,7 +184,11 @@ export function bundled(options: { agent: string; kv: KvStore; fibers: Fibers; l
           error: String(error),
         });
       }
-      return words ? [{ owner, text: words, ...(max === undefined ? {} : { max }) }] : [];
+      if (!words) return [];
+      const told: Part = { owner, text: words, ...(max === undefined ? {} : { max }) };
+      parts.set(told, part);
+      sectionNames.set(told, name);
+      return [told];
     });
   const serving =
     <T>(service: new (ctx: Context, kept: T) => Service, kept: T) =>
@@ -205,7 +216,7 @@ export function bundled(options: { agent: string; kv: KvStore; fibers: Fibers; l
       inject: ["context"],
       provide: "tools",
       async apply(ctx) {
-        await ctx.use(Tools, { fibers, tools });
+        await ctx.use(Tools, { fibers, tools, parts });
         ctx.context.pass((request) => void request.functions.push(...tools.values()));
       },
     },
@@ -227,5 +238,11 @@ export function bundled(options: { agent: string; kv: KvStore; fibers: Fibers; l
     registered: () => [...tools.values()],
     /** The sections they add through `prompt` now, in order, each read afresh. */
     sections: blocks,
+    /**
+     * The part that gave a function or a section a request carries, and, for a section, its own
+     * name; none for what a pass added itself.
+     */
+    partOf: (item: object) => parts.get(item),
+    sectionOf: (item: object) => sectionNames.get(item),
   };
 }
