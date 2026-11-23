@@ -59,11 +59,27 @@ export const Creatable = z.object({
 const OnAgent = z.object({ agent: Id });
 
 /**
- * A capability mounted on an agent, as the agent says it: by its name, unique in the agent, and
- * its title. `mounted`, it does its part. `down`, it is mounted and says it can't do its part now.
- * `failed`, it couldn't be mounted, and the agent runs without it. `detail` says why, in whole
- * sentences. `parent` names the capability that mounted it inside the agent; none for one mounted
- * on the agent from outside it.
+ * What one part of an agent registered, as it stands now: the functions it gives the model, by the
+ * names they are offered under, and the sections it adds to what the model is told, by their names.
+ */
+export const Added = z.strictObject({
+  functions: z.array(z.string().min(1).max(64)).max(128),
+  sections: z.array(z.string().min(1).max(64)).max(64),
+});
+
+/**
+ * A part of what an agent is made of, as the agent says it: by its name, unique in the agent, and
+ * its title. `mounted`, it does its part. `down`, it is there and can't do its part now: it says
+ * so, or it waits for a service it needs. `failed`, it couldn't be mounted or loaded, and the agent
+ * runs without it. `detail` says why, in whole sentences. `parent` names the part it is under: the
+ * capability that mounted it, or, for a plugin, the capability that loaded it; none for one
+ * mounted on the agent from outside it.
+ *
+ * A capability by default. `kind: "plugin"` is a plugin a capability loaded directly, which isn't
+ * a capability of its own; what it loads in turn is part of it. Its name is unique in the agent and
+ * the same while it runs, and its title is the name its plugin gives itself.
+ *
+ * `added` is what it registered, while it is there: none from an agent that doesn't say.
  */
 export const HeldCapability = z.strictObject({
   name: CapabilityId,
@@ -71,10 +87,15 @@ export const HeldCapability = z.strictObject({
   state: z.enum(["mounted", "down", "failed"]),
   detail: z.string().max(2000).optional(),
   parent: CapabilityId.optional(),
+  kind: z.literal("plugin").optional(),
+  added: Added.optional(),
 });
 
-/** The most capabilities an agent says it holds. */
-export const HELD_MAX = 64;
+/**
+ * The most parts an agent says it is made of: what every agent holds, what its settings name, what
+ * was mounted on it, and what each of those mounted and loaded.
+ */
+export const HELD_MAX = 256;
 
 /**
  * How an agent stands now, as what runs it knows: `starting`, `running`, `stopped` by the person,

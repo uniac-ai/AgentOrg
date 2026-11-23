@@ -320,8 +320,10 @@ test("an agent says each capability mounted on it, with its state; management's 
   assert.equal(status({ state: "running", mounted: [{ ...memory, state: "loading" }] }), false);
   assert.equal(status({ state: "running", mounted: [{ ...memory, name: "Memory" }] }), false);
   assert.equal(status({ state: "running", mounted: [{ ...memory, by: "person" }] }), false);
-  const many = Array.from({ length: 65 }, (_, i) => ({ ...memory, name: `part-${i}` }));
-  assert.equal(status({ state: "running", mounted: many }), false);
+  const many = (length: number) =>
+    Array.from({ length }, (_, i) => ({ ...memory, name: `part-${i}` }));
+  assert.ok(status({ state: "running", mounted: many(256) }));
+  assert.equal(status({ state: "running", mounted: many(257) }), false);
   // The person's list says how each agent stands, and nothing of what it holds.
   const listed = compiled(agents)["list.output"];
   const agent = { agent: "act_1", name: "A", provider: "act_2", creatable: "assistant" };
@@ -367,6 +369,77 @@ test("an agent says each capability mounted on it, with its state; management's 
   );
   const { by: __, ...nobody } = root;
   assert.equal(got({ ...entry, mounted: [nobody] }), false);
+});
+
+test("an agent says everything it is made of, plugins among its capabilities, each with what it added; management's get gives that whole tree", () => {
+  const status = compiled(agentProvider)["status.output"];
+  assert.ok(status);
+  const memory = {
+    name: "memory",
+    title: "Memory",
+    state: "mounted",
+    added: { functions: ["memory__edit"], sections: ["lines"] },
+  };
+  const watcher = {
+    name: "lines-watcher-23",
+    title: "linesWatcher",
+    state: "mounted",
+    parent: "memory",
+    kind: "plugin",
+    added: { functions: [], sections: [] },
+  };
+  const waiting = {
+    name: "indexer-24",
+    title: "indexer",
+    state: "down",
+    detail: "It waits for a service it needs.",
+    parent: "memory",
+    kind: "plugin",
+  };
+  assert.ok(status({ state: "running", mounted: [memory, watcher, waiting] }));
+  // A part is a capability or a plugin, and says what it added in no other shape.
+  assert.equal(status({ state: "running", mounted: [{ ...watcher, kind: "capability" }] }), false);
+  assert.equal(
+    status({ state: "running", mounted: [{ ...memory, added: { functions: ["x"] } }] }),
+    false,
+  );
+  assert.equal(
+    status({ state: "running", mounted: [{ ...memory, added: { ...memory.added, blocks: [] } }] }),
+    false,
+  );
+  assert.equal(
+    status({
+      state: "running",
+      mounted: [{ ...memory, added: { functions: ["f".repeat(65)], sections: [] } }],
+    }),
+    false,
+  );
+  // What was said before this still is.
+  assert.ok(
+    status({ state: "running", mounted: [{ name: "hub", title: "Hub", state: "mounted" }] }),
+  );
+
+  const got = compiled(agents)["get.output"];
+  assert.ok(got);
+  const entry = {
+    agent: "act_1",
+    name: "A",
+    provider: "act_2",
+    creatable: "assistant",
+    status: { state: "running" },
+    instructions: "",
+    skills: [],
+    mcp: [],
+    units: [],
+    capabilities: [],
+    mounted: [],
+  };
+  assert.ok(got({ ...entry, composition: [memory, watcher, waiting] }));
+  assert.ok(
+    got(entry),
+    "none said: an agent that can't be asked, or something written before this",
+  );
+  assert.equal(got({ ...entry, composition: [{ ...watcher, by: "person" }] }), false);
 });
 
 test("a fact may carry a note under its value, short and never empty", () => {
