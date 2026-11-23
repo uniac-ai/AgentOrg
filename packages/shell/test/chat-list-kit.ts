@@ -63,12 +63,20 @@ export async function until<T>(read: () => Promise<T> | T, expected: T) {
     }
   }
 }
-/** Opens a conversation's menu by a right-click and presses its one item, which must be this. */
-export async function choose(page: Page, of: Locator, item: "Pin" | "Unpin") {
+/**
+ * Opens a conversation's menu by a right-click, which must list `first` and then Delete chat, and
+ * presses one of the two: `first`, unless the other is asked for.
+ */
+export async function choose(
+  page: Page,
+  of: Locator,
+  first: "Pin" | "Unpin",
+  item: "Pin" | "Unpin" | "Delete chat" = first,
+) {
   await of.click({ button: "right" });
   const menu = page.getByRole("menu");
   await menu.waitFor();
-  assert.deepEqual(await menu.getByRole("menuitem").allInnerTexts(), [item]);
-  await menu.getByRole("menuitem", { name: item }).click();
+  assert.deepEqual(await menu.getByRole("menuitem").allInnerTexts(), [first, "Delete chat"]);
+  await menu.getByRole("menuitem", { name: item, exact: true }).click();
   await menu.waitFor({ state: "detached" });
 }

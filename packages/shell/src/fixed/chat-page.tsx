@@ -23,7 +23,7 @@ import { Thread } from "./thread.tsx";
 import { useAgents } from "./watch.tsx";
 
 export function ChatPage({ agent }: { agent?: string | undefined }) {
-  const { chats, listed } = useAllChats();
+  const { chats, hidden, listed } = useAllChats();
   const agents = useAgents();
   const [ref, split, width] = useSplit<HTMLDivElement>();
   // Wide, the open computer is shown here, beside the conversation, and not in the layer.
@@ -48,8 +48,12 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
         }
       : undefined;
   // The first start: while no conversation has begun at all, once that is known, the first agent's
-  // conversation is open, empty. Its row comes with its first message.
-  const fresh = listed && chats.length === 0 && !agents.unread ? agents.list[0]?.agent : undefined;
+  // conversation is open, empty. Its row comes with its first message. One taken off the list has
+  // begun.
+  const fresh =
+    listed && chats.length === 0 && hidden.length === 0 && !agents.unread
+      ? agents.list[0]?.agent
+      : undefined;
   // On a phone, its way back is to the list, which says it has none.
   const [back, setBack] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -78,6 +82,7 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
               chats={chats}
               current={split ? open : undefined}
               onOpen={(id) => go({ screen: "chat", agent: id })}
+              onEmpty={() => go({ screen: "chat" })}
               className="no-bar min-h-0 flex-1 overflow-y-auto px-2 pb-24"
             />
           )}
