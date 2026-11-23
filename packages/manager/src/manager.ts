@@ -736,12 +736,19 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         removeUnit: (input) => stacks.serial(input.agent, () => stacks.removeUnit(input)),
         activity: (input) => activity.read(input),
         async live({ agent, instance, surface, mode }) {
-          const unit = recordOf(agent).units.find((one) => one.instance === instance);
-          if (!unit || unit.provider === options.actorId)
+          const record = recordOf(agent);
+          const unit = record.units.find((one) => one.instance === instance);
+          // A capability mounted through management, by its mount: what its provider made is
+          // opened through the provider's `live`, under the id it gave the mount, as a unit's is.
+          const mount = record.mounted.find((one) => one.mounted === instance && one.made);
+          const made = unit
+            ? { provider: unit.provider, instance: unit.providerInstance }
+            : mount && { provider: mount.provider, instance: mount.providerMounted };
+          if (!made || made.provider === options.actorId)
             throw new Refused("unknown", `${agent} has nothing like that to open live.`);
-          const provider = unitProviders().find((one) => one.actor === unit.provider);
+          const provider = unitProviders().find((one) => one.actor === made.provider);
           if (!provider) throw new Refused("not_connected", "Its provider can't be reached now.");
-          return provider.call.live({ instance: unit.providerInstance, surface, mode });
+          return provider.call.live({ instance: made.instance, surface, mode });
         },
 
         async list() {

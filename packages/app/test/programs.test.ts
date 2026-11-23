@@ -1564,7 +1564,7 @@ test("the person's get and the agent's capability_list give one tree of what the
   assert.ok(parts.get("control")?.added?.functions.includes("control__capability_list"));
 });
 
-test("a computer mounted on agents@2 gives the agent and the person what the same answers give as a unit, through management: its capability's title, slots, surfaces and views, its skills, its connection and the same functions; unmounted, all of it goes", async (t) => {
+test("a computer mounted on agents@2 gives the agent and the person what the same answers give as a unit, through management: its capability's title, slots, surfaces and views, its skills, its connection and the same functions, and its terminal opens live; unmounted, all of it goes", async (t) => {
   const root = newFolder("agentorg-mount-");
   const data = join(root, "service");
   const workspace = join(root, "workspace");
@@ -1575,7 +1575,7 @@ test("a computer mounted on agents@2 gives the agent and the person what the sam
     agentsFolder: join(root, "Agents"),
   });
   await startService(t, data);
-  const { person } = await s.start();
+  const { person, app } = await s.start();
   const answers = { workspace, access: "terminal", ...NEITHER };
   type Held = {
     id: string;
@@ -1651,6 +1651,18 @@ test("a computer mounted on agents@2 gives the agent and the person what the sam
       )
     ).tools;
   assert.deepEqual(await listed(mountGot), await listed(unitGot));
+  // Its terminal opens live, as the page opens it: by the agent and what its capability is from.
+  const cli = readFileSync(join(s.home, "cli-token"), "utf8").trim();
+  const socket = new WebSocket(
+    `${app.url.replace("http", "ws")}/live?agent=${byMount}&instance=${held(mountGot)?.from}&surface=terminal&mode=watch`,
+    { headers: { Authorization: `Bearer ${cli}` } },
+  );
+  const frames: string[] = [];
+  socket.on("message", (data) => frames.push(String(data)));
+  t.after(() => socket.close());
+  await until(() => frames.length > 0, "the mounted computer's terminal to open");
+  assert.deepEqual(JSON.parse(frames[0] as string), { op: "live", protocol: "terminal@1" });
+  socket.close();
   // Unmounted, with no restart: its capability, its skills and its connection go.
   await person.call("agents2", "unmount", { agent: byMount, mounted: made.mounted });
   const after = await got(byMount);
