@@ -1,7 +1,5 @@
 :root {
   --canvas: rgb(25 25 25);
-  /* A card beside the page's own, a step off the canvas: lighter in dark, darker in light. */
-  --aside: rgb(31 31 31);
   --surface: rgb(35 35 35);
   --raised: rgb(50 50 50);
   --card: rgb(42 42 42);
@@ -35,7 +33,6 @@
   --bad: rgb(220 38 38);
   --warn: rgb(180 83 9);
   --canvas: rgb(250 250 250);
-  --aside: rgb(245 245 245);
   --surface: rgb(255 255 255);
   --raised: rgb(240 240 240);
   --card: rgb(244 244 244);
