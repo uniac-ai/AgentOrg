@@ -1286,6 +1286,45 @@ test("agents@2 makes an agent empty and is what is mounted on it, and carries ev
     false,
   );
   assert.ok(a["removeTemplate.input"]?.({ id: "keeper" }));
+  // A template as management offers it: its arguments, one property for each capability it lists,
+  // each that capability's own schema, a computer's token secret among them.
+  const remote = {
+    id: "remote-keeper",
+    title: "Remote keeper",
+    description: "Keeps things on a computer elsewhere.",
+    arguments: {
+      type: "object",
+      properties: {
+        computer: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["this", "new"] },
+            address: { type: "string" },
+            token: { type: "string", title: "Token", secret: true },
+          },
+        },
+        memory: { type: "object", properties: {} },
+        "memory-2": { type: "object", properties: {} },
+      },
+    },
+    provider: "act_management",
+  };
+  assert.ok(a["capabilities.output"]?.({ capabilities: [remote] }));
+  // Filled as it is mounted: what is given overrides the template's, a secret among it.
+  assert.ok(
+    a["mount.input"]?.({
+      agent: "act_1",
+      provider: "act_management",
+      capability: "remote-keeper",
+      arguments: { computer: { address: "https://far.example/", token: "tok" } },
+    }),
+  );
+  // A required argument left empty is a problem at its key's path, and nothing is mounted.
+  assert.ok(
+    a["mount.output"]?.({
+      problems: [{ path: "/computer/token", message: "Token must be given." }],
+    }),
+  );
   assert.ok(a["mount.output"]?.({ mounted: "mnt_1" }));
   assert.ok(a["capabilities.output"]?.({ capabilities: [] }));
 });

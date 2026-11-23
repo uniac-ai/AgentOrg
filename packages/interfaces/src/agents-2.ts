@@ -71,6 +71,15 @@ const Detail = agents.methods.get.output.omit({ creatable: true, template: true,
  * its arguments, as its own, each naming the template's mount as `parent`; unmounting the template
  * takes them off. Saving a template defines one.
  *
+ * A template is filled as it is mounted, as a template was filled as an agent was created from it:
+ * - Its definition's arguments have one property for each capability it lists, keyed by that
+ *   capability's id, `-2`, `-3` and on for a repeat (`computer`, `web`, `memory-2`). Each is that
+ *   capability's own argument schema, as its provider gives it, its secrets marked as they are.
+ * - What is given under a key overrides the template's arguments for that capability. A secret
+ *   among it goes to that capability's provider's mount and nowhere else, as any secret does.
+ * - A required argument the template leaves empty, with none given, is a problem at
+ *   `/<key>/<argument>`, and nothing of the template is mounted.
+ *
  * Calls carried over from `agents@1` as they are: `start`, `stop`, `activity`, `live`, `models`,
  * `setModel`, `expose` and `unexpose`. Gone: `creatable`, `providers`, `units`, `check`, `addUnit`
  * and `removeUnit`, which are mounts now.
