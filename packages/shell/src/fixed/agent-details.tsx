@@ -1,6 +1,7 @@
 // An agent's details beside your conversation with it, on the chat page: its Close in a thin row
-// at the top, its face with its name beside it, which go to it on the team page, and what it is
-// for in a box under them, read whole. Its ground and its frame are the side's it is shown in.
+// at the top, and under it one card with its face, its name and what it is for, stacked and
+// centred at the creation window's sizes. Its face and name go to it on the team page. The
+// column's ground and frame are the side's it is shown in.
 import { XIcon } from "lucide-react";
 import { go } from "../data.ts";
 import { Button } from "../ui/button.tsx";
@@ -33,22 +34,20 @@ export function AgentDetails({ agent: id, onClose }: { agent: string; onClose():
           <XIcon />
         </Button>
       </div>
-      <div className="px-3 pb-3">
+      {/* Set off from whatever ground the side has by its line and its fill. */}
+      <div className="mt-3 flex flex-col items-center rounded-2xl border bg-[var(--raised)] px-6 py-6 text-center">
         <button
           type="button"
           aria-label={`${entry.name} on the team page`}
-          className="flex w-full min-w-0 items-center gap-3 rounded-xl text-left"
+          className="flex max-w-full flex-col items-center rounded-xl"
           onClick={() => go({ screen: "team", agent: id })}
         >
-          <Face agent={{ id, name: entry.name, tone: now.tone }} size={48} plain />
-          <span className="truncate text-[17px] font-semibold">{entry.name}</span>
+          <Face agent={{ id, name: entry.name, tone: now.tone }} size={80} plain />
+          <span className="mt-4 max-w-full text-[22px] leading-8 font-semibold tracking-tight">
+            {entry.name}
+          </span>
         </button>
-        {/* In a box of its own, set off from whatever ground the side has by its line and its fill. */}
-        {purpose && (
-          <p className="mt-3 rounded-xl border bg-[var(--raised)] px-3 py-2.5 text-[15px] text-muted-foreground">
-            {purpose}
-          </p>
-        )}
+        {purpose && <p className="mt-1 text-[13px] leading-5 text-muted-foreground">{purpose}</p>}
       </div>
     </section>
   );

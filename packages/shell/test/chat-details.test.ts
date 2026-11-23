@@ -114,7 +114,7 @@ test(
 );
 
 test(
-  "the details are their Close in a thin row of its own in the top corner, the agent's face with its name beside it on one line under that, and what it is for in a box under them, read whole, on the side's ground, and nothing else",
+  "the details are their Close in a thin row of its own in the top corner and, under it, one card with the agent's face, its name and what it is for, read whole, stacked and centred at the creation window's sizes, on the side's ground, and nothing else",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
     const purpose = "Digs through issues and docs, and writes up what it finds for the whole team";
@@ -129,40 +129,49 @@ test(
       await shown.getByRole("button").evaluateAll((all) => all.map((b) => b.ariaLabel)),
       ["Close Research's details", "Research on the team page"],
     );
-    const boxes = await shown.evaluate((card) => {
+    const boxes = await shown.evaluate((column) => {
       const box = (element: Element | null | undefined) => {
         const at = (element as Element).getBoundingClientRect();
-        return { x: at.x, y: at.y, right: at.right, bottom: at.bottom, mid: at.y + at.height / 2 };
+        return { x: at.x, y: at.y, right: at.right, bottom: at.bottom, mid: (at.x + at.right) / 2 };
       };
-      const [close, group] = card.querySelectorAll("button");
-      const said = card.querySelector("p") as Element;
-      const box_ = getComputedStyle(said);
+      const [close, group] = column.querySelectorAll("button");
+      const said = column.querySelector("p") as Element;
+      const card = said.parentElement as Element;
+      const name = group?.lastElementChild as Element;
+      const [carded, named, worded] = [card, name, said].map((e) => getComputedStyle(e));
       return {
-        card: box(card),
+        column: box(column),
         close: box(close),
+        card: box(card),
         face: box(group?.firstElementChild),
-        name: box(group?.lastElementChild),
-        group: box(group),
+        name: box(name),
         purpose: box(said),
-        ground: getComputedStyle(card).backgroundColor,
-        boxed: [box_.borderTopWidth, box_.backgroundColor !== "rgba(0, 0, 0, 0)"],
+        ground: getComputedStyle(column).backgroundColor,
+        carded: [carded?.borderTopWidth, carded?.backgroundColor !== "rgba(0, 0, 0, 0)"],
+        type: [named?.fontSize, named?.fontWeight, worded?.fontSize, worded?.textAlign],
         // Nothing of it is cut at its side: neither what it is for, nor the column.
-        cut: [card, said].map((e) => e.scrollWidth - e.clientWidth),
+        cut: [column, said].map((e) => e.scrollWidth - e.clientWidth),
       };
     });
     const sizeOf = (at: { x: number; y: number; right: number; bottom: number }) => [
       at.right - at.x,
       at.bottom - at.y,
     ];
-    // Close is small, in the column's top corner, with nothing beside it.
+    // Close is small, in the column's top corner, with nothing beside it; the card is 12 under its
+    // row.
     assert.deepEqual(sizeOf(boxes.close), [24, 24], "its Close");
-    assert.deepEqual([boxes.close.right, boxes.close.y], [boxes.card.right, boxes.card.y]);
-    assert.ok(boxes.group.y >= boxes.close.bottom, "its face and name under Close's row");
-    assert.deepEqual(sizeOf(boxes.face), [48, 48], "its face");
-    assert.ok(boxes.name.x >= boxes.face.right, "its name beside its face");
-    assert.ok(Math.abs(boxes.name.mid - boxes.face.mid) <= 1, "on its face's middle");
-    assert.ok(boxes.purpose.y >= boxes.group.bottom, "what it is for under them");
-    assert.deepEqual(boxes.boxed, ["1px", true], "in a box with a line and a fill");
+    assert.deepEqual([boxes.close.right, boxes.close.y], [boxes.column.right, boxes.column.y]);
+    assert.equal(boxes.card.y - boxes.close.bottom, 12, "the card under Close's row");
+    assert.deepEqual([boxes.card.x, boxes.card.right], [boxes.column.x, boxes.column.right]);
+    assert.deepEqual(boxes.carded, ["1px", true], "a card with a line and a fill");
+    // In it, as the creation window draws them: a face of 80, the name 16 under it at 22 semibold,
+    // and what it is for 4 under that at 13, each on the card's middle.
+    assert.deepEqual(sizeOf(boxes.face), [80, 80], "its face");
+    assert.equal(boxes.name.y - boxes.face.bottom, 16, "its name under its face");
+    assert.equal(boxes.purpose.y - boxes.name.bottom, 4, "what it is for under its name");
+    assert.deepEqual(boxes.type, ["22px", "600", "13px", "center"]);
+    for (const part of [boxes.face, boxes.name, boxes.purpose])
+      assert.ok(Math.abs(part.mid - boxes.card.mid) <= 0.5, "on the card's middle");
     assert.deepEqual(boxes.cut, [0, 0]);
     assert.equal(boxes.ground, "rgba(0, 0, 0, 0)", "no ground of its own");
     await page.close();
