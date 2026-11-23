@@ -820,7 +820,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             agent,
             record,
           );
-          const [name, { mounted: held, ...status }, mcp] = await Promise.all([
+          const [name, { mounted: held, ...status }, mcp, outside] = await Promise.all([
             nameOf(agent),
             agentStatus(agent, record.provider),
             Promise.all(
@@ -834,6 +834,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                 ...withInstance(instanceOfSlot(b.slot)),
               })),
             ),
+            mounts.outside(agent, record),
           ]);
           return {
             agent,
@@ -852,7 +853,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             mcp,
             units,
             capabilities,
-            mounted: mounts.tree(record, held),
+            mounted: mounts.tree(record, held, outside),
             // Everything it is made of, as the agent says it, while it can be asked.
             ...(held ? { composition: held } : {}),
           };
@@ -1012,9 +1013,17 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           };
           // Each mounted as a template's names the template's mount.
           const { agent } = input as { agent: string };
+          const parents = new Map(
+            recordOf(agent).mounted.flatMap(({ mounted: id, parent }) =>
+              parent ? [[id, parent] as const] : [],
+            ),
+          );
           return {
             ...rest,
-            mounted: mounted && mounts.tree(recordOf(agent), rest.composition, true),
+            mounted: (mounted as { mounted: string }[]).map((one) => {
+              const parent = parents.get(one.mounted);
+              return parent ? { ...one, parent } : one;
+            }),
           } as never;
         },
         async capabilities() {

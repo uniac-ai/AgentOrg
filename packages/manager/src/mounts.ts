@@ -18,7 +18,7 @@
  * with it when its agent starts; how it is, is for the step that rebuilds how agents are made.
  */
 import type { capabilityProvider, HeldCapability, Template2 } from "@agentorg/interfaces";
-import { type Log, Refused, type Slot } from "@agentorg/sdk";
+import { type Log, NotConnected, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import { CONTROL_ROOT, holdsControl, OWN_ROOTS, unitControls } from "./settings.js";
 import type { AgentRecord, MountRecord } from "./stack.js";
@@ -28,6 +28,9 @@ type Made = Awaited<ReturnType<Provider["mount"]>>;
 type TheAgent = z.infer<typeof AgentRecord>;
 type Root = z.infer<typeof MountRecord>;
 type Held = z.infer<typeof HeldCapability>;
+/** How a mount stands, as its provider says it. */
+type Stood = { state: Held["state"]; detail?: string };
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 type Json = Root["arguments"][string];
 type TheTemplate = z.infer<typeof Template2>;
 type Problem = { path?: string; message: string };
@@ -180,11 +183,12 @@ export function createMounts(parts: MountParts) {
     );
     if (!defined)
       throw new Refused("unknown", `${input.provider} offers no capability ${capability}.`);
-    // Held once, whether it was mounted or built by a unit.
+    // Held once, whether it was mounted or built by a unit, unless it may be held many times.
     if (
-      record.mounted.some((one) => one.capability === capability) ||
-      record.capabilities.some((one) => one.id === capability) ||
-      (capability === CONTROL_ROOT && unitControls(record, self))
+      !defined.many &&
+      (record.mounted.some((one) => one.capability === capability) ||
+        record.capabilities.some((one) => one.id === capability) ||
+        (capability === CONTROL_ROOT && unitControls(record, self)))
     )
       throw new Refused("state", `It holds a ${defined.title} already.`);
     // Control's arguments are its control unit's answers, settled as they are: what it gates
@@ -449,16 +453,70 @@ export function createMounts(parts: MountParts) {
      * agent says them. With no word from the agent, a root has no state and no children. With
      * `parents`, each mounted as a template's names the template's mount.
      */
-    tree(record: TheAgent, held: Held[] | undefined, parents = false) {
+    tree(
+      record: TheAgent,
+      held: Held[] | undefined,
+      outside: Map<string, Stood> = new Map(),
+      parents = false,
+    ) {
       return record.mounted.map(({ providerMounted: _, made: __, parent, ...root }) => {
-        const own = held?.find((one) => one.name === root.capability && !one.parent);
+        // One a provider outside the agent made says how it stands through that provider.
+        const stood = outside.get(root.mounted);
+        const own = stood
+          ? undefined
+          : held?.find((one) => one.name === root.capability && !one.parent);
+        const said = stood ?? own;
         return {
           ...root,
           ...(parents && parent ? { parent } : {}),
-          ...(own ? { state: own.state, ...(own.detail ? { detail: own.detail } : {}) } : {}),
+          ...(said ? { state: said.state, ...(said.detail ? { detail: said.detail } : {}) } : {}),
           children: own && held ? under(held, own.name) : [],
         };
       });
+    },
+
+    /**
+     * How each mount a provider outside the agent made stands, by its mount, as that provider says:
+     * asked when a person or a program reads the agent, never in its turn. One the provider no
+     * longer has is failed, and one whose provider can't be reached now is down.
+     */
+    async outside(agent: string, record: TheAgent) {
+      const asked = record.mounted.filter(
+        (one) => one.providerMounted && one.provider !== record.provider && one.provider !== self,
+      );
+      const said = await Promise.all(
+        asked.map(async (root): Promise<[string, Stood]> => {
+          const provider = providerOf(root.provider);
+          if (!provider)
+            return [root.mounted, { state: "down", detail: "Its provider can't be reached now." }];
+          try {
+            const { state, detail } = await provider.call.status({
+              agent,
+              mounted: root.providerMounted,
+            });
+            return [root.mounted, { state, ...(detail ? { detail } : {}) }];
+          } catch (error) {
+            const away =
+              error instanceof NotConnected ||
+              (error instanceof Refused && error.code === "not_connected");
+            return [
+              root.mounted,
+              alreadyGone(error)
+                ? { state: "failed", detail: "Its provider no longer has it." }
+                : away
+                  ? { state: "down", detail: "Its provider can't be reached now." }
+                  : {
+                      state: "down",
+                      detail: `Its provider didn't say how it stands: ${messageOf(error)}`.slice(
+                        0,
+                        2000,
+                      ),
+                    },
+            ];
+          }
+        }),
+      );
+      return new Map(said);
     },
   };
 }

@@ -874,11 +874,12 @@ async function measuredAgent(name, stack) {
     const { capabilities } = await person.call("agents", "capabilities");
     const offered = capabilities.find((one) => one.id === "control");
     if (!offered) throw new Error("Control isn't on offer.");
+    // Control takes its unit's answers: at least a template its agents can be made from.
     const made = await person.call("agents", "mount", {
       agent,
       provider: offered.provider,
       capability: "control",
-      arguments: {},
+      arguments: { templates: ["assistant"] },
     });
     if (!made.mounted) throw new Error(`Control wasn't mounted: ${JSON.stringify(made)}`);
   }
