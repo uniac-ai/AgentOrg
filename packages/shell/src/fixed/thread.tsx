@@ -410,7 +410,9 @@ export interface OnPage {
  * The head of your conversation with an agent: its face, which goes to its details, and its name,
  * in the middle; back to the list at its start; its computer, begun or not, at its end. One
  * between two agents is named by both, and says it is there to be read. On the chat page it has no
- * close, and a way back only where the list isn't beside it.
+ * close, and a way back only where the list isn't beside it. It takes no room of its own: it lies
+ * over the top of the room, where what is said goes up behind it, and only its buttons take the
+ * pointer, so anywhere else on it the room is scrolled and pressed as if it weren't there.
  */
 function Head({
   agent,
@@ -428,7 +430,7 @@ function Head({
   const { show, close } = useChats();
   const back = page ? page.back : () => show({ kind: "list" });
   return (
-    <header className="grid h-14 shrink-0 grid-cols-[1fr_auto_minmax(0,auto)_1fr] items-center gap-x-2.5 px-2.5">
+    <header className="pointer-events-none absolute inset-x-0 top-0 z-20 grid h-14 grid-cols-[1fr_auto_minmax(0,auto)_1fr] items-center gap-x-2.5 px-2.5 [&_button]:pointer-events-auto">
       {back && (
         <Button
           variant="ghost"
@@ -799,7 +801,7 @@ export function Thread({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <Head agent={agent} other={other} begun={!!chat} page={page}>
         {hasComputer && (
           <Button
@@ -817,20 +819,23 @@ export function Thread({
       {/* What is said is followed to its end as it comes, until the person scrolls away. */}
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
-          {/* Under the head, what is said goes up into a blur and the conversation's ground, both
-              fading downward to nothing. Scrolled to its start, the room has neither. */}
+          {/* From the room's top, behind the head and 40 px under it, what is said goes up into a
+              blur and the conversation's ground. Both are whole behind the head's face and name,
+              which stay plain to read, and fade downward to nothing under it. Scrolled to its
+              start, the room has neither. */}
           <GradualBlur
             position="top"
-            height={40}
-            strength={1}
+            height={96}
+            curve="ease-out"
             tint="var(--thread)"
             autoHide
             zIndex={10}
           />
           <Room sent={sends.current}>
-            {/* Room above the first message; with none yet, what went wrong is at the top. */}
+            {/* The head's own height, which it covers, then room above the first message; with
+                none yet, what went wrong is first under the head. */}
             <MessageScrollerContent
-              className={`mx-auto w-full max-w-[720px] gap-6 px-4 pb-4 ${turns.length > 0 ? "pt-3" : ""}`}
+              className={`mx-auto w-full max-w-[720px] gap-6 px-4 pb-4 ${turns.length > 0 ? "pt-[68px]" : "pt-14"}`}
             >
               {hasEarlier && (
                 <MessageScrollerItem>

@@ -1,5 +1,6 @@
 // A conversation's head, in a real browser over the stand-in gateway: its agent's face and name in
-// the middle, its other controls at its ends, and under it the blur what is said goes up into.
+// the middle, its other controls at its ends, the head lying over the top of the room, and the blur
+// what is said goes up into behind it.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
@@ -104,18 +105,25 @@ for (const [where, width, has] of [
   );
 
 test(
-  "under the head a blur 40 px deep lies over what is said, in the conversation's ground: none where the room is at its start, all of it once what is said has gone up under the head",
+  "the head takes no room: it lies over the top of the room, whose first message starts 12 px under it; behind it and 40 px under it a blur in the conversation's ground lies over what is said, none where the room is at its start, all of it once what is said has gone up; and the wheel over the head moves the room",
   withGateway(async (gateway) => {
     for (const where of ["chat", "floating"] as const) {
       researchSays(gateway, "oneLine");
       const { page, thread } = await conversation(gateway, where);
-      /** The blur: where it lies under the head, how much of it shows, and what it is washed in. */
-      const blur = () =>
+      /**
+       * The head over the room, and the blur: where each lies, how much of the blur shows, and
+       * what it is washed in.
+       */
+      const read = () =>
         thread.locator('[data-slot="message-scroller"]').evaluate((scroller) => {
           const over = scroller.querySelector(':scope > [aria-hidden="true"]') as HTMLElement;
           const box = over.getBoundingClientRect();
+          const room = scroller.getBoundingClientRect();
           const thread = scroller.parentElement as Element;
           const head = (thread.querySelector("header") as Element).getBoundingClientRect();
+          const first = (
+            scroller.querySelector('[data-slot="bubble"]') as Element
+          ).getBoundingClientRect();
           const wash = getComputedStyle(over.lastElementChild as Element).backgroundColor;
           const ground = document.createElement("i");
           ground.style.background = "var(--thread)";
@@ -123,9 +131,12 @@ test(
           const its = getComputedStyle(ground).backgroundColor;
           ground.remove();
           return {
-            under: Math.round(box.top - head.bottom),
-            deep: Math.round(box.height),
-            wide: Math.round(box.width - scroller.getBoundingClientRect().width),
+            headOverRoom: [Math.round(head.top - room.top), Math.round(head.width - room.width)],
+            headDeep: Math.round(head.height),
+            first: Math.round(first.top - head.bottom),
+            blurFrom: Math.round(box.top - room.top),
+            blurPastHead: Math.round(box.bottom - head.bottom),
+            wide: Math.round(box.width - room.width),
             shows: Number(over.style.getPropertyValue("--gradual-blur-reveal")),
             layers: [...over.children].filter(
               (one) => getComputedStyle(one).backdropFilter !== "none",
@@ -134,13 +145,24 @@ test(
             pointer: getComputedStyle(over).pointerEvents,
           };
         });
-      const short = await blur();
+      const start = await read();
       assert.deepEqual(
-        { ...short, layers: short.layers > 0 },
-        { under: 0, deep: 40, wide: 0, shows: 0, layers: true, washed: true, pointer: "none" },
+        { ...start, layers: start.layers > 0 },
+        {
+          headOverRoom: [0, 0],
+          headDeep: 56,
+          first: 12,
+          blurFrom: 0,
+          blurPastHead: 40,
+          wide: 0,
+          shows: 0,
+          layers: true,
+          washed: true,
+          pointer: "none",
+        },
         `${where}: a room at its start`,
       );
-      // A reply longer than the room: its start has gone up under the head.
+      // A reply longer than the room: its start has gone up behind the head.
       const said = Array.from({ length: 70 }, (_, n) => `Finding ${n} is on a line of its own.`);
       gateway.addMessage("a-research", {
         id: "whole",
@@ -156,8 +178,45 @@ test(
             ?.style.getPropertyValue("--gradual-blur-reveal") === "1.000",
         await thread.locator('[data-slot="message-scroller"]').elementHandle(),
       );
-      assert.equal((await blur()).shows, 1, `${where}: scrolled`);
+      assert.equal((await read()).shows, 1, `${where}: scrolled`);
+      // The wheel over the head, beside its name, moves the room under it.
+      const room = thread.locator('[data-slot="message-scroller-viewport"]');
+      const short = () =>
+        room.evaluate((view) => Math.round(view.scrollHeight - view.scrollTop - view.clientHeight));
+      assert.equal(await short(), 0, "at its end");
+      const head = await thread.locator("header").boundingBox();
+      assert.ok(head);
+      await page.mouse.move(head.x + head.width * 0.25, head.y + head.height / 2);
+      await page.mouse.wheel(0, -300);
+      await page.waitForFunction(
+        (view) => !!view && view.scrollHeight - view.scrollTop - view.clientHeight === 300,
+        await room.elementHandle(),
+      );
       await page.close();
     }
+  }),
+);
+
+test(
+  "a conversation with nothing said yet says what went wrong right under the head",
+  withGateway(async (gateway) => {
+    gateway.refuseNext("chat.send", "busy", "It can't take that now.");
+    const page = await browser().newPage({ viewport: { width: 1440, height: 900 } });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    await page.goto(`${gateway.url}/#/chat/a-triage`);
+    const thread = page.getByRole("main").getByRole("region", { name: "Conversation with Triage" });
+    const box = thread.getByRole("textbox", { name: "Message" });
+    await box.fill("Route today's issues");
+    await box.press("Enter");
+    const wrong = thread.getByRole("alert");
+    await wrong.getByText("It can't take that now.").waitFor();
+    const [head, line] = [await thread.locator("header").boundingBox(), await wrong.boundingBox()];
+    assert.ok(head && line);
+    assert.equal(Math.round(line.y - (head.y + head.height)), 0);
+    await page.close();
   }),
 );
