@@ -105,9 +105,10 @@ export interface AgentPlugins {
    * are loaded. One it can't hold, it runs without, and says why: a name the host doesn't carry; a
    * plugin that doesn't load, or that needs a service none it holds provides, each then unloaded.
    * Each is tried again when next it is held. It gives what they then give, read before any later
-   * change begins.
+   * change begins. `everything` is every capability its settings name, whoever provides it, which
+   * its capabilities read as what is mounted on it.
    */
-  hold(named: Named[]): Promise<Given>;
+  hold(named: Named[], everything?: string[]): Promise<Given>;
   /** Unload them all: what each registered goes with it. */
   close(): Promise<void>;
   /** Pass a request through every capability's passes, in their order. */
@@ -193,6 +194,8 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
       const turns: { owner: string; turn: Turn }[] = [];
       /** The plugins its settings named last, in the order they named them. */
       let namedOrder: string[] = [];
+      /** Every capability its settings named last, whoever provides it. */
+      let everyNamed: string[] = [];
       const made = bundled({ agent, kv: options.store, fibers, log });
 
       /** Everything under `name`, deepest first. */
@@ -381,6 +384,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
             ...[...failed.values()].map(({ from: _, ...held }) => held),
           ];
         },
+        named: () => [...everyNamed],
         signal(name) {
           const entry = entries.get(name);
           if (!entry) throw new Error(`The agent holds no ${name}.`);
@@ -642,8 +646,9 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
               error instanceof AggregateError ? error.errors.forEach(failedOn) : failedOn(error),
             );
         },
-        hold: (named) =>
+        hold: (named, everything) =>
           inTurn(async () => {
+            if (everything) everyNamed = everything;
             const without = closed ? [] : await hold(named);
             return { tools: tools(), blocks: blocks(), without };
           }),

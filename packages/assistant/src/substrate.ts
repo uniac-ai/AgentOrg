@@ -139,6 +139,8 @@ export interface Host {
   mount(parent: string, ctx: Context, capability: Capability, args: unknown): Promise<void>;
   unmount(name: string): Promise<void>;
   list(): Held[];
+  /** Every capability the agent's settings named last, whoever provides it, by id. */
+  named(): string[];
   /** The abort signal of the capability named. */
   signal(name: string): AbortSignal;
   /** What the capability named says of itself now. */
@@ -234,6 +236,15 @@ export class Capabilities extends Service {
   list(): Held[] {
     callerOf(this.host.fibers, this);
     return this.host.list();
+  }
+  /**
+   * Every capability mounted on the agent, by id, whoever provides it: those it holds, and those a
+   * provider outside it made, as its settings named them when its engine last read them. It asks
+   * no one.
+   */
+  named(): string[] {
+    callerOf(this.host.fibers, this);
+    return this.host.named();
   }
   /** The caller's abort signal: it fires when the caller is taken off, or its agent closes. */
   get signal(): AbortSignal {

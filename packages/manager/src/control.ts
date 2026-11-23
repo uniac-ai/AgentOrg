@@ -46,8 +46,8 @@ const HOME = "home";
 
 const OUTPUT_MAX = 200_000;
 
-const SKILL = "delegating";
-const SKILL_FILE = "SKILL.md";
+export const SKILL = "delegating";
+export const SKILL_FILE = "SKILL.md";
 const SKILL_TEXT = `---
 name: ${SKILL}
 description: How to hand work to agents of your own and see it through, and what else your control tools reach. Use it before creating an agent, and whenever you have work that can run apart from yours.
@@ -311,9 +311,21 @@ const onThisMachine = (values: Values) =>
   (values.kind === "new" && (values.made ?? "container") === "container") ||
   values.service === "local";
 
-/** How far an agent's own computer reaches now. */
+/** A computer mounted on the agent, as its unit's would be read: its answers, and what it gave. */
+const mountedComputer = (record: TheAgent) => {
+  const root = record.mounted.find((one) => one.capability === COMPUTER);
+  return (
+    root && {
+      values: root.arguments as Values,
+      connections: root.made?.connections ?? [],
+      skills: root.made?.skills ?? [],
+    }
+  );
+};
+
+/** How far an agent's own computer reaches now: its computer unit's, or a computer mounted. */
 export function reachOf(record: TheAgent): Reach {
-  const unit = record.units.find((one) => one.unit === COMPUTER);
+  const unit = record.units.find((one) => one.unit === COMPUTER) ?? mountedComputer(record);
   if (!unit) {
     if (!record.computer) return NOWHERE;
     // Shared, as it was kept: an earlier version said where by its service.
@@ -372,10 +384,17 @@ const boundOf = (values: Values): Bound => ({
 });
 /** Whether a bound lets an agent create and manage agents of its own. */
 const own = (bound: Bound) => atLeast(AGENTS, bound.agents, "own");
-/** What an agent's agents unit allows it, if it holds management's. */
+/**
+ * What an agent's control allows it: its AgentOrg control unit's answers, if it holds management's,
+ * or else the arguments control was mounted on it with, which are the same form's.
+ */
+export const controlValues = (self: string, record: TheAgent | undefined) =>
+  record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT)?.values ??
+  (record?.mounted.find((one) => one.capability === AGENTS_UNIT)?.arguments as Values | undefined);
+/** What an agent's control allows it, if it holds control. */
 const agentsBound = (self: string, record: TheAgent | undefined) => {
-  const unit = record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT);
-  return unit && boundOf(unit.values);
+  const values = controlValues(self, record);
+  return values && boundOf(values);
 };
 /** Whether an agent manages the agents it made: it holds management's agents unit, at "own" or more. */
 export function managesOwn(self: string, record: TheAgent | undefined): boolean {
@@ -635,6 +654,50 @@ function narrowedForChild(
   return { problems, values };
 }
 
+/**
+ * Control an agent mounts on another agent, held to its own, as an AgentOrg control unit in a
+ * template it creates from is: what it gives beyond its own control is a problem, the rest is
+ * brought within its own and within what the other agent's computer reaches, and it goes one level
+ * less deep. So an agent never gives more than it holds. One whose agents can't make agents gives
+ * none.
+ */
+export function controlForChild(
+  self: string,
+  giver: TheAgent,
+  child: TheAgent,
+  form: TheField[],
+  given: Values,
+  settled: Values,
+): { values: Values; problems: TheProblem[] } {
+  const own = controlValues(self, giver);
+  if (!own) return { values: settled, problems: [{ message: "You hold no control to give." }] };
+  const bound = boundOf(own);
+  if (bound.depth <= 1)
+    return {
+      values: settled,
+      problems: [
+        {
+          field: "depth",
+          message: "Your agents can't hold control: your Levels below it is 1.",
+        },
+      ],
+    };
+  const unset = form
+    .filter((field) => given[field.id] !== undefined && !settable(field))
+    .map((field) => ({ field: field.id, message: `An agent can't set ${field.title}.` }));
+  const narrowed = narrowedForChild(
+    form,
+    given,
+    settled,
+    bound,
+    withinReach(bound, reachOf(child)),
+  );
+  return {
+    problems: [...unset, ...narrowed.problems],
+    values: { ...narrowed.values, depth: bound.depth - 1 },
+  };
+}
+
 const Id = z.string().min(1).max(128);
 const Target = z.object({ agent: Id.describe("An agent's id, from agent_list.") });
 const CreateArgs = z.object({
@@ -753,8 +816,8 @@ export function createControl(parts: ControlParts) {
     bound.templates.includes(id) || parts.templateAuthor(id) === caller;
   const holdingOf = (caller: string) => {
     const record = records.agents[caller];
-    const unit = record?.units.find((one) => one.provider === self && one.unit === AGENTS_UNIT);
-    return record && unit ? { record, bound: boundOf(unit.values) } : undefined;
+    const values = controlValues(self, record);
+    return record && values ? { record, bound: boundOf(values) } : undefined;
   };
   const childrenOf = (caller: string) =>
     Object.entries(records.agents).filter(([, record]) => record.parent?.agent === caller);

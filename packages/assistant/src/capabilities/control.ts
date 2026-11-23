@@ -117,10 +117,14 @@ export const control = (): Capability => ({
       }
       if (onOffer === undefined) await readOnOffer(calls);
       else void readOnOffer(calls);
-      const held = ctx.capabilities
-        .list()
-        .filter(({ kind, state }) => kind === undefined && state !== "failed")
-        .map(({ name }) => name);
+      // What it holds itself, and what its settings name of any provider's.
+      const held = [
+        ...ctx.capabilities
+          .list()
+          .filter(({ kind, state }) => kind === undefined && state !== "failed")
+          .map(({ name }) => name),
+        ...ctx.capabilities.named(),
+      ];
       offered = onOffer ? offeredText(onOffer, held) : undefined;
     });
     ctx.prompt.section({ name: "capabilities", text: () => offered, max: OFFERED_MAX });

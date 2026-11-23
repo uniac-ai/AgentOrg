@@ -363,3 +363,45 @@ A capability gives you more to do and know, from your next message. Mount one on
   assert.deepEqual(told(), []);
   await plugins.close();
 });
+
+test("control marks as mounted every capability the agent's settings name, whoever provides it, and asks no one for it", async () => {
+  const { call } = management();
+  const hub = {
+    exposed: () => [
+      {
+        slot: "agents",
+        described: describeInterface(agents),
+        provider: { actor: "act_management", export: "agents" },
+        call,
+        on: () => () => {},
+      },
+    ],
+    onExposed: () => () => {},
+  } as unknown as AgentHub;
+  const plugins = await createPluginHost(quiet, [control()]).open(SELF, {
+    store: memory(),
+    provides: ["hub"],
+  });
+  await plugins.mount({
+    name: "connector",
+    inject: [],
+    provide: "hub",
+    apply: (ctx: Context) => void ctx.provide("hub", hub),
+  });
+  const told = () =>
+    plugins
+      .pass({ instructions: [], functions: [], input: [], leftOut: [] })
+      .instructions.filter(({ owner }) => owner === "plugin:control/capabilities")
+      .map(({ text }) => text)
+      .join("");
+  // GitHub, which a provider outside the agent made, is named in its settings beside control.
+  await plugins.hold([{ name: "control" }], ["control", "github"]);
+  await plugins.turn();
+  assert.match(told(), /^- github \(GitHub, mounted\): Its repositories\.$/m);
+  assert.match(told(), /^- notes \(Notes\): /m);
+  // Once its settings no longer name it, it isn't marked.
+  await plugins.hold([{ name: "control" }], ["control"]);
+  await plugins.turn();
+  assert.match(told(), /^- github \(GitHub\): /m);
+  await plugins.close();
+});
