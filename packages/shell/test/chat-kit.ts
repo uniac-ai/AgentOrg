@@ -1,7 +1,7 @@
 // What the chat's tests share: a signed-in page on an agent's page or with Reviewer's chat open,
 // the box and what the person said, a reply as the stand-in sends it, and waits on what it sees.
 import assert from "node:assert/strict";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { browser, type Gateway } from "./build-kit.ts";
 import { SESSION, standIn } from "./stand-in.ts";
 
@@ -27,6 +27,23 @@ export async function open(gateway: Gateway, width = 1440): Promise<Page> {
   await panel(page).getByRole("textbox", { name: "Message" }).waitFor();
   await panel(page).locator(".prose-chat, .whitespace-pre-wrap").first().waitFor();
   return page;
+}
+/**
+ * Presses "Earlier messages" in a conversation as a person does: with the room wheeled to its
+ * start first. A press alone has the browser scroll the button into view, which is no one's
+ * scroll, so the room goes back to its end within a frame, where it follows what is said, and
+ * takes the button from under the press.
+ */
+export async function earlier(within: Locator) {
+  const button = within.getByRole("button", { name: "Earlier messages" });
+  await within.locator('[data-slot="bubble"]').last().hover();
+  await within.page().mouse.wheel(0, -1_000_000);
+  // There once it is in the room's view, where the press scrolls nothing.
+  await button.evaluate(async (one) => {
+    for (let frames = 0; frames < 120 && one.getBoundingClientRect().top < 0; frames++)
+      await new Promise((done) => requestAnimationFrame(done));
+  });
+  await button.click();
 }
 export const input = (page: Page) => panel(page).getByRole("textbox", { name: "Message" });
 /** What the person said, in the thread: a chat's title may say the same words. */
