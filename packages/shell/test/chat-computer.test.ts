@@ -1,5 +1,6 @@
-// An agent's computer on the chat page: wide, beside the conversation, opening and closing with a
-// little motion; narrower, and on every other page, the layer's window as before.
+// An agent's computer on the chat page: wide, beside the conversation in the conversation's card,
+// opening and closing with a little motion; narrower, and on every other page, the layer's window
+// as before.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
@@ -60,7 +61,7 @@ async function openBeside(page: Page) {
 }
 
 test(
-  "wide, a conversation's computer opens beside it in a card of its own: no window over the page, and the conversation narrower by the sidebar and the 6 between their cards",
+  "wide, a conversation's computer opens beside it in the conversation's card, past a line: no window over the page, and the conversation narrower by the sidebar",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
     const page = await open(gateway);
@@ -70,24 +71,38 @@ test(
     await beside(page).waitFor();
     assert.equal(await window(page).count(), 0);
     const sidebar = await widthOf(page, side(page));
-    assert.equal(before - (await widthOf(page, conversation(page))), sidebar + 6);
-    // Both are cards on the ground, with the same line and corners, 6 apart.
-    const [left, right] = await Promise.all(
-      [conversation(page), side(page)].map((card) =>
-        card.evaluate((e) => {
-          const style = getComputedStyle(e);
-          const box = e.getBoundingClientRect();
-          return {
-            from: box.left,
-            to: box.right,
-            look: [style.borderTopWidth, style.borderTopLeftRadius, style.backgroundColor],
-          };
-        }),
-      ),
-    );
-    assert.ok(left && right);
-    assert.deepEqual(right.look, left.look);
-    assert.deepEqual([right.from - left.to, 1440 - right.to], [6, 6]);
+    assert.equal(before - (await widthOf(page, conversation(page))), sidebar);
+    // One card on the ground holds both, 6 from the window's side: the sidebar starts where the
+    // conversation ends, with one line of the card's colour and nothing else of its own.
+    const seen = await side(page).evaluate((e) => {
+      const style = getComputedStyle(e);
+      const card = e.parentElement as Element;
+      const held = getComputedStyle(card);
+      const box = e.getBoundingClientRect();
+      return {
+        from: box.left - (e.previousElementSibling as Element).getBoundingClientRect().right,
+        to: card.getBoundingClientRect().right - box.right,
+        card: [
+          1440 - card.getBoundingClientRect().right,
+          held.borderTopWidth,
+          held.borderTopLeftRadius,
+        ],
+        line: [style.borderLeftWidth, style.borderLeftColor === held.borderTopColor],
+        own: [
+          style.borderTopWidth,
+          style.borderTopLeftRadius,
+          style.backgroundColor,
+          style.boxShadow,
+        ],
+      };
+    });
+    assert.deepEqual(seen, {
+      from: 0,
+      to: 1,
+      card: [6, "1px", "14px"],
+      line: ["1px", true],
+      own: ["0px", "0px", "rgba(0, 0, 0, 0)", "none"],
+    });
     await page.close();
   }),
 );
