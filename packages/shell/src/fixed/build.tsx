@@ -104,25 +104,43 @@ function Tile({ logo: Logo, small = false }: { logo: LucideIcon; small?: boolean
 
 /**
  * Create, in one window. A click outside closes it, and it opens clean, with the keyboard in the
- * name. An agent's opens as its card alone, and widens to show what it can do beside the card. A
- * template's is the card on the left and the options on the right.
+ * name. An agent's opens as its card alone, and grows to the right to show what it can do beside
+ * the card, which stays where it is. A template's is the card on the left and the options on the
+ * right.
  */
 export function BuildDialog() {
   const { open, hide, draft, choosing } = useBuilding();
   const template = (draft?.mode ?? choosing?.mode) === "template";
-  // Whether what an agent can do is open beside its card: closed each time the window opens.
+  // Whether what an agent can do is open: closed each time the window opens. While it is open the
+  // window's top is held where it was, so the window grows away from its card, which stays put.
   const [detail, setDetail] = useState(false);
+  const [top, setTop] = useState<number>();
+  const window_ = useRef<HTMLDivElement>(null);
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
-    if (open) setDetail(false);
+    if (open) {
+      setDetail(false);
+      setTop(undefined);
+    }
   }
+  const toggle = (next: boolean) => {
+    const box = window_.current;
+    // In the page's middle, its top is half the height the page has to spare.
+    setTop(
+      next && box ? (document.documentElement.clientHeight - box.offsetHeight) / 2 : undefined,
+    );
+    setDetail(next);
+  };
+  const held = !template && top !== undefined;
   return (
     <Dialog open={open} onOpenChange={(next) => !next && hide()}>
       <DialogContent
+        ref={window_}
         asWindow
         // Its close is in its head, in line with the title.
         showCloseButton={false}
+        {...(held ? { style: { top, maxHeight: `calc(100% - ${top}px - 1rem)` } } : {})}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           document.getElementById("build-name")?.focus({ preventScroll: true });
@@ -130,11 +148,12 @@ export function BuildDialog() {
         className={
           template
             ? "window flex h-[min(680px,calc(100%-2rem))] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-sm:flex-col sm:max-w-[920px]"
-            : // The card is 440 wide. Where the page is 768 wide or more, what it can do opens
-              // beside it, up to 360 wide: the window widens in the time a window opens in, at
-              // once with reduced motion, and never past the page less its margins, what it can
-              // do giving up the width. Narrower, it opens under the card, and the window scrolls.
-              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 max-md:flex-col max-md:overflow-y-auto sm:max-w-[440px] md:motion-safe:transition-[max-width] md:motion-safe:ease-out ${detail ? "md:max-w-[min(800px,calc(100%-2rem))]" : ""}`
+            : // The card is 440 wide, in the page's middle, and stays there: the window's left edge
+              // is the card's. Where the page is 1064 wide or more, what it can do opens at the
+              // card's right, 296 to 360 wide as the page's right half has room: the window
+              // grows that way in the time a window opens in, at once with reduced motion.
+              // Narrower, it opens under the card, the window growing down and scrolling.
+              `window flex max-h-[calc(100%-2rem)] gap-0 overflow-hidden rounded-3xl bg-[var(--create)] p-0 ring-0 left-[max(1rem,50%_-_220px)] translate-x-0 max-w-[min(440px,100%_-_2rem)] sm:max-w-[440px] max-[66.5rem]:flex-col max-[66.5rem]:overflow-y-auto min-[66.5rem]:motion-safe:transition-[max-width] min-[66.5rem]:motion-safe:ease-out ${held ? "translate-y-0" : ""} ${detail ? "min-[66.5rem]:max-w-[calc(440px_+_min(360px,50vw_-_236px))]" : ""}`
         }
       >
         {template ? (
@@ -155,8 +174,9 @@ export function BuildDialog() {
           </>
         ) : (
           <>
-            <CreateCard detail={detail} setDetail={setDetail} />
+            <CreateCard />
             <Detail shown={detail} />
+            <Edge detail={detail} toggle={toggle} />
           </>
         )}
       </DialogContent>
@@ -372,10 +392,9 @@ function TemplateBadge() {
  * and what it's for, typed in place, the name offered being the avatar's until one is typed; and
  * Create, which sends the template's stack as saved with the name, what it's for and the avatar.
  * What Create's check refuses, of the whole stack or of a unit, is said above Create in the
- * service's words: the only place a unit's state shows. At its right edge, what opens and closes
- * what it can do.
+ * service's words: the only place a unit's state shows.
  */
-function CreateCard({ detail, setDetail }: { detail: boolean; setDetail(next: boolean): void }) {
+function CreateCard() {
   const { draft, hide, refreshUnits, setProblems } = useBuilding();
   const { taken, loaded } = useTaken();
   // The avatar in the middle of the row, with its name: none until the agents are read.
@@ -417,7 +436,7 @@ function CreateCard({ detail, setDetail }: { detail: boolean; setDetail(next: bo
   return (
     <form
       aria-label="Create"
-      className="relative flex w-full shrink-0 flex-col bg-[var(--create-card)] md:w-[440px]"
+      className="relative flex w-full shrink-0 flex-col bg-[var(--create-card)] min-[66.5rem]:w-[440px]"
       onSubmit={(event) => {
         event.preventDefault();
         finish();
@@ -461,44 +480,57 @@ function CreateCard({ detail, setDetail }: { detail: boolean; setDetail(next: bo
           </Button>
         )}
       </footer>
-      <Edge detail={detail} setDetail={setDetail} />
     </form>
   );
 }
 
 /**
- * The card's right edge, which opens what the agent can do beside the card and closes it. Under
- * the pointer, or with the keyboard on it, a strip of the window's other ground rises from the
- * card's foot with an arrow in it: a sign there is more, or that it closes. Where nothing hovers,
- * as on a touch screen, the strip stands. Where the page is narrower than 768, as on a phone, it
- * is a bar along the card's foot, and what it opens is under the card.
+ * What opens and closes what the agent can do: a thin bar at the window's right edge, 14 wide,
+ * in a button 24 wide. Closed, that edge is the card's: under the pointer or the keyboard the bar
+ * rises from the card's foot, in the window's other ground, with an arrow pointing out. Open, the
+ * edge is the far side of what it can do: there the bar slides in from the edge, over what it can
+ * do, in the card's colour, with an arrow pointing back. Where nothing hovers, as on a touch
+ * screen, the bar stands. Where what it can do opens under the card, it is a bar along the card's
+ * foot, as thin.
  */
-function Edge({ detail, setDetail }: { detail: boolean; setDetail(next: boolean): void }) {
+function Edge({ detail, toggle }: { detail: boolean; toggle(next: boolean): void }) {
   return (
     <button
       type="button"
       aria-label="What it can do"
       aria-expanded={detail}
       aria-controls="create-detail"
-      onClick={() => setDetail(!detail)}
-      className="group/edge absolute top-14 right-0 bottom-0 flex w-7 items-center justify-center text-muted-foreground outline-none max-md:relative max-md:inset-auto max-md:h-9 max-md:w-full max-md:shrink-0"
+      onClick={() => toggle(!detail)}
+      className="group/edge absolute top-14 right-0 bottom-0 z-10 w-6 text-muted-foreground outline-none max-[66.5rem]:relative max-[66.5rem]:inset-auto max-[66.5rem]:order-1 max-[66.5rem]:h-6 max-[66.5rem]:w-full max-[66.5rem]:shrink-0 max-[66.5rem]:bg-[var(--create-card)]"
     >
+      {/* At the window's right edge. */}
       <span
         aria-hidden
-        className="absolute inset-x-0 bottom-0 h-0 rounded-tl-xl bg-[var(--create)] transition-[height] duration-200 ease-out group-hover/edge:h-full group-focus-visible/edge:h-full motion-reduce:transition-none max-md:h-full max-md:rounded-none [@media(hover:none)]:h-full"
-      />
-      <ChevronRightIcon
+        className={`absolute right-0 bottom-0 flex w-3.5 items-center justify-center overflow-hidden duration-200 ease-out motion-reduce:transition-none max-[66.5rem]:hidden ${
+          detail
+            ? "top-0 translate-x-[250%] bg-[var(--create-card)] shadow-[-4px_0_12px_rgb(0_0_0/0.14)] transition-transform group-hover/edge:translate-x-0 group-focus-visible/edge:translate-x-0 dark:shadow-[-4px_0_12px_rgb(0_0_0/0.45)] [@media(hover:none)]:translate-x-0"
+            : "h-0 rounded-tl-md bg-[var(--create)] transition-[height] group-hover/edge:h-full group-focus-visible/edge:h-full [@media(hover:none)]:h-full"
+        }`}
+      >
+        <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "rotate-180" : ""}`} />
+      </span>
+      {/* Along the card's foot. */}
+      <span
         aria-hidden
-        className={`relative size-4 opacity-0 transition-opacity duration-200 group-hover/edge:opacity-100 group-focus-visible/edge:opacity-100 motion-reduce:transition-none max-md:opacity-100 [@media(hover:none)]:opacity-100 ${detail ? "rotate-180 max-md:-rotate-90" : "max-md:rotate-90"}`}
-      />
+        className="absolute inset-x-0 bottom-0 flex h-3.5 items-center justify-center bg-[var(--create)] min-[66.5rem]:hidden"
+      >
+        <ChevronRightIcon className={`size-3 shrink-0 ${detail ? "-rotate-90" : "rotate-90"}`} />
+      </span>
     </button>
   );
 }
 
 /**
- * What the agent will be able to do, as the template gives it, beside the card on the window's
- * other ground: each unit with its logo, its title, its own line and what it gives. Shown, not
- * asked. Closed, it is out of the window's width, and of reach; under the card, it isn't drawn.
+ * What the agent will be able to do, as the template gives it, on the window's other ground:
+ * each unit with its logo, its title, its own line and what it gives. Shown, not asked. It is at
+ * the card's right, or under the card where the page has no room there, and the card lies over
+ * it: the card's shadow falls on it, strongest at the card and fading away from it. Closed, it is
+ * out of the window's width, and of reach; under the card, it isn't drawn.
  */
 function Detail({ shown }: { shown: boolean }) {
   const { draft } = useBuilding();
@@ -508,34 +540,40 @@ function Detail({ shown }: { shown: boolean }) {
       aria-label="What it can do"
       aria-hidden={!shown}
       inert={!shown}
-      className={`no-bar flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5 md:absolute md:inset-y-0 md:left-[440px] md:flex md:w-[min(360px,calc(100vw-2rem-440px))] ${shown ? "flex" : "max-md:hidden"}`}
+      className={`relative max-[66.5rem]:order-2 max-[66.5rem]:shrink-0 min-[66.5rem]:absolute min-[66.5rem]:inset-y-0 min-[66.5rem]:left-[440px] min-[66.5rem]:w-[min(360px,50vw_-_236px)] ${shown ? "" : "max-[66.5rem]:hidden"}`}
     >
-      <h3 className="flex h-6 shrink-0 items-center text-[13px] font-medium text-muted-foreground">
-        What it can do
-      </h3>
-      {draft?.units.length === 0 && (
-        <p className="text-[13px] text-muted-foreground">Nothing yet.</p>
-      )}
-      <ul className="flex flex-col gap-4 empty:hidden">
-        {draft?.units.map((entry) => (
-          <li key={entry.key} className="flex min-w-0 gap-3">
-            <Tile logo={logoOf(entry.unit)} />
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <span className="flex h-7 items-center truncate text-[15px] font-medium">
-                {entry.unit?.title ?? entry.id}
-              </span>
-              {entry.unit ? (
-                <>
-                  <UnitLine unit={entry.unit} />
-                  <Gives unit={entry.unit} values={entry.values} />
-                </>
-              ) : (
-                <p className="text-xs text-[var(--bad)]">Not available here.</p>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
+      <span
+        aria-hidden
+        className="pointer-events-none absolute z-10 from-black/12 to-transparent max-[66.5rem]:inset-x-0 max-[66.5rem]:top-0 max-[66.5rem]:h-5 max-[66.5rem]:bg-linear-to-b min-[66.5rem]:inset-y-0 min-[66.5rem]:left-0 min-[66.5rem]:w-7 min-[66.5rem]:bg-linear-to-r dark:from-black/45"
+      />
+      <div className="no-bar flex h-full flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5">
+        <h3 className="flex h-6 shrink-0 items-center text-[13px] font-medium text-muted-foreground">
+          What it can do
+        </h3>
+        {draft?.units.length === 0 && (
+          <p className="text-[13px] text-muted-foreground">Nothing yet.</p>
+        )}
+        <ul className="flex flex-col gap-4 empty:hidden">
+          {draft?.units.map((entry) => (
+            <li key={entry.key} className="flex min-w-0 gap-3">
+              <Tile logo={logoOf(entry.unit)} />
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="flex h-7 items-center truncate text-[15px] font-medium">
+                  {entry.unit?.title ?? entry.id}
+                </span>
+                {entry.unit ? (
+                  <>
+                    <UnitLine unit={entry.unit} />
+                    <Gives unit={entry.unit} values={entry.values} />
+                  </>
+                ) : (
+                  <p className="text-xs text-[var(--bad)]">Not available here.</p>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </section>
   );
 }

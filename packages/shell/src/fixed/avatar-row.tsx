@@ -1,10 +1,12 @@
 // The avatars a new agent is chosen from: a row with no end, each avatar with a name. The one in
 // the middle is the choice, and alive; the others are still pictures, smaller and fainter toward
-// the sides. It is dragged, or moved by its two buttons and the arrow keys. The row is a ring of
+// the sides. It is dragged, or moved by its two buttons, the arrow keys and the wheel, which a turn
+// up or down moves as a turn sideways does. The row is a ring of
 // `KEPT` places that goes round: a place that comes round to the far side, out of sight, is given a
 // new avatar and name, so there are always new ones ahead and never more than `KEPT`. The ones
 // just passed, as many as are behind the choice in the ring, come back as they were.
 import { Avatar } from "2dlivebot/react";
+import { WheelGesturesPlugin } from "embla-carousel-wheel-gestures";
 import { useEffect, useRef, useState } from "react";
 import {
   Carousel,
@@ -67,6 +69,20 @@ function paint(api: Api, event?: string) {
 }
 
 /**
+ * Embla's wheel plugin for one way of turning, on a row that goes round. The plugin takes how far
+ * the row has scrolled for its start and its end, and holds the wheel back there: at the ring's
+ * first place, going left. A ring has neither, so the plugin is told the row is in its middle.
+ */
+function wheelRound(axis: "x" | "y"): ReturnType<typeof WheelGesturesPlugin> {
+  const plugin = WheelGesturesPlugin({ forceWheelAxis: axis });
+  return {
+    ...plugin,
+    init: (api, options) =>
+      plugin.init(Object.assign(Object.create(api), { scrollProgress: () => 0.5 }), options),
+  };
+}
+
+/**
  * Whether a place is out of sight as the row is drawn now, whatever its width: farther from the
  * row's middle than the row reaches, by Embla's own measure of where it has scrolled to, and not
  * among the places it sees.
@@ -99,6 +115,10 @@ export function AvatarRow({
   const [at, setAt] = useState(0);
   const [api, setApi] = useState<CarouselApi>();
   const reduced = useReducedMotion();
+  // The wheel moves the row as a drag does, by Embla's own plugin, which reads one way of turning
+  // each: one for a wheel turned up or down, one for a sideways scroll. Over the row the wheel is
+  // the row's, and scrolls nothing behind it.
+  const [wheels] = useState(() => [wheelRound("y"), wheelRound("x")]);
   // What the row's own events read: the ring and the choice as they now are, and the places that
   // have come round and wait, out of sight, for a new avatar.
   const now = useRef({ ring, at, stale: new Set<number>(), taken, onChoose });
@@ -186,6 +206,7 @@ export function AvatarRow({
       aria-label="Avatar"
       tabIndex={0}
       opts={{ loop: true, align: "center" }}
+      plugins={wheels}
       setApi={setApi}
       jump={reduced}
       className="mx-8 cursor-grab rounded-2xl outline-none max-sm:mx-3 select-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing"
