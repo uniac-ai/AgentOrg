@@ -114,7 +114,7 @@ test(
 );
 
 test(
-  "beside its conversation the details are the agent's head and its Overview alone: how it stands, Setup, and what it is for read whole, with no Message, no tabs and no computer, and nothing wider than the column",
+  "the details are the agent's face with its name beside it on one line and what it is for under them, read whole, on the side's ground, and nothing else but their Close",
   withGateway(async (gateway) => {
     computerWith(gateway, "terminal");
     const purpose = "Digs through issues and docs, and writes up what it finds for the whole team";
@@ -122,20 +122,51 @@ test(
     const page = await open(gateway);
     await openDetails(page);
     const shown = details(page);
-    await shown.getByRole("heading", { name: "Research", exact: true }).waitFor();
-    await shown.getByRole("status", { name: "State" }).waitFor();
-    await shown.getByRole("button", { name: "Setup" }).waitFor();
-    await shown.getByRole("region", { name: "Activity" }).waitFor();
-    assert.equal(await shown.getByRole("button", { name: "Message" }).count(), 0);
-    assert.equal(await shown.getByRole("tablist").count(), 0);
-    assert.equal(await shown.getByRole("region", { name: "Research's computer" }).count(), 0);
-    // Nothing of it is cut at its side: neither its purpose, nor what scrolls in it.
-    const widths = (part: ReturnType<Page["locator"]>) =>
-      part.evaluate((element) => [element.scrollWidth, element.clientWidth]);
-    const [words, line] = await widths(shown.getByText(purpose));
-    assert.equal(words, line, "its purpose, whole");
-    const [inner, outer] = await widths(shown.locator("> div").first());
-    assert.equal(inner, outer);
+    await shown.getByText(purpose).waitFor();
+    // Its face, its name and what it is for, and no other words; two buttons, its own and Close.
+    assert.deepEqual((await shown.innerText()).split(/\n+/), ["R", "Research", purpose]);
+    assert.deepEqual(
+      await shown.getByRole("button").evaluateAll((all) => all.map((b) => b.ariaLabel)),
+      ["Research on the team page", "Close Research's details"],
+    );
+    const boxes = await shown.evaluate((card) => {
+      const box = (element: Element | null | undefined) => {
+        const at = (element as Element).getBoundingClientRect();
+        return { x: at.x, y: at.y, right: at.right, bottom: at.bottom, mid: at.y + at.height / 2 };
+      };
+      const group = card.querySelector("button");
+      return {
+        face: box(group?.firstElementChild),
+        name: box(group?.lastElementChild),
+        group: box(group),
+        purpose: box(card.querySelector("p")),
+        ground: getComputedStyle(card).backgroundColor,
+        // Nothing of it is cut at its side: neither what it is for, nor the column.
+        cut: [card, card.querySelector("p") as Element].map((e) => e.scrollWidth - e.clientWidth),
+      };
+    });
+    assert.deepEqual(
+      [boxes.face.right - boxes.face.x, boxes.face.bottom - boxes.face.y],
+      [48, 48],
+      "its face",
+    );
+    assert.ok(boxes.name.x >= boxes.face.right, "its name beside its face");
+    assert.ok(Math.abs(boxes.name.mid - boxes.face.mid) <= 1, "on its face's middle");
+    assert.ok(boxes.purpose.y >= boxes.group.bottom, "what it is for under them");
+    assert.deepEqual(boxes.cut, [0, 0]);
+    assert.equal(boxes.ground, "rgba(0, 0, 0, 0)", "no ground of its own");
+    await page.close();
+  }),
+);
+
+test(
+  "the details' face and name go to the agent on the team page",
+  withGateway(async (gateway) => {
+    const page = await open(gateway);
+    await openDetails(page);
+    await details(page).getByRole("button", { name: "Research on the team page" }).click();
+    await page.waitForURL(/#\/team\/a-research$/);
+    await page.getByRole("main").getByRole("heading", { name: "Research" }).waitFor();
     await page.close();
   }),
 );
@@ -221,7 +252,7 @@ test(
       .getByRole("button")
       .filter({ hasText: "Reviewer" })
       .click();
-    await details(page, "Reviewer").getByRole("heading", { name: "Reviewer" }).waitFor();
+    await details(page, "Reviewer").getByText("Reviewer", { exact: true }).waitFor();
     assert.equal(await details(page).count(), 0);
     assert.equal(await side(page).getAttribute("data-beside"), "open");
     // Its face closes them, as the first's did.

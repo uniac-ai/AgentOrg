@@ -1,8 +1,7 @@
 // An agent's own page: who it is and how it stands, then what belongs to it. Its computer comes
 // first, where it has one. What it's made of is behind one button, never on the everyday surface.
 // Its line follows no chat: a chat's problem is said on that chat's row, and in the chat. It is
-// drawn as an agent's details on the team page, and beside your conversation with it on the chat
-// page.
+// drawn as an agent's details on the team page.
 import { MessageCircleIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 import { type AgentTab, api, go } from "../data.ts";
@@ -29,15 +28,9 @@ const big = "h-10 rounded-full px-4 text-[15px]";
 export function AgentPage({
   agent: id,
   tab: asked,
-  beside = false,
 }: {
   agent: string;
   tab?: AgentTab | undefined;
-  /**
-   * Drawn beside your conversation with it, on the chat page: its head and its Overview alone. The
-   * conversation is there, and its computer opens from the conversation's head.
-   */
-  beside?: boolean;
 }) {
   const onTab = (tab: AgentTab) => go({ screen: "team", agent: id, tab });
   const { byId, list, unread, reads } = useAgents();
@@ -91,8 +84,8 @@ export function AgentPage({
   const taken = taking && unitOf(taking);
   // Overview comes last, so the page opens as it did.
   const tabs: { id: AgentTab; title: string }[] = [
-    ...(computer && !beside ? [{ id: "computer" as const, title: "Computer" }] : []),
-    ...(beside ? [] : [{ id: "chats" as const, title: "Chats" }]),
+    ...(computer ? [{ id: "computer" as const, title: "Computer" }] : []),
+    { id: "chats", title: "Chats" },
     { id: "overview", title: "Overview" },
   ];
   const tab = tabs.find((t) => t.id === asked) ?? tabs[0];
@@ -120,22 +113,19 @@ export function AgentPage({
             <h1 className="truncate text-[30px] leading-9 font-semibold tracking-tight">
               {entry.name}
             </h1>
-            {/* In a column it is read whole, on as many lines as it takes. */}
-            <p className={`text-[15px] text-muted-foreground ${beside ? "" : "truncate"}`}>
+            <p className="truncate text-[15px] text-muted-foreground">
               {entry.purpose ?? creatable?.description}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 tight:w-full">
-            {!beside && (
-              <Button
-                className={`${big} tight:flex-1`}
-                disabled={stopped}
-                onClick={() => openChat(id)}
-              >
-                <MessageCircleIcon />
-                Message
-              </Button>
-            )}
+            <Button
+              className={`${big} tight:flex-1`}
+              disabled={stopped}
+              onClick={() => openChat(id)}
+            >
+              <MessageCircleIcon />
+              Message
+            </Button>
             <Button
               variant="secondary"
               className={`${big} tight:flex-1`}
@@ -186,7 +176,7 @@ export function AgentPage({
             ))}
           </div>
         ) : (
-          <div className="mt-4 border-b" />
+          <div className="mt-4 h-11 border-b" />
         )}
         <div
           {...(tabs.length > 1 ? { role: "tabpanel", "aria-label": tab?.title } : {})}

@@ -200,7 +200,7 @@ function Beside({
         className={`flex h-full p-3 transition-[opacity,translate] motion-reduce:duration-0 ${open ? "translate-x-0 opacity-100" : "translate-x-6 opacity-0"} ${motion}`}
       >
         {drawn.detailed ? (
-          <AgentDetails agent={{ id: drawn.agent, name: agent.entry.name }} onClose={onClose} />
+          <AgentDetails agent={drawn.agent} onClose={onClose} />
         ) : (
           <Computer
             agent={{ id: drawn.agent, name: agent.entry.name, tone: agent.now.tone }}
