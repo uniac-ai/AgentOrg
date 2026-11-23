@@ -1,7 +1,7 @@
 // The agent typing in a conversation, in a real browser over the stand-in gateway: one sign at the
 // conversation's end while the agent works on the party's newest message, taken or not yet heard
 // of, with no problem; what takes it away; nothing under the person's own messages; and the
-// message just sent kept still as the sign comes under it.
+// message just sent only making room for the sign as it comes under it.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
@@ -52,18 +52,24 @@ const under = (thread: Locator) =>
 const at_ = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
 test(
-  "one message: the sign at the conversation's end while the agent works on it, gone once its first piece is streamed",
+  "one message: the sign at the conversation's end while the agent works on it, gone once its reply has come, which is drawn whole in the sign's place",
   withGateway(async (gateway) => {
     const { page, thread } = await at(gateway, "one");
     await sign(thread).waitFor();
     assert.deepEqual(await drawn(thread), [`you: ${SAID.longAsk}`, "typing"]);
     assert.equal(await sign(thread).locator(".typing-dot").count(), 3);
-    gateway.delta("a-research", "v-a2", "It's a small shop demo");
-    await thread.getByText("It's a small shop demo").waitFor();
+    gateway.addMessage("a-research", {
+      id: "v-a2",
+      role: "assistant",
+      text: "It's a small shop demo.\n\nThe README is short.",
+      at: at_(0),
+    });
+    await thread.getByText("The README is short.").waitFor();
     await sign(thread).waitFor({ state: "detached" });
     assert.deepEqual(await drawn(thread), [
       `you: ${SAID.longAsk}`,
-      "agent: It's a small shop demo",
+      "agent: It's a small shop demo.",
+      "agent: The README is short.",
     ]);
     await page.close();
   }),
@@ -239,14 +245,24 @@ test(
 );
 
 test(
-  "the message just sent stays where it is, frame by frame, as the sign comes under it",
+  "in a conversation longer than its room, the message just sent is at the room's foot, and frame by frame only makes room for the sign that comes under it: up by the sign's 56 px at most, never further and never back down",
   withGateway(async (gateway) => {
     researchTypes(gateway, "result");
+    // Earlier messages enough to fill the room: what comes then moves it to its end.
+    gateway.agents.get("a-research")?.chat.messages.unshift(
+      ...Array.from({ length: 30 }, (_, n) => ({
+        id: `v-old-${n}`,
+        role: "assistant" as const,
+        text: `Earlier note ${n}.`,
+        at: at_(60),
+      })),
+    );
     const { page, thread } = await conversation(gateway);
     const box = page.getByRole("textbox", { name: "Message" }).last();
     await box.fill("One more thing");
-    // Where the message is drawn in each frame from the first it is in, until the sign has been
-    // there ten frames. The agent says it works as soon as the message is sent.
+    // Where the message's place in the room is in each frame from the first it is in, until the
+    // sign has been there ten frames: its place, not the few pixels it rises through as it comes
+    // in. The agent says it works as soon as the message is sent.
     const drawnAt = page.evaluate(
       () =>
         new Promise<number[]>((done) => {
@@ -255,7 +271,7 @@ test(
           let signed = 0;
           const frame = () => {
             const message = [
-              ...document.querySelectorAll('main [data-slot="message"][data-align="end"]'),
+              ...document.querySelectorAll('main [data-slot="message-scroller-item"]'),
             ].find((one) => one.textContent?.includes("One more thing"));
             if (message) seen.push(Math.round(message.getBoundingClientRect().top));
             if (document.querySelector('[aria-label="Research is typing"]')) signed++;
@@ -268,7 +284,22 @@ test(
     await box.press("Enter");
     const tops = await drawnAt;
     assert.equal(await sign(thread).count(), 1, "the sign came");
-    assert.deepEqual([...new Set(tops)], [tops[0]], `drawn at ${tops.join(", ")}`);
+    // The sign's 40 px and the 16 px above it: in the frame the message is first drawn in if the
+    // sign is there by then, or in one step after.
+    const places = [...new Set(tops)];
+    const [first, last] = [places[0] as number, places.at(-1) as number];
+    assert.ok(
+      places.length <= 2 && (first === last || first - last === 56),
+      `drawn at ${tops.join(", ")}`,
+    );
+    const foot = await thread
+      .locator('[data-slot="message-scroller-viewport"]')
+      .evaluate((room) => Math.round(room.getBoundingClientRect().bottom));
+    const sent = await thread
+      .locator('[data-slot="message-scroller-item"]')
+      .filter({ hasText: "One more thing" })
+      .evaluate((message) => Math.round(message.getBoundingClientRect().bottom));
+    assert.equal(foot - sent, 72, "the sign under it, then the room's 16 px");
     await page.close();
   }),
 );

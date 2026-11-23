@@ -1,14 +1,7 @@
 // A message's bubbles: its text split at its blank lines. A blank line always starts a new bubble,
 // before a list too: a list right under words, with no blank line between, stays in their bubble,
 // and after a blank line it starts its own, as words do. Whatever follows a list or code starts a
-// new bubble. It runs on the message's text, so a reply still being written is split as far as it
-// has come.
-//
-// While a message is written, a last paragraph that is only what may yet become a list's marker
-// (digits, or one of -, * and +) is held back until the next piece says what it is: after a list it
-// may be the list's next item, in the list's bubble, where as words it starts a bubble of its own.
-// So a bubble once drawn is never split or merged as the rest comes. Once the message is settled,
-// nothing is held.
+// new bubble. It runs on a message's whole text: a message is drawn once it has come whole.
 //
 // The blocks are the markdown library's own, as it draws them, so a blank line inside a code block
 // splits nothing. Each block is one of three kinds:
@@ -26,19 +19,13 @@ const kindOf = (block: string): Kind =>
   isCode(block) ? "code" : /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/.test(block) ? "list" : "words";
 /** A block that ends with a blank line. */
 const endsBlank = (block: string) => /\n[ \t]*\n\s*$/.test(block);
-/** A last paragraph that is only what may yet become a list's marker, with what is before it. */
-const UNDECIDED = /(^|\n[ \t]*\n) {0,3}(\d{1,9}|[-*+])$/;
 
-/**
- * The text of each of a message's bubbles, in order. As a message is `writing`, the bubbles before
- * the last never change, the last only gains words, and one is added at a time: so a bubble's place
- * is what it is known by.
- */
-export function bubblesOf(text: string, writing = false): string[] {
+/** The text of each of a message's bubbles, in order. */
+export function bubblesOf(text: string): string[] {
   const bubbles: string[][] = [];
   let before: Kind | undefined;
   let blank = false;
-  for (const block of parseMarkdownIntoBlocks(writing ? text.replace(UNDECIDED, "$1") : text)) {
+  for (const block of parseMarkdownIntoBlocks(text)) {
     if (!block.trim()) {
       blank = true;
       continue;

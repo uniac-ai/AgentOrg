@@ -4,76 +4,24 @@
 // floating chat, and are kept in the app's store.
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Locator, Page } from "@playwright/test";
-import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
+import { withBrowser, withGateway } from "./build-kit.ts";
+import {
+  chatsOf,
+  choose,
+  floating,
+  one,
+  open,
+  PINS,
+  rowNames,
+  rows,
+  said,
+  tileNames,
+  tiles,
+  until,
+} from "./chat-list-kit.ts";
 import { noted } from "./design/samples.ts";
 
 withBrowser();
-
-/** Where the pins are kept in the app's store. */
-const PINS = "ui/pinned-conversations";
-
-async function open(
-  gateway: Gateway,
-  hash = "#/chat",
-  { width = 1440, locale = "en-US", touch = false, now = undefined as string | undefined } = {},
-): Promise<Page> {
-  const page = await browser().newPage({
-    viewport: { width, height: 900 },
-    locale,
-    timezoneId: "UTC",
-    hasTouch: touch,
-  });
-  page.setDefaultTimeout(8000);
-  await page.addInitScript((session) => localStorage.setItem("agentorg.session", session), SESSION);
-  if (now) await page.clock.setFixedTime(new Date(now));
-  await page.goto(`${gateway.url}/${hash}`);
-  return page;
-}
-/** The Chat page's list of your conversations. */
-const chatsOf = (page: Page) => page.getByRole("main").getByRole("list", { name: "Chats" });
-/** The floating chat's. */
-const floating = (page: Page) =>
-  page.getByRole("complementary", { name: "Chats" }).getByRole("list", { name: "Chats" });
-const rows = (list: Locator) => list.locator(":scope > li > button");
-const tiles = (list: Locator) => list.getByRole("list", { name: "Pinned" }).getByRole("button");
-/** One conversation of a list, row or tile, by its agent's name. */
-const one = (list: Locator, name: string) =>
-  list.getByRole("button").filter({ has: list.page().getByText(name, { exact: true }) });
-/** The agents the rows name, top to bottom: each row's face comes first, then its name. */
-const rowNames = async (list: Locator) =>
-  (await rows(list).allInnerTexts()).map((text) => text.split("\n").filter(Boolean)[1]);
-/** The agents the tiles name, in their order: each tile's face comes first, then its name. */
-const tileNames = async (list: Locator) =>
-  (await tiles(list).allInnerTexts()).map((text) => text.split("\n").filter(Boolean).at(-1));
-const said = (id: string, text: string, at = new Date().toISOString()) => ({
-  id,
-  role: "assistant" as const,
-  text,
-  at,
-});
-/** Waits for what the page or the store will come to, which arrives a call at a time. */
-async function until<T>(read: () => Promise<T> | T, expected: T) {
-  for (let tries = 0; ; tries++) {
-    const now = await read();
-    try {
-      assert.deepEqual(now, expected);
-      return;
-    } catch (error) {
-      if (tries > 200) throw error;
-      await new Promise((done) => setTimeout(done, 40));
-    }
-  }
-}
-/** Opens a conversation's menu by a right-click and presses its one item, which must be this. */
-async function choose(page: Page, of: Locator, item: "Pin" | "Unpin") {
-  await of.click({ button: "right" });
-  const menu = page.getByRole("menu");
-  await menu.waitFor();
-  assert.deepEqual(await menu.getByRole("menuitem").allInnerTexts(), [item]);
-  await menu.getByRole("menuitem", { name: item }).click();
-  await menu.waitFor({ state: "detached" });
-}
 
 test(
   "a row says when its last message was said: its time if that was today, its date if before, as the person's locale writes them short, whole and on one line",
@@ -226,8 +174,8 @@ test(
     ] as const) {
       await one(list, "Reviewer").focus();
       await page.keyboard.press("Shift+F10");
-      await page.getByRole("menuitem", { name: item }).waitFor();
-      await page.keyboard.press("ArrowDown");
+      // Opened from the keyboard, the menu has the keyboard on its first item.
+      await until(() => page.evaluate(() => document.activeElement?.textContent), item);
       await page.keyboard.press("Enter");
       await until(() => tiles(list).count(), isTile ? 1 : 0);
       await until(
@@ -260,8 +208,32 @@ test(
     assert.equal(await page.getByRole("region", { name: /^Conversation with / }).count(), 0);
     await page.getByRole("menuitem", { name: "Pin" }).tap();
     await until(() => tileNames(list), ["Reviewer"]);
+    await page.getByRole("menu").waitFor({ state: "detached" });
+    // Held still on the tile, a touch opens the tile's menu as before.
+    const tile = await one(list, "Reviewer").boundingBox();
+    assert.ok(tile);
+    const on = [
+      { x: Math.round(tile.x + tile.width / 2), y: Math.round(tile.y + tile.height / 2) },
+    ];
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: on });
+    await page.getByRole("menuitem", { name: "Unpin" }).waitFor();
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "detached" });
     await one(list, "Reviewer").tap();
     await page.getByRole("region", { name: "Conversation with Reviewer" }).waitFor();
+    // Back on the list, a touch that moves across the tile drags nothing.
+    await page.goto(`${gateway.url}/#/chat`);
+    await until(() => tileNames(list), ["Reviewer"]);
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: on });
+    for (const down of [20, 40, 60])
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: on.map(({ x, y }) => ({ x, y: y + down })),
+      });
+    assert.equal(await page.locator("[data-dragged]").count(), 0);
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    assert.deepEqual(await tileNames(list), ["Reviewer"]);
     await page.close();
   }),
 );

@@ -18,6 +18,9 @@ async function open(gateway: Gateway, width: number, height: number, hash: strin
   await page.locator("main section").first().waitFor();
   return page;
 }
+/** The conversation the page opens beside its list, which it does once it has read the list. */
+const opened = (page: Page) =>
+  page.locator('main section[aria-label^="Conversation with"]').waitFor();
 /** The list, the card, the frame's rows and the ground, read in one frame. */
 const frame = (page: Page) =>
   page.evaluate(() => {
@@ -53,6 +56,7 @@ test(
   "wide, the list is on the ground at the left, 300 wide under the frame's rows, and the conversation is a card beside it, 6 from the window's top and side and 12 from its foot, with a thin line, 14 px corners and a slight shadow, in dark and in light",
   withGateway(async (gateway) => {
     const page = await open(gateway, 1440, 900, "#/chat");
+    await opened(page);
     assert.deepEqual(await frame(page), {
       list: [0, 0, 300, 900],
       listFill: "rgba(0, 0, 0, 0)",
@@ -109,6 +113,7 @@ test(
   "the list is put away by the first button of the strip: Search and the row of places go with it, and what is chosen has the page under the strip, on Chat and on Team; it is so when the page opens again, and the same button brings them all back; narrower than both side by side there is no such button",
   withGateway(async (gateway) => {
     let page = await open(gateway, 1440, 900, "#/chat");
+    await opened(page);
     const button = (name: string) => page.getByRole("button", { name, exact: true });
     const boxOf = async (name: string) => {
       const box = await button(name).boundingBox();
