@@ -74,6 +74,7 @@ export { kv } from "./kv.js";
 export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
 export {
   AgentCapability,
+  Avatar,
   agents,
   ConnectionOrigin,
   connections,

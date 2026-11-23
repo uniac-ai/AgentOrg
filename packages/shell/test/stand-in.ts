@@ -99,6 +99,7 @@ export interface Agent {
   skills: { name: string; description: string; instance?: string }[];
   mcp: { slot: string; connection: string; instance?: string }[];
   purpose?: string;
+  avatar?: string;
   /** The template it started from. */
   template?: string;
   units?: z.output<typeof agentsInterface.methods.get.output>["units"];
@@ -784,13 +785,23 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
     if (!agent) throw new Refusal("unknown", "No such agent.");
     return agent;
   };
-  const entry = ({ agent, name, status, provider, creatable, purpose, template }: Agent) => ({
+  const entry = ({
+    agent,
+    name,
+    status,
+    provider,
+    creatable,
+    purpose,
+    avatar,
+    template,
+  }: Agent) => ({
     agent,
     name,
     status,
     provider,
     creatable,
     ...(purpose ? { purpose } : {}),
+    ...(avatar ? { avatar } : {}),
     ...(template ? { template } : {}),
   });
   const chatSlot = (agent: string) => `chat_${agent.replaceAll("-", "_")}`;
@@ -956,6 +967,7 @@ export async function standIn(options: { creatables?: Creatable[] } = {}) {
           mcp:
             units.length > 0 ? [{ slot: "computer", connection: "c-notes", instance: "i-0" }] : [],
           ...(input.purpose ? { purpose: String(input.purpose) } : {}),
+          ...(input.avatar ? { avatar: String(input.avatar) } : {}),
           ...(template ? { template } : {}),
           units: units.map((u, i) => ({
             instance: `i-${i}`,

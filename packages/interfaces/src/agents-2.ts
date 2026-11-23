@@ -5,6 +5,7 @@ import { Arguments, CapabilityDefinition, Mounting } from "./capability-provider
 import { Id } from "./hub.js";
 import {
   ActorName,
+  Avatar,
   agents,
   MountedCapability,
   ProviderName,
@@ -23,6 +24,8 @@ const AgentEntry = z.object({
   provider: Id,
   /** What it's for, as whoever made it said. */
   purpose: Purpose.optional(),
+  /** Its avatar, as whoever made it chose; none on one made without. */
+  avatar: Avatar.optional(),
   /** The agent that made it; `gone` once that agent has been removed. It is the person's either way. */
   parent: z.object({ agent: Id, name: ActorName, gone: z.literal(true).optional() }).optional(),
 });
@@ -94,7 +97,7 @@ export const agents2 = defineInterface({
      * model, with nothing mounted. What it is for, it is told.
      */
     create: method({
-      input: z.object({ name: ActorName, purpose: Purpose.optional() }),
+      input: z.object({ name: ActorName, purpose: Purpose.optional(), avatar: Avatar.optional() }),
       output: OnAgent,
     }),
     /** Final: the agent goes, with everything mounted on it, each taken off first. */

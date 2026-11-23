@@ -1530,6 +1530,47 @@ test("an agent is told what it's for", async (t) => {
   );
 });
 
+test("an agent keeps the avatar it was made with, and one made without has none", async (t) => {
+  const s = await setup(t);
+  const two = await agents2Caller(s, t);
+  const avatar = "v1.round-f7e3cf.dot-2a2530.waves-5b3a2c.specs-2a2530";
+  const stack = { base: s.base, units: [] };
+  const { agent } = await s.calls.agents.create({ stack, name: "Pat", avatar });
+  const plain = await s.makeStack([], "Sam");
+  const { agent: empty } = await two.create({ name: "Kim", avatar });
+  const { agent: bare } = await two.create({ name: "Lee" });
+  const avatars = { [agent]: avatar, [plain]: undefined, [empty]: avatar, [bare]: undefined };
+  // Listed and read as it was given, on both; none is no key at all.
+  const kept = async (calls: Pick<typeof s.calls.agents | typeof two, "list" | "get">) => {
+    const listed = (await calls.list({})).agents;
+    assert.deepEqual(Object.fromEntries(listed.map((one) => [one.agent, one.avatar])), avatars);
+    for (const [id, given] of Object.entries(avatars)) {
+      const read = await calls.get({ agent: id });
+      assert.equal(read.avatar, given);
+      assert.equal("avatar" in read, given !== undefined);
+      assert.equal("avatar" in (listed.find((one) => one.agent === id) ?? {}), given !== undefined);
+    }
+  };
+  await kept(s.calls.agents);
+  await kept(two);
+  // One that breaks its bound is refused, and nothing is made.
+  for (const not of ["a".repeat(513), "Round", "v1 round", ""]) {
+    await assert.rejects(
+      s.calls.agents.create({ stack, name: "No", avatar: not }),
+      refused("invalid"),
+    );
+    await assert.rejects(two.create({ name: "No", avatar: not }), refused("invalid"));
+  }
+  assert.equal((await s.calls.agents.list({})).agents.length, 4);
+  // Its record holds it, and a record with none still reads after a restart.
+  await s.restart((records) => {
+    const { agents } = records as unknown as { agents: Record<string, { avatar?: string }> };
+    assert.equal(agents[agent]?.avatar, avatar);
+    assert.ok(!("avatar" in (agents[plain] ?? {})));
+  });
+  await kept(s.calls.agents);
+});
+
 test("one MCP unit stands for a connection there is or any kind on offer", async (t) => {
   const s = await setup(t);
   const mcp = (await s.calls.agents.units({})).units.find((one) => one.id === "mcp");
