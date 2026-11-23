@@ -5,10 +5,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
-import { withBrowser, withGateway } from "./build-kit.ts";
-import { chatsOf, one, open, PINS, rowNames, tileNames, until } from "./chat-list-kit.ts";
+import { browser, withBrowser, withGateway } from "./build-kit.ts";
+import { chatsOf, one, open, PINS, rowNames, said, tileNames, until } from "./chat-list-kit.ts";
 
 withBrowser();
+// A test that fails leaves no page open to slow the ones after it.
+test.afterEach(() =>
+  Promise.all(
+    browser()
+      .contexts()
+      .map((context) => context.close()),
+  ),
+);
 
 /**
  * A conversation's row with its buttons, by its agent's id. It is found by what it is in the page
@@ -45,70 +53,133 @@ const focused = (page: Page) =>
       document.activeElement?.closest("li[data-chat]")?.getAttribute("data-chat"),
   );
 
+/**
+ * Each agent's conversation, last said in at a set time, and a page that opens on a set day at
+ * half past eleven at night: what a row's time reads, and so how wide it is, is the same whenever
+ * the test runs.
+ */
+const DAY = "2026-11-23";
+async function at(
+  gateway: Parameters<typeof open>[0],
+  locale: string,
+  times: Record<string, string>,
+) {
+  for (const [agent, time] of Object.entries(times))
+    gateway.converse(agent, [said(agent, "Said then.", time)]);
+  const page = await open(gateway, "#/chat/a-research", { locale, now: `${DAY}T23:30:00Z` });
+  await until(() => rowNames(chatsOf(page)).then((names) => names.length), 4);
+  await away(page);
+  return page;
+}
+
 test(
-  "a row's buttons are shown while it is pointed at, over its time, which goes; the row is as tall and its name as wide with them as without; they are clear of the name and of the mark for something new; pointed away from, they go",
+  "a row's buttons are shown while it is pointed at, at its end over its time, which goes, whatever the time reads: an hour of one figure or of two, a date, and a date wider than the two of them; the row is as tall and its name as wide with them as without; they are clear of the name and of the mark for something new; pointed away from, they go",
   withGateway(async (gateway) => {
-    const page = await open(gateway, "#/chat/a-research");
-    const list = chatsOf(page);
-    await until(() => rowNames(list), ["Research", "Reviewer"]);
-    await away(page);
-    const rest = await drawn(list, "a-reviewer");
-    assert.deepEqual(
-      { ...rest, name: rest.name > 100 },
-      { buttons: "0", time: "1", fromEnd: 4, height: 64, name: true },
-    );
-    // They come and go in a tenth of a second, and so does the time.
-    assert.deepEqual(
-      await item(list, "a-reviewer").evaluate((row) =>
-        [row.querySelector(":scope > span"), row.querySelector("time")].map(
-          (part) => getComputedStyle(part as Element).transitionDuration,
-        ),
-      ),
-      ["0.1s", "0.1s"],
-    );
-    await item(list, "a-reviewer").hover();
-    await until(() => drawn(list, "a-reviewer"), {
-      ...rest,
-      buttons: "1",
-      time: "0",
-      fromEnd: 10,
-    });
-    // The other row, the one open beside the list, shows none.
-    const { buttons, time } = await drawn(list, "a-research");
-    assert.deepEqual({ buttons, time }, { buttons: "0", time: "1" });
-    const clear = await item(list, "a-reviewer").evaluate((row) => {
-      const box = (part: Element | null) => (part as Element).getBoundingClientRect();
-      const buttons = box(row.querySelector(":scope > span"));
-      const all = [...row.querySelectorAll(":scope > span > button")].map(box);
-      return {
-        two: all.map((one) => [one.width, one.height]),
-        inside: buttons.top >= box(row).top && buttons.bottom <= box(row).bottom,
-        ofName: box(row.querySelector("span.truncate")).right <= buttons.left,
-        ofWords: box(row.querySelectorAll("span.truncate")[1] ?? null).right <= buttons.left,
-        ofNew: buttons.bottom <= box(row.querySelector("time + span")).top,
-        overTime:
-          buttons.left <= box(row.querySelector("time")).left &&
-          buttons.right >= box(row.querySelector("time")).right,
-      };
-    });
-    assert.deepEqual(clear, {
-      two: [
-        [24, 24],
-        [24, 24],
+    for (const [locale, times, reads] of [
+      [
+        "en-US",
+        {
+          "a-reviewer": `${DAY}T21:52:00Z`,
+          "a-triage": `${DAY}T22:07:00Z`,
+          "a-weekly": `${DAY}T12:07:00Z`,
+          "a-research": "2026-11-22T10:00:00Z",
+        },
+        ["9:52 PM", "10:07 PM", "12:07 PM", "11/22/26"],
       ],
-      inside: true,
-      ofName: true,
-      ofWords: true,
-      ofNew: true,
-      overTime: true,
-    });
-    // Pointed at, the open one shows its own as any row does, and the first row's are gone.
-    await item(list, "a-research").hover();
-    await until(() => drawn(list, "a-reviewer"), rest);
-    await until(async () => (await drawn(list, "a-research")).buttons, "1");
-    await away(page);
-    await until(async () => (await drawn(list, "a-research")).buttons, "0");
-    await page.close();
+      // A day and a year written out are wider than the buttons in any font; an hour of the
+      // twenty-four is narrower.
+      [
+        "en-GB",
+        {
+          "a-reviewer": `${DAY}T21:52:00Z`,
+          "a-triage": "2025-12-31T12:00:00Z",
+          "a-weekly": "2025-12-30T12:00:00Z",
+          "a-research": "2025-12-29T12:00:00Z",
+        },
+        ["21:52", "31/12/2025", "30/12/2025", "29/12/2025"],
+      ],
+    ] as const) {
+      const page = await at(gateway, locale, times);
+      const list = chatsOf(page);
+      const agents = Object.keys(times);
+      assert.deepEqual(
+        await Promise.all(
+          agents.map((agent) =>
+            item(list, agent)
+              .locator("time")
+              .evaluate((time) => time.textContent?.replace(/\s/g, " ")),
+          ),
+        ),
+        reads,
+        locale,
+      );
+      // They come and go in a tenth of a second, and so does the time.
+      assert.deepEqual(
+        await item(list, "a-reviewer").evaluate((row) =>
+          [row.querySelector(":scope > span"), row.querySelector("time")].map(
+            (part) => getComputedStyle(part as Element).transitionDuration,
+          ),
+        ),
+        ["0.1s", "0.1s"],
+      );
+      // Every row, the one open beside the list among them.
+      for (const agent of agents) {
+        const rest = await drawn(list, agent);
+        assert.deepEqual(
+          { ...rest, name: rest.name > 100 },
+          { buttons: "0", time: "1", fromEnd: 4, height: 64, name: true },
+          `${locale} ${agent}`,
+        );
+        await item(list, agent).hover();
+        await until(() => drawn(list, agent), { ...rest, buttons: "1", time: "0", fromEnd: 10 });
+        // Another row shows none meanwhile.
+        const other = agents.find((one) => one !== agent) as string;
+        const { buttons, time } = await drawn(list, other);
+        assert.deepEqual({ buttons, time }, { buttons: "0", time: "1" });
+        const placed = await item(list, agent).evaluate((row) => {
+          const box = (part: Element | null) => (part as Element).getBoundingClientRect();
+          const buttons = box(row.querySelector(":scope > span"));
+          const time = box(row.querySelector("time"));
+          return {
+            two: [...row.querySelectorAll(":scope > span > button")]
+              .map(box)
+              .map((one) => [one.width, one.height]),
+            inside: buttons.top >= box(row).top && buttons.bottom <= box(row).bottom,
+            ofName: box(row.querySelector("span.truncate")).right <= buttons.left,
+            ofWords: box(row.querySelectorAll("span.truncate")[1] ?? null).right <= buttons.left,
+            ofNew: buttons.bottom <= box(row.querySelector("time + span")).top,
+            // They end where the time ends, over its line: the time, gone, is all that is under
+            // them, and a time wider than they are is gone beside them too.
+            atTime:
+              Math.abs(buttons.right - time.right) < 1 &&
+              buttons.top <= time.top &&
+              buttons.bottom >= time.bottom,
+            timeWider: time.width > buttons.width,
+          };
+        });
+        const { timeWider, ...clear } = placed;
+        assert.deepEqual(
+          clear,
+          {
+            two: [
+              [24, 24],
+              [24, 24],
+            ],
+            inside: true,
+            ofName: true,
+            ofWords: true,
+            ofNew: true,
+            atTime: true,
+          },
+          `${locale} ${agent}`,
+        );
+        // How wide a time of the twelve hours is depends on the font; these don't.
+        if (locale === "en-GB") assert.equal(timeWider, agent !== "a-reviewer", agent);
+        await away(page);
+        await until(() => drawn(list, agent), rest);
+      }
+      await page.close();
+    }
   }),
 );
 
