@@ -2820,3 +2820,51 @@ test("a capability's arguments that don't fit give each problem, at its path, an
     (error: Error) => error instanceof Refused && error.code === "unknown",
   );
 });
+
+test("a mounted computer says how it stands: down in its service's words while it is being made, mounted once it runs, and another agent's is refused", async (t) => {
+  const { hub, capabilities, local } = await setup(t);
+  const agent = hub.state.createActor(PERSON, { name: "Scout" }).actorId;
+  const other = hub.state.createActor(PERSON, { name: "Other" }).actorId;
+  // Here, once its connections are up, it is mounted.
+  const here = await capabilities.mount({
+    agent,
+    capability: "computer",
+    arguments: local("terminal"),
+  });
+  assert.ok("mounted" in here, JSON.stringify(here));
+  await until(
+    async () => (await capabilities.status({ agent, mounted: here.mounted })).state === "mounted",
+  );
+  await assert.rejects(
+    capabilities.status({ agent: other, mounted: here.mounted }),
+    (error: Error) => error instanceof Refused && error.code === "unknown",
+  );
+  await capabilities.unmount({ agent, mounted: here.mounted });
+  await assert.rejects(
+    capabilities.status({ agent, mounted: here.mounted }),
+    (error: Error) => error instanceof Refused && error.code === "unknown",
+  );
+
+  // One its service is still making is down, in the service's words.
+  const there = await standIn(t);
+  const away = await capabilities.mount({
+    agent,
+    capability: "computer",
+    arguments: {
+      kind: "new",
+      made: "remote",
+      address: there.apiUrl,
+      access: "terminal",
+      token: there.apiKey,
+    },
+  });
+  assert.ok("mounted" in away, JSON.stringify(away));
+  const record = [...there.computers.values()].at(-1) as Record<string, unknown>;
+  record.state = "starting";
+  record.reason = "Its image is being fetched.";
+  await until(async () => {
+    const now = await capabilities.status({ agent, mounted: away.mounted });
+    return now.state === "down" && now.detail === "Its image is being fetched.";
+  });
+  await capabilities.unmount({ agent, mounted: away.mounted });
+});

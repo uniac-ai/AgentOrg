@@ -326,9 +326,9 @@ export async function startPrograms(
         await attempt("connecting a provider to management", () =>
           call("grants", "expose", { provider, export: "provider", to: management }),
         );
-    // The agents' executor and the computer connector make capabilities too: management mounts
-    // them through each.
-    for (const provider of [agents, computer])
+    // The agents' executor, the computer connector and the MCP provider make capabilities too:
+    // management mounts them through each.
+    for (const provider of [agents, computer, mcp])
       if (provider)
         await attempt("connecting a provider's capabilities to management", () =>
           call("grants", "expose", { provider, export: "capabilities", to: management }),

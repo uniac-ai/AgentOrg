@@ -21,6 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Computer } from "@agentorg/computer-sdk";
 import { HubState, PERSON } from "@agentorg/hub";
 import { agents } from "@agentorg/interfaces";
@@ -1375,6 +1376,107 @@ test("an Assistant made empty with the assistant template mounted is told and of
   for (const agent of [units, mounts]) await person.call("agents", "remove", { agent });
 });
 
+/** The MCP provider's test server: a local MCP server with an `echo` and an `env` tool. */
+const MCP_SERVER = {
+  command: process.execPath,
+  args: [
+    join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/dist/test/fixtures/server.js"),
+  ],
+};
+
+test("two MCP servers mounted on a running agent are both offered their functions, and one unmounted is no longer, with no restart; a server's secret isn't in management's records, and the server has it again after a restart", async (t) => {
+  // The model, scripted: each request answered in turn. What each offers, and its input, are kept.
+  const fake = await fakeOpenAI();
+  const offered: string[][] = [];
+  const inputs: { type: string; call_id?: string; output?: string }[][] = [];
+  const answers: object[][] = [];
+  const s = await open(t, undefined, async (request) => {
+    if (!request.url.endsWith("/responses")) return fake.handle(request);
+    const body = (await request.clone().json()) as {
+      tools?: { name: string }[];
+      input: (typeof inputs)[number];
+    };
+    offered.push((body.tools ?? []).map((one) => one.name));
+    inputs.push(body.input);
+    fake.script({ events: [completed((answers.shift() ?? []) as never)] });
+    return fake.handle(request);
+  });
+  let { person, ran } = await s.start();
+  const { mcp } = ran as NonNullable<typeof ran>;
+  assert.ok(mcp);
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  const agent = await createAssistant(person, "Toolsmith");
+  const mount = async (slot: string, more: object = {}) => {
+    const made = await person.call<{ mounted?: string }>("agents2", "mount", {
+      agent,
+      provider: mcp,
+      capability: "command",
+      arguments: { ...MCP_SERVER, slot, ...more },
+    });
+    assert.ok(made.mounted, JSON.stringify(made));
+    return made.mounted;
+  };
+  const alpha = await mount("alpha");
+  const beta = await mount("beta", { environment: "AGENTORG_TEST_GIVEN=kept-secret-1" });
+  // Each says it is mounted once its server is up, as its provider says.
+  const states = async () =>
+    (await person.call<{ mounted: { state?: string }[] }>("agents2", "get", { agent })).mounted.map(
+      (one) => one.state,
+    );
+  await until(async () => (await states()).join() === "mounted,mounted", "both servers to be up");
+  let slot = await chatSlot(person, agent);
+  const turn = async (text: string) => {
+    const from = offered.length;
+    await until(
+      () =>
+        person.call(slot, "list").then(
+          () => true,
+          () => false,
+        ),
+      "the chat to answer",
+    );
+    await person.call(slot, "send", { text });
+    await until(() => offered.length > from, "the agent to be asked");
+    await until(
+      async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+      "the turn to end",
+    );
+    return offered[from] as string[];
+  };
+  const both = await turn("Hi!");
+  for (const name of ["alpha__echo", "beta__echo"]) assert.ok(both.includes(name), name);
+  // One taken off, with no restart: its functions go from the next message.
+  await person.call("agents2", "unmount", { agent, mounted: alpha });
+  const left = await turn("Still there?");
+  assert.ok(!left.some((name) => name.startsWith("alpha__")), left.join());
+  assert.ok(left.includes("beta__echo"));
+  // Its secret went to the provider only.
+  const records = join(s.home, "programs", "management", "manager.json");
+  assert.ok(!readFileSync(records, "utf8").includes("kept-secret-1"));
+  // After a restart, the server is there again, with its secret.
+  await s.stop();
+  ({ person } = await s.start());
+  slot = await chatSlot(person, agent);
+  await until(async () => (await states()).join() === "mounted", "the server to be up again");
+  answers.push([
+    {
+      type: "function_call",
+      call_id: "e1",
+      name: "beta__env",
+      arguments: JSON.stringify({ name: "AGENTORG_TEST_GIVEN" }),
+    },
+  ]);
+  await turn("What is it?");
+  const said = inputs
+    .flat()
+    .find((item) => item.type === "function_call_output" && item.call_id === "e1")?.output;
+  assert.match(String(said), /kept-secret-1/);
+  await person.call("agents", "remove", { agent });
+});
+
 test("the person, the agent itself and another program each mount memory on a running agent through management and take it off; the agent mounts it through its control, which reaches management once mounted, and the lines outlast each and a restart", async (t) => {
   // The model, scripted: each of the agent's requests answered in turn, nothing once those run out.
   // What each request is told, and its input, are kept.
@@ -1726,6 +1828,13 @@ test("a computer mounted on agents@2 gives the agent and the person what the sam
     arguments: answers,
   });
   assert.ok(made.mounted, JSON.stringify(made));
+  // get says how it stands, as its provider says it: mounted once its connections are up.
+  await until(
+    async () =>
+      (await person.call<{ mounted: { state?: string }[] }>("agents2", "get", { agent: byMount }))
+        .mounted[0]?.state === "mounted",
+    "the mounted computer to be said mounted",
+  );
   const got = (agent: string) => person.call<Got>("agents2", "get", { agent });
   const [unitGot, mountGot] = [await got(byUnit), await got(byMount)];
   const held = (one: Got) => one.capabilities?.find(({ id }) => id === "computer");

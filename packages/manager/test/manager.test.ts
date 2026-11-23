@@ -41,8 +41,8 @@ import { reachOf, SKILL_SHIPPED, skillFile } from "../src/control.ts";
 import { startManager } from "../src/index.ts";
 import { AgentRecord } from "../src/stack.ts";
 
-const until = async (condition: () => boolean, ms = 15_000) => {
-  for (let waited = 0; !condition(); waited += 10) {
+const until = async (condition: () => boolean | Promise<boolean>, ms = 15_000) => {
+  for (let waited = 0; !(await condition()); waited += 10) {
     if (waited > ms) throw new Error("timed out waiting");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -5186,4 +5186,120 @@ test("an agent's control mount on another agent is held to its own control, as a
     arguments: { templates: ["helper", "worker"], agents: "all", depth: 3 },
   });
   assert.ok("mounted" in byPerson, JSON.stringify(byPerson));
+});
+
+/**
+ * A capability provider outside the agent, as the MCP provider and the Computers provider are: a
+ * server that may be held many times, and a printer held once. How each mount stands is scripted.
+ */
+async function outsideProvider(s: Awaited<ReturnType<typeof setup>>, t: test.TestContext) {
+  const args = { type: "object" as const, properties: {} };
+  const SERVER = {
+    id: "server",
+    title: "Server",
+    description: "A server.",
+    arguments: args,
+    many: true as const,
+  };
+  const PRINTER = { id: "printer", title: "Printer", description: "A printer.", arguments: args };
+  const actor = s.hub.state.createActor(PERSON, { name: "Outside" });
+  const stood = new Map<string, { state: "mounted" | "down" | "failed"; detail?: string }>();
+  let count = 0;
+  const running = await connect({
+    hubUrl: s.hubUrl,
+    actorId: actor.actorId,
+    credential: actor.credential as string,
+    exports: { capabilities: capabilityProvider },
+    start(ctx) {
+      ctx.exports.capabilities.implement({
+        capabilities: () => ({ capabilities: [SERVER, PRINTER] }),
+        skill: () => {
+          throw new Refused("unknown", "It makes no skills.");
+        },
+        mount: () => {
+          count += 1;
+          const mounted = `out_${count}`;
+          stood.set(mounted, { state: "down", detail: "Its server is being started." });
+          return { mounted };
+        },
+        status: ({ mounted }) => {
+          const now = stood.get(mounted);
+          if (!now) throw new Refused("unknown", `It has no ${mounted}.`);
+          return now;
+        },
+        unmount: ({ mounted }) => {
+          stood.delete(mounted);
+          return {};
+        },
+      });
+    },
+  });
+  t.after(() => running.close());
+  await s.person.slots.grants.call.expose({
+    provider: actor.actorId,
+    export: "capabilities",
+    to: s.management.actorId,
+  });
+  await until(async () =>
+    (await s.calls.agents.capabilities({})).capabilities.some((one) => one.id === "server"),
+  );
+  return { provider: actor.actorId, stood, running };
+}
+
+test("a capability its provider says may be held many times is mounted again, each its own mount; one that may not is held once", async (t) => {
+  const s = await setup(t);
+  const { provider } = await outsideProvider(s, t);
+  const agent = await s.makeStack([]);
+  const mount = (capability: string) =>
+    s.calls.agents.mount({ agent, provider, capability, arguments: {} });
+  const first = await mount("server");
+  const second = await mount("server");
+  assert.ok("mounted" in first && "mounted" in second);
+  assert.notEqual(first.mounted, second.mounted);
+  assert.ok("mounted" in (await mount("printer")));
+  await assert.rejects(mount("printer"), refused("state"));
+  const listed = (await s.calls.agents.capabilities({})).capabilities;
+  assert.equal(listed.find((one) => one.id === "server")?.many, true);
+  assert.deepEqual(
+    (await s.calls.agents.get({ agent })).mounted?.map((one) => one.capability),
+    ["server", "server", "printer"],
+  );
+  // One of the two taken off, the other stays.
+  await s.calls.agents.unmount({ agent, mounted: first.mounted });
+  const left = (await s.calls.agents.get({ agent })).mounted ?? [];
+  assert.deepEqual(
+    left.map((one) => one.capability),
+    ["server", "printer"],
+  );
+  assert.equal(left[0]?.mounted, second.mounted);
+});
+
+test("get says how each mount an outside provider made stands, as it says it: down with why, then mounted; one it no longer has is failed, and with it away, down", async (t) => {
+  const s = await setup(t);
+  const outside = await outsideProvider(s, t);
+  const agent = await s.makeStack([]);
+  const made = await s.calls.agents.mount({
+    agent,
+    provider: outside.provider,
+    capability: "server",
+    arguments: {},
+  });
+  assert.ok("mounted" in made);
+  const stood = async () => {
+    const [one] = (await s.calls.agents.get({ agent })).mounted ?? [];
+    return { state: one?.state, detail: one?.detail };
+  };
+  assert.deepEqual(await stood(), { state: "down", detail: "Its server is being started." });
+  outside.stood.set("out_1", { state: "mounted" });
+  assert.deepEqual(await stood(), { state: "mounted", detail: undefined });
+  // The same on agents@2.
+  const two = await agents2Caller(s, t);
+  assert.equal((await two.get({ agent })).mounted[0]?.state, "mounted");
+  // It no longer has it: failed.
+  outside.stood.delete("out_1");
+  assert.deepEqual(await stood(), { state: "failed", detail: "Its provider no longer has it." });
+  // Away: down.
+  outside.running.close();
+  await until(async () => (await stood()).detail === "Its provider can't be reached now.");
+  assert.equal((await stood()).state, "down");
 });
