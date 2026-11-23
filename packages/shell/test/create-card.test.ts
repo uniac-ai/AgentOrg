@@ -3,8 +3,8 @@
 // what the agent can do beside it. In a real browser over the stand-in gateway.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { toSvg } from "@agentorg/2dlivebot";
 import type { Locator, Page } from "@playwright/test";
-import { toSvg } from "2dlivebot";
 import { NAMES } from "../src/fixed/names.ts";
 import {
   agentsRead,

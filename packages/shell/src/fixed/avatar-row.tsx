@@ -5,7 +5,7 @@
 // `KEPT` places that goes round: a place that comes round to the far side, out of sight, is given a
 // new avatar and name, so there are always new ones ahead and never more than `KEPT`. The ones
 // just passed, as many as are behind the choice in the ring, come back as they were.
-import { Avatar } from "2dlivebot/react";
+import { Avatar } from "@agentorg/2dlivebot/react";
 import { WheelGesturesPlugin } from "embla-carousel-wheel-gestures";
 import { useEffect, useRef, useState } from "react";
 import {

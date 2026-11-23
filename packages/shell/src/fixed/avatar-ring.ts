@@ -1,6 +1,6 @@
 // The ring the row of avatars goes round: what a place in it holds, and which places come round to
 // the far side as the choice moves.
-import { avatarFromSeed, toSvg } from "2dlivebot";
+import { avatarFromSeed, toSvg } from "@agentorg/2dlivebot";
 import { freshName } from "./names.ts";
 
 /** An avatar, as its string, and the name it comes with. */
