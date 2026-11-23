@@ -13,6 +13,9 @@ test.before(async () => {
   browser = await chromium.launch();
 });
 test.after(() => browser.close());
+// A test that fails leaves its page open, and a page opened beside one draws its frames far apart:
+// each test starts with none.
+test.afterEach(() => Promise.all(browser.contexts().map((context) => context.close())));
 
 type Gateway = Awaited<ReturnType<typeof standIn>>;
 
@@ -46,23 +49,25 @@ const computer = (page: Page) =>
   page.getByRole("main").getByRole("region", { name: "Research's computer" });
 const side = (page: Page) => page.locator("[data-beside]");
 /**
- * Waits for the sidebar's own motion to finish, so what is measured is where it came to. What it
- * shows may move for as long as it is shown.
+ * Waits for the sidebar to be open and its own motion to finish, so what is measured is where it
+ * came to: it is drawn closed for a frame before it opens, with what it shows already in it. What
+ * it shows may move for as long as it is shown.
  */
-const still = (page: Page) =>
-  side(page).evaluate((element) =>
+const still = async (page: Page) => {
+  await page.locator('[data-beside="open"]').waitFor();
+  await side(page).evaluate((element) =>
     Promise.all(
       [element, element.firstElementChild as Element]
         .flatMap((part) => part.getAnimations())
         .map((motion) => motion.finished),
     ),
   );
+};
 const widthOf = async (part: ReturnType<Page["locator"]>) =>
   Math.round((await part.boundingBox())?.width ?? 0);
 /** Opens Research's details beside its conversation, and waits for them to come to rest. */
 async function openDetails(page: Page) {
   await face(page).click();
-  await page.locator('[data-beside="open"]').waitFor();
   await details(page).waitFor();
   await still(page);
 }
