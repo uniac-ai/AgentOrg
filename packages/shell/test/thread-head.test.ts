@@ -114,14 +114,13 @@ test(
         thread.locator('[data-slot="message-scroller"]').evaluate((scroller) => {
           const over = scroller.querySelector(':scope > [aria-hidden="true"]') as HTMLElement;
           const box = over.getBoundingClientRect();
-          const head = (
-            scroller.parentElement?.querySelector("header") as Element
-          ).getBoundingClientRect();
+          const thread = scroller.parentElement as Element;
+          const head = (thread.querySelector("header") as Element).getBoundingClientRect();
           const wash = getComputedStyle(over.lastElementChild as Element).backgroundColor;
           const ground = document.createElement("i");
           ground.style.background = "var(--thread)";
           scroller.append(ground);
-          const thread = getComputedStyle(ground).backgroundColor;
+          const its = getComputedStyle(ground).backgroundColor;
           ground.remove();
           return {
             under: Math.round(box.top - head.bottom),
@@ -131,7 +130,7 @@ test(
             layers: [...over.children].filter(
               (one) => getComputedStyle(one).backdropFilter !== "none",
             ).length,
-            washed: wash === thread,
+            washed: wash === its,
             pointer: getComputedStyle(over).pointerEvents,
           };
         });
@@ -152,9 +151,9 @@ test(
       await thread.getByText("Finding 69 is").waitFor();
       await page.waitForFunction(
         (scroller) =>
-          (
-            scroller?.querySelector(':scope > [aria-hidden="true"]') as HTMLElement
-          ).style.getPropertyValue("--gradual-blur-reveal") === "1.000",
+          scroller
+            ?.querySelector<HTMLElement>(':scope > [aria-hidden="true"]')
+            ?.style.getPropertyValue("--gradual-blur-reveal") === "1.000",
         await thread.locator('[data-slot="message-scroller"]').elementHandle(),
       );
       assert.equal((await blur()).shows, 1, `${where}: scrolled`);
