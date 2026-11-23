@@ -1825,6 +1825,10 @@ export async function startComputerProvider(
           return takeOff(mounted);
         },
         skill: ({ capability: id, name, path: file }) => skillText(id, name, file),
+        // Answered from each mount's state in the change after the contract.
+        status: () => {
+          throw new Refused("unimplemented", "This provider doesn't say how a mount stands yet.");
+        },
       });
     },
   }).catch(async (error) => {

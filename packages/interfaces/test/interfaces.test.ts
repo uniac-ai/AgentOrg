@@ -294,6 +294,45 @@ test("a capability is mounted from its arguments, or each problem with them is s
   assert.ok(manage["unmount.output"]?.({}));
 });
 
+test("a capability may be held more than once, each mount its own, when its definition says `many`; anyone listing it reads the mark", () => {
+  const server = {
+    id: "mcp-url",
+    title: "A server at an address",
+    description: "An MCP server's tools, reached at its address.",
+    arguments: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+    many: true,
+  };
+  assert.ok(compiled(capabilityProvider)["capabilities.output"]?.({ capabilities: [server] }));
+  // Through management, each listing names its provider and keeps the mark.
+  for (const iface of [agents, agents2])
+    assert.ok(
+      compiled(iface)["capabilities.output"]?.({
+        capabilities: [{ ...server, provider: "act_p" }],
+      }),
+      describeInterface(iface).id,
+    );
+  // Only `true`: one held once says nothing.
+  const listed = compiled(capabilityProvider)["capabilities.output"];
+  assert.equal(listed?.({ capabilities: [{ ...server, many: false }] }), false);
+  assert.equal(listed?.({ capabilities: [{ ...server, many: 2 }] }), false);
+});
+
+test("a provider says how a mount stands, in an agent's own words for its capabilities, with why when it isn't mounted", () => {
+  const provider = compiled(capabilityProvider);
+  const asked = provider["status.input"];
+  const said = provider["status.output"];
+  assert.ok(asked && said);
+  assert.ok(asked({ agent: "act_a", mounted: "mnt_1" }));
+  assert.equal(asked({ mounted: "mnt_1" }), false);
+  assert.ok(said({ state: "mounted" }));
+  assert.ok(said({ state: "down", detail: "Its computer is being made: 2 of 3." }));
+  assert.ok(said({ state: "failed", detail: "Its server refused the token." }));
+  // An agent's own states, and nothing more.
+  assert.equal(said({ state: "starting" }), false);
+  assert.equal(said({ state: "down", detail: "x".repeat(2001) }), false);
+  assert.equal(said({ state: "mounted", since: 1 }), false);
+});
+
 test("an agent says each capability mounted on it, with its state; management's get gives that tree under each it mounted", () => {
   const status = compiled(agentProvider)["status.output"];
   assert.ok(status);
