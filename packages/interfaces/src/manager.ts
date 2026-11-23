@@ -48,6 +48,14 @@ const OnAgent = z.object({ agent: Id });
 const OnConnection = z.object({ connection: Id });
 const OnSkill = z.object({ name: SkillName });
 export const Purpose = z.string().max(2000);
+/**
+ * An agent's avatar: one string holding its every setting, as what draws it writes it. Management
+ * keeps it as given and never reads into it.
+ */
+export const Avatar = z
+  .string()
+  .max(512)
+  .regex(/^[a-z0-9.-]+$/);
 
 /** A template's id. */
 export const TemplateId = z
@@ -223,6 +231,8 @@ const AgentEntry = z.object({
   creatable: CreatableId,
   /** What it's for, as whoever made it said. */
   purpose: Purpose.optional(),
+  /** Its avatar, as whoever made it chose; none on one made without. */
+  avatar: Avatar.optional(),
   /** The template it started from, for display only. */
   template: TemplateId.optional(),
   /** The agent that made it; `gone` once that agent has been removed. It is the person's either way. */
@@ -282,13 +292,19 @@ export const agents = defineInterface({
      */
     create: method({
       input: z.union([
-        z.strictObject({ stack: Stack, name: ActorName, purpose: Purpose.optional() }),
+        z.strictObject({
+          stack: Stack,
+          name: ActorName,
+          purpose: Purpose.optional(),
+          avatar: Avatar.optional(),
+        }),
         z.strictObject({
           template: TemplateId,
           fill: z.array(Fill).max(64).optional(),
           answers: Answers.optional(),
           name: ActorName,
           purpose: Purpose.optional(),
+          avatar: Avatar.optional(),
         }),
       ]),
       output: OnAgent,
