@@ -21,20 +21,29 @@ import {
   sortableKeyboardCoordinates,
   useSortable,
 } from "@dnd-kit/sortable";
-import { CircleAlertIcon, MoreHorizontalIcon, PinIcon, PinOffIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  CircleAlertIcon,
+  MoreHorizontalIcon,
+  PinIcon,
+  PinOffIcon,
+  TrashIcon,
+  XIcon,
+} from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button.tsx";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "../ui/context-menu.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
@@ -193,27 +202,40 @@ interface Act {
   name: string;
   icon: React.ReactNode;
   run(): void;
+  /** It takes something away: it is set apart from the acts before it, in that colour. */
+  takes?: true;
 }
 
 /**
  * What can be done with a conversation. `pin` pins it, or unpins a pinned one. `menu` is what its
  * menus list, the one a right-click opens and the one its row's "⋯" opens: an act put in it is in
- * both.
+ * both. The last takes the conversation off the list, and asks nothing first: nothing said in it
+ * is cleared.
  */
-function actsOf(pinned: boolean, onPin: () => void) {
+function actsOf(pinned: boolean, onPin: () => void, onDelete: () => void) {
   const pin: Act = pinned
     ? { name: "Unpin", icon: <PinOffIcon />, run: onPin }
     : { name: "Pin", icon: <PinIcon />, run: onPin };
-  return { pin, menu: [pin] };
+  const menu: Act[] = [
+    pin,
+    { name: "Delete chat", icon: <TrashIcon />, run: onDelete, takes: true },
+  ];
+  return { pin, menu };
 }
 
+/** A menu's parts, of either kind of menu. */
+const RIGHT_CLICK = { Item: ContextMenuItem, Separator: ContextMenuSeparator };
+const DROPPED = { Item: DropdownMenuItem, Separator: DropdownMenuSeparator };
 /** Acts as a menu's items, in either kind of menu. */
-const itemsOf = (acts: Act[], Item: typeof ContextMenuItem | typeof DropdownMenuItem) =>
-  acts.map(({ name, icon, run }) => (
-    <Item key={name} onSelect={run}>
-      {icon}
-      {name}
-    </Item>
+const itemsOf = (acts: Act[], { Item, Separator }: typeof RIGHT_CLICK | typeof DROPPED) =>
+  acts.map(({ name, icon, run, takes }) => (
+    <Fragment key={name}>
+      {takes && <Separator />}
+      <Item variant={takes ? "destructive" : "default"} onSelect={run}>
+        {icon}
+        {name}
+      </Item>
+    </Fragment>
   ));
 
 /** A conversation's menu, on its tile or its row. */
@@ -221,7 +243,7 @@ function ChatMenu({ acts, children }: { acts: Act[]; children: React.ReactElemen
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent>{itemsOf(acts, ContextMenuItem)}</ContextMenuContent>
+      <ContextMenuContent>{itemsOf(acts, RIGHT_CLICK)}</ContextMenuContent>
     </ContextMenu>
   );
 }
@@ -279,7 +301,7 @@ function RowActs({
           </TooltipTrigger>
           <TooltipContent>More</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end">{itemsOf(menu, DropdownMenuItem)}</DropdownMenuContent>
+        <DropdownMenuContent align="end">{itemsOf(menu, DROPPED)}</DropdownMenuContent>
       </DropdownMenu>
     </span>
   );
@@ -298,10 +320,11 @@ interface Listed {
   current: boolean;
   onOpen(): void;
   onPin(): void;
+  onDelete(): void;
 }
 
 /** A pinned conversation's tile, which is dragged among the tiles: the others make room as it goes. */
-function PinnedTile({ chat, current, onOpen, onPin }: Listed) {
+function PinnedTile({ chat, current, onOpen, onPin, onDelete }: Listed) {
   const {
     attributes,
     listeners,
@@ -312,7 +335,7 @@ function PinnedTile({ chat, current, onOpen, onPin }: Listed) {
     isDragging,
   } = useSortable({ id: chat.agent.id });
   return (
-    <ChatMenu acts={actsOf(true, onPin).menu}>
+    <ChatMenu acts={actsOf(true, onPin, onDelete).menu}>
       <li
         ref={setNodeRef}
         data-chat={chat.agent.id}
@@ -338,9 +361,9 @@ function PinnedTile({ chat, current, onOpen, onPin }: Listed) {
  * A conversation's row, which is dragged up onto the tiles, with its buttons. It is picked up by
  * the row itself: a press on a button is the button's alone.
  */
-function ListedRow({ chat, current, onOpen, onPin }: Listed) {
+function ListedRow({ chat, current, onOpen, onPin, onDelete }: Listed) {
   const { listeners, setNodeRef, isDragging } = useDraggable({ id: chat.agent.id });
-  const { pin, menu } = actsOf(false, onPin);
+  const { pin, menu } = actsOf(false, onPin, onDelete);
   /** Whether the menu its "⋯" opens is open. */
   const [open, setOpen] = useState(false);
   return (
@@ -414,8 +437,10 @@ const underPointer: Modifier = ({ activatorEvent, draggingNodeRect, transform })
  * Your conversations. The pinned ones come first, a tile each in a grid, in the order they were
  * put in; the rest follow, newest first, a row each. `current` is the agent of the one open beside
  * them. A right-click on one, a long press, or Shift+F10 while it has the keyboard, opens its menu:
- * Pin, or Unpin. A row pointed at, or with the keyboard on it, shows two buttons at its end: one
- * that pins it, and "⋯", which opens the same menu.
+ * Pin or Unpin, and Delete chat, which takes it off the list and clears nothing; were it the one
+ * open, the one after it is opened, or the one before it, or `onEmpty` is told there is none. A
+ * row pointed at, or with the keyboard on it, shows two buttons at its end: one that pins it, and
+ * "⋯", which opens the same menu.
  *
  * With a mouse they are dragged: a tile to another place among the tiles, a row onto the tiles,
  * which pins it there, and a tile down off them, which unpins it. What follows the pointer is the
@@ -427,18 +452,23 @@ export function ChatList({
   chats,
   current,
   onOpen,
+  onEmpty,
   className,
 }: {
   chats: ListedChat[];
   current?: string | undefined;
   onOpen(agent: string): void;
+  onEmpty?(): void;
   className: string;
 }) {
-  const { pins, pin } = useAllChats();
+  const { pins, pin, hide } = useAllChats();
   // What was said today is read again when the day changes.
   useEvery(60_000);
   const list = useRef<HTMLUListElement>(null);
-  /** The conversation just pinned or unpinned: the keyboard goes with it to where it is drawn now. */
+  /**
+   * The conversation just pinned or unpinned: the keyboard goes with it to where it is drawn now.
+   * After one is deleted, the one that follows it has the keyboard.
+   */
   const moved = useRef<string>(undefined);
   useEffect(() => {
     if (!moved.current) return;
@@ -474,6 +504,18 @@ export function ChatList({
           onPin={() => {
             moved.current = id;
             pin(id, !pinned);
+          }}
+          onDelete={() => {
+            const order = [...tiles, ...chats.map((one) => one.agent.id)].filter(
+              (one, at, all) => all.indexOf(one) === at,
+            );
+            const at = order.indexOf(id);
+            const next = order[at + 1] ?? order[at - 1];
+            moved.current = next;
+            hide(id);
+            if (id !== current) return;
+            if (next) onOpen(next);
+            else onEmpty?.();
           }}
         />
       )
