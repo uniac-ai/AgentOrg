@@ -169,7 +169,9 @@ function Places() {
           aria-expanded={searching}
           onClick={() => setSearching(true)}
         >
-          <SearchIcon className={icon} />
+          {/* Quieter than a place in the strip: smaller, thinner and grey. On a phone it is one of
+              the row's four, drawn as they are. */}
+          <SearchIcon className="size-[18px] stroke-[1.5] text-muted-foreground phone:size-[22px] phone:stroke-2" />
         </Place>
       </div>
       <Search open={searching} onOpenChange={search} query={query} onQuery={setQuery} />

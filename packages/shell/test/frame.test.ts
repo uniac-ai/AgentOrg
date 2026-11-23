@@ -88,12 +88,24 @@ test(
       ),
       false,
     );
-    for (const name of ["Search", "Chat", "Team", "Settings"]) {
+    for (const name of ["Chat", "Team", "Settings"]) {
       const [x, y, width, height] = await boxOf(place(page, name).locator("svg"));
       const [px, py] = await boxOf(place(page, name));
       assert.deepEqual([width, height], [22, 22], name);
       assert.deepEqual([x - px, y - py], [11, 11], `${name}'s icon in the middle of its place`);
     }
+    // Search is quieter than the places: an icon of 18 in the middle of its place, with a thinner
+    // line, in the grey of what is said quietly.
+    const search = place(page, "Search").locator("svg");
+    const [sx, sy, sw, sh] = await boxOf(search);
+    assert.deepEqual([sw, sh, sx - 252, sy - 4], [18, 18, 13, 13]);
+    assert.deepEqual(
+      await search.evaluate((icon) => {
+        const style = getComputedStyle(icon);
+        return [style.strokeWidth, style.color];
+      }),
+      ["1.5px", "rgb(161, 161, 161)"],
+    );
     assert.equal(await bar(page).innerText(), "", "no words");
     assert.equal(await bar(page).getByRole("list").count(), 0, "no agents");
     assert.equal(await bar(page).getByRole("searchbox").count(), 0, "no search box");
@@ -288,10 +300,11 @@ test(
     assert.deepEqual(await boxOf(place(page, "Chat")), [97.5, 789, 97.5, 55]);
     assert.deepEqual(await boxOf(place(page, "Team")), [195, 789, 97.5, 55]);
     assert.deepEqual(await boxOf(place(page, "Settings")), [292.5, 789, 97.5, 55]);
-    // Each label is under its icon.
+    // Each label is under its icon, and the four icons are one size, Search's too.
     for (const name of ["Search", "Chat", "Team", "Settings"]) {
       assert.equal(await place(page, name).innerText(), name);
       const icon = await boxOf(place(page, name).locator("svg"));
+      assert.equal(icon[2], 22, `${name}'s icon`);
       const words = await boxOf(place(page, name).getByText(name, { exact: true }));
       assert.ok(words[1] >= icon[1] + icon[3], `${name}'s label under its icon`);
       assert.equal(
