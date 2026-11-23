@@ -1,7 +1,8 @@
 // Your conversations, one with each agent you talk to, as one list: its last words, and whether it
 // has said something you haven't read; and apart, the agents' conversations with each other, which
 // you read and never write in. A conversation of yours is read when its thread has shown its reply;
-// when each was read is kept in the app's notes, so it survives restarts.
+// when each was read is kept in the app's notes, so it survives restarts, and so is which of them
+// you have pinned.
 import {
   createContext,
   useCallback,
@@ -39,9 +40,20 @@ interface AllChats {
   listed: boolean;
   /** Your conversation with an agent has shown a reply of its, said at `at`. */
   read(agent: string, at: string): void;
+  /** The agents whose conversations with you are pinned, in the order they were pinned. */
+  pins: readonly string[];
+  /** Pins your conversation with an agent, or unpins it. */
+  pin(agent: string, pinned: boolean): void;
 }
 
-const Context = createContext<AllChats>({ chats: [], others: [], listed: false, read: () => {} });
+const Context = createContext<AllChats>({
+  chats: [],
+  others: [],
+  listed: false,
+  read: () => {},
+  pins: [],
+  pin: () => {},
+});
 export const useAllChats = () => useContext(Context);
 
 /** Who you are in a conversation, as the Hub names you. */
@@ -135,6 +147,57 @@ function useRead() {
       .catch(() => {});
   });
   return { note, mark: mark.current };
+}
+
+/** The pins in the app's store: the agents whose conversations with you are pinned, in the order pinned. */
+const PINS = "ui/pinned-conversations";
+/** A stored value that is pins: anything else is taken for none. */
+const isPins = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((one) => typeof one === "string");
+const NO_PINS: readonly string[] = [];
+
+/** Your pinned conversations; none until the pins are read. */
+function usePins() {
+  const connection = useConnection();
+  const [pins, setPins] = useState<readonly string[]>();
+  useEffect(() => {
+    if (connection !== "open" || pins) return;
+    let over = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () =>
+      api.call<{ value?: unknown }>("store", "get", { key: PINS }).then(
+        ({ value }) => {
+          if (!over) setPins(isPins(value) ? value : []);
+        },
+        () => {
+          if (!over) timer = setTimeout(load, RETRY_MS);
+        },
+      );
+    void load();
+    return () => {
+      over = true;
+      clearTimeout(timer);
+    };
+  }, [connection, pins]);
+
+  const pin = useCallback((agent: string, pinned: boolean) => {
+    const change = (was: readonly string[]) => {
+      const rest = was.filter((one) => one !== agent);
+      return pinned ? [...rest, agent] : rest;
+    };
+    setPins((was) => was && change(was));
+    // Another tab may have pinned others since this one read the pins: the change is made to what
+    // is stored.
+    void api
+      .call<{ value?: unknown }>("store", "get", { key: PINS })
+      .then(({ value }) => {
+        const next = change(isPins(value) ? value : []);
+        setPins(next);
+        return api.call("store", "set", { key: PINS, value: next });
+      })
+      .catch(() => {});
+  }, []);
+  return { pins: pins ?? NO_PINS, pin };
 }
 
 interface Held {
@@ -315,7 +378,11 @@ export function AllChatsProvider({ children }: { children: React.ReactNode }) {
   const chats = useMemo(() => all.filter((one) => one.with === PERSON), [all]);
   const others = useMemo(() => all.filter((one) => one.with !== PERSON), [all]);
   const read = useCallback<AllChats["read"]>((agent, at) => mark(keyOf(agent, PERSON), at), [mark]);
-  const value = useMemo(() => ({ chats, others, listed, read }), [chats, others, listed, read]);
+  const { pins, pin } = usePins();
+  const value = useMemo(
+    () => ({ chats, others, listed, read, pins, pin }),
+    [chats, others, listed, read, pins, pin],
+  );
   return (
     <Context.Provider value={value}>
       {[...byId.values()].map(

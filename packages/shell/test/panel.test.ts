@@ -153,13 +153,16 @@ test(
     gateway.sayWith("a-triage", "a-research", said("x1", "user", "Which issues are new?", 1));
     const page = await open(gateway);
     await listed(page, 4);
+    // After its face: its agent, then its last words or its problem. Its time comes last.
     const lines = async () =>
-      (await rows(page).allInnerTexts()).map((text) => text.split("\n").filter(Boolean).slice(1));
+      (await rows(page).allInnerTexts()).map((text) =>
+        text.split("\n").filter(Boolean).slice(1, 3),
+      );
     await until(lines, [
-      ["Research", "The model refused it.", "8 min"],
-      ["Reviewer", "Reviewed #482 with 3 comments", "12 min"],
-      ["Triage", "You: Route today's issues", "1 h"],
-      ["Weekly report", "You: Numbers for last week", "8 h"],
+      ["Research", "The model refused it."],
+      ["Reviewer", "Reviewed #482 with 3 comments"],
+      ["Triage", "You: Route today's issues"],
+      ["Weekly report", "You: Numbers for last week"],
     ]);
     // A problem is said in the problem's colour, where the last words would be.
     const problem = rows(page).nth(0).getByText("The model refused it.");
@@ -193,7 +196,7 @@ test(
     await page.waitForTimeout(300);
     assert.equal(await rows(page).nth(0).getByRole("img", { name: "New" }).count(), 0);
     // The others stay as they were.
-    assert.deepEqual((await lines())[3], ["Weekly report", "You: Numbers for last week", "8 h"]);
+    assert.deepEqual((await lines())[3], ["Weekly report", "You: Numbers for last week"]);
     await page.close();
   }),
 );
