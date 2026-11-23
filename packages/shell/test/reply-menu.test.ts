@@ -111,23 +111,31 @@ test(
     await more(said).click();
     const menu = page.getByRole("menu");
     await menu.waitFor();
-    // Copy, and under it when the message was sent, as the chat list says it.
-    assert.deepEqual(
-      await menu.evaluate((root) =>
+    // Copy, and under it when the message was sent.
+    const parts = () =>
+      menu.evaluate((root) =>
         [...root.children].map((one) => [one.getAttribute("role"), one.textContent?.trim()]),
-      ),
-      [
-        ["menuitem", "Copy"],
-        [null, "5 min"],
-      ],
-    );
+      );
+    const [copy, when] = await parts();
+    assert.deepEqual(copy, ["menuitem", "Copy"]);
+    assert.ok(when?.[0] === null && when[1], "when it was sent, under Copy");
     await menu.getByRole("menuitem", { name: "Copy" }).click();
     assert.equal(await copied(page), SAID.receipt);
     await menu.waitFor({ state: "detached" });
-    // The result has two bubbles: either one's copies all of it.
+    // The result has two bubbles: either one's copies all of it. It is the conversation's latest
+    // message, so its menu and its row in the list say when in the same words.
+    const row = page
+      .getByRole("main")
+      .getByRole("list", { name: "Chats" })
+      .getByRole("button")
+      .filter({ hasText: "Research" });
+    const listed = (await row.locator("time").textContent())?.trim();
+    assert.ok(listed, "its row says when");
     const second = bubble(thread, LAST_WORDS);
     await second.hover();
     await more(second).click();
+    await menu.waitFor();
+    assert.equal((await parts())[1]?.[1], listed);
     await page.getByRole("menuitem", { name: "Copy" }).click();
     assert.equal(await copied(page), SAID.result);
     // The pointer still on the "⋯", nothing opens as the menu gives the focus back.

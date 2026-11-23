@@ -78,7 +78,20 @@ const read = (thread: Locator) =>
     while (under && getComputedStyle(under).backgroundColor === "rgba(0, 0, 0, 0)")
       under = under.parentElement;
     const style = getComputedStyle(pill);
+    // The glyph, as wide and as tall as its font lays it out.
+    const glyph = document.createRange();
+    glyph.selectNodeContents(pill);
+    // The hairline every line of the page is drawn in.
+    const line = document.createElement("i");
+    line.style.border = "1px solid var(--line)";
+    root.append(line);
+    const hairline = getComputedStyle(line).borderTopColor;
+    line.remove();
     return {
+      glyph: box(glyph.getBoundingClientRect()),
+      fonts: style.fontFamily,
+      edge: `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}`,
+      hairline,
       pill: box(pill.getBoundingClientRect()),
       bubble: box(bubble.getBoundingClientRect()),
       lines: [...range.getClientRects()].map(box),
@@ -138,17 +151,33 @@ test(
 );
 
 test(
-  "the emoji sits on the bubble's end corner, 16 px in a 24 px pill, ringed in the ground on Chat and in the floating chat",
+  "the emoji is a 16 px glyph of an emoji font, in the middle of a round 28 px chip with the page's hairline, on the bubble's end corner, ringed in the ground on Chat and in the floating chat",
   withGateway(async (gateway) => {
     const { page, thread } = await at(gateway, "arrives");
     await emoji(thread).waitFor();
     const chat = await read(thread);
     assert.equal(chat.size, "16px");
-    assert.equal(chat.pill.bottom - chat.pill.top, 24);
+    assert.match(chat.fonts, /^"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"/);
+    assert.deepEqual(
+      [chat.pill.right - chat.pill.left, chat.pill.bottom - chat.pill.top],
+      [28, 28],
+      "round",
+    );
+    assert.equal(chat.edge, `1px solid ${chat.hairline}`);
+    // In its middle, as its font lays the glyph out, and whole inside the chip's edge.
+    const room = {
+      left: chat.glyph.left - chat.pill.left,
+      right: chat.pill.right - chat.glyph.right,
+      top: chat.glyph.top - chat.pill.top,
+      bottom: chat.pill.bottom - chat.glyph.bottom,
+    };
+    assert.ok(Math.abs(room.left - room.right) <= 0.5, `across: ${JSON.stringify(room)}`);
+    assert.ok(Math.abs(room.top - room.bottom) <= 1, `up and down: ${JSON.stringify(room)}`);
+    assert.ok(Math.min(...Object.values(room)) >= 1, `inside its edge: ${JSON.stringify(room)}`);
     assert.equal(chat.pill.right - chat.bubble.right, 8, "8 px past the bubble's end");
     assert.equal(chat.bubble.bottom - chat.pill.top, 4, "4 px over its foot");
     assert.ok(chat.ground, "the conversation has a ground");
-    assert.deepEqual(drawnOf(chat.ring), [`${chat.ground} 0px 0px 0px 3px`]);
+    assert.deepEqual(drawnOf(chat.ring), [`${chat.ground} 0px 0px 0px 2px`]);
     // The same conversation in the floating chat, whose ground is its own.
     await page.goto(`${gateway.url}/#/a/a-research`);
     await page.getByRole("button", { name: /^Chats/ }).click();
@@ -162,7 +191,7 @@ test(
     await emoji(floating).waitFor();
     const over = await read(floating);
     assert.notEqual(over.ground, chat.ground, "the floating chat's ground isn't the page's");
-    assert.deepEqual(drawnOf(over.ring), [`${over.ground} 0px 0px 0px 3px`]);
+    assert.deepEqual(drawnOf(over.ring), [`${over.ground} 0px 0px 0px 2px`]);
     await page.close();
   }),
 );
@@ -205,12 +234,12 @@ for (const [width, size] of [
         await emoji(thread).waitFor();
         const { pill, lines, region } = await read(thread);
         assert.equal(lines.length > 1, state === "long", "the long thanks wraps");
-        // Its ring is 3 px wide, outside its box.
+        // Its ring is 2 px wide, outside its box.
         const [left, top, right, bottom] = [
-          pill.left - 3,
-          pill.top - 3,
-          pill.right + 3,
-          pill.bottom + 3,
+          pill.left - 2,
+          pill.top - 2,
+          pill.right + 2,
+          pill.bottom + 2,
         ];
         for (const line of lines)
           assert.ok(
