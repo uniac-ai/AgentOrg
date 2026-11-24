@@ -435,12 +435,16 @@ function usePeek(collapsed: boolean, side: number) {
       removeEventListener("pointerdown", press, true);
     };
   }, []);
-  useEffect(() => {
+  const keyed = (target: EventTarget | null) =>
+    keyboard.current && target instanceof Element && !!target.closest(SIDE_PARTS);
+  /** In the side's room, or the little past it that is still on it. */
+  const near = (x: number) => x <= wide.current + PAST;
+  // What has it as the list is put away or brought back is said in that same render: the list is
+  // never drawn put away and not looked at when it is, so it does not start to go.
+  const [was, setWas] = useState(collapsed);
+  if (was !== collapsed) {
+    setWas(collapsed);
     const by = held.current;
-    const keyed = (target: EventTarget | null) =>
-      keyboard.current && target instanceof Element && !!target.closest(SIDE_PARTS);
-    /** In the side's room, or the little past it that is still on it. */
-    const near = (x: number) => x <= wide.current + PAST;
     by.touch = false;
     // Put away from the keyboard, it is still where the keyboard is.
     by.keys = collapsed && keyed(document.activeElement);
@@ -451,7 +455,11 @@ function usePeek(collapsed: boolean, side: number) {
       !keyboard.current &&
       pressed.current !== undefined &&
       near(pressed.current);
-    say.current();
+    setPeek(by.pointer || by.keys || by.touch);
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: what it asks is read as it is asked.
+  useEffect(() => {
+    const by = held.current;
     if (!collapsed) return;
     /** Whether the pointer was last in the side's room; and whether a press begun on a part is down. */
     let inside = by.pointer;

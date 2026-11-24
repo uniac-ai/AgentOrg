@@ -374,8 +374,77 @@ const stays = async (page: Page) => {
   return (await page.locator("[data-shell][data-collapsed][data-peek]").count()) === 1;
 };
 
+/**
+ * Every different set of boxes the parts of the left side have, read on each frame from before
+ * `act` until thirty frames after it: after the list is put away or brought back, if `act` is to
+ * do that, or else after `act` is done. A side that does not move has one. With them, as `away`,
+ * whether the list was ever put away and not looked at, in a frame or between two changes of the
+ * page: it starts to go then, even when no frame has caught it gone anywhere yet.
+ */
+async function sampled(page: Page, act: () => Promise<unknown>, changes = true) {
+  await page.evaluate((changes) => {
+    const parts = {
+      button: document.querySelector("[data-side]:not([role])"),
+      rows: document.querySelector('nav[aria-label="Main"]'),
+      list: document.querySelector("main [data-list]"),
+      notice: document.querySelector('[role="status"][data-side]'),
+    };
+    const shell = document.querySelector("[data-shell]") as HTMLElement;
+    const was = shell.hasAttribute("data-collapsed");
+    const seen = new Set<string>();
+    const watched = window as unknown as {
+      acted: boolean;
+      seen: Promise<{ boxes: string[]; away: boolean }>;
+    };
+    watched.acted = false;
+    let after = 0;
+    let away = false;
+    const gone = () => {
+      away ||= shell.hasAttribute("data-collapsed") && !shell.hasAttribute("data-peek");
+    };
+    const marks = new MutationObserver(gone);
+    marks.observe(shell, { attributeFilter: ["data-collapsed", "data-peek"] });
+    watched.seen = new Promise((done) => {
+      const frame = () => {
+        gone();
+        seen.add(
+          JSON.stringify(
+            Object.fromEntries(
+              Object.entries(parts).map(([name, part]) => [
+                name,
+                part &&
+                  Object.values(part.getBoundingClientRect().toJSON())
+                    .slice(0, 4)
+                    .map((n) => Math.round((n as number) * 100) / 100),
+              ]),
+            ),
+          ),
+        );
+        const begun = changes ? shell.hasAttribute("data-collapsed") !== was : watched.acted;
+        if (begun && ++after > 30) {
+          marks.disconnect();
+          done({ boxes: [...seen], away });
+        } else requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    });
+  }, changes);
+  await act();
+  return page.evaluate(() => {
+    const watched = window as unknown as {
+      acted: boolean;
+      seen: Promise<{ boxes: string[]; away: boolean }>;
+    };
+    watched.acted = true;
+    return watched.seen;
+  });
+}
+/** The same, of a press of the mouse where it rests, with no move after it. */
+const pressedStill = (page: Page) =>
+  sampled(page, () => page.mouse.down().then(() => page.mouse.up()));
+
 test(
-  "put away by a press, the frame's left side is not taken from under the pointer: it stays where it was, over the card, which has the window behind it, for as long as the pointer is anywhere in its room, and goes when the pointer is past it; a pointer back in its room before it has gone brings it back, and once it has gone only the window's edge does; a press on it while the keyboard has it keeps it",
+  "put away by a press, the frame's left side is not taken from under the pointer: it stays where it was, over the card, which has the window behind it, for as long as the pointer is anywhere in its room, and goes when the pointer is past it; a pointer back in its room before it has gone brings it back, and once it has gone only the window's edge does; a press on it while the keyboard has it keeps it; put away or brought back by a press or a key, no part of it moves in any frame",
   withGateway(async (gateway) => {
     const page = await open(gateway, 1440, 900, "#/chat");
     await opened(page);
@@ -386,20 +455,27 @@ test(
       notice: [12, 798, 276, 40],
     };
     assert.deepEqual(await side(page), there);
-    // Nothing of it moves as it is put away under the pointer.
-    await page.getByRole("button", { name: "Hide list" }).click();
+    // Nothing of it moves as it is put away under a pointer that rests on the button: every part
+    // is where it was in every frame from the press on.
+    await page.mouse.move(26, 26, { steps: 3 });
+    // The pointer has rested there long enough for the button to say what it is.
+    await page.locator('[data-slot="tooltip-content"]').waitFor();
+    const still = { boxes: [JSON.stringify(there)], away: false };
+    assert.deepEqual(await pressedStill(page), still);
     await looked(page);
-    assert.equal(
-      await page.evaluate(
-        () =>
-          document
-            .getAnimations()
-            .filter((one) => (one as CSSTransition).transitionProperty === "translate").length,
-      ),
-      0,
-    );
     assert.deepEqual(await side(page), there);
     assert.deepEqual((await frame(page)).card, [6, 6, 1428, 888]);
+    // Nor as the same button, pressed again, brings the list back for good: the card moves aside.
+    assert.deepEqual(await pressedStill(page), still);
+    await page.locator("[data-shell]:not([data-collapsed])").waitFor();
+    assert.deepEqual((await frame(page)).card, [300, 6, 1134, 882]);
+    // Nor at the pointer's first move after a press.
+    await sampled(page, () => page.mouse.down().then(() => page.mouse.up()));
+    await looked(page);
+    assert.deepEqual(
+      await sampled(page, () => page.mouse.move(40, 60, { steps: 2 }), false),
+      still,
+    );
     assert.equal(
       await page.getByRole("button", { name: "Show list" }).getAttribute("aria-expanded"),
       "false",
@@ -451,6 +527,22 @@ test(
     assert.ok(await stays(page), "pressed on, it stays");
     await page.mouse.move(700, 450, { steps: 3 });
     await away(page);
+    await side(page);
+    // Brought back and put away from the keyboard, it does not start to go either: the keyboard
+    // is on its button.
+    await page.getByRole("button", { name: "Show list" }).focus();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await looked(page);
+    await side(page);
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
+      "Show list",
+    );
+    assert.deepEqual(await sampled(page, () => page.keyboard.press("Enter")), still);
+    await page.locator("[data-shell]:not([data-collapsed])").waitFor();
+    assert.deepEqual(await sampled(page, () => page.keyboard.press("Enter")), still);
+    await looked(page);
     await page.close();
   }),
 );
