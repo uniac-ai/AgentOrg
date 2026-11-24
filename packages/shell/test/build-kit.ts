@@ -5,11 +5,15 @@ import { type Browser, chromium, type Page } from "@playwright/test";
 import { SESSION, standIn } from "./stand-in.ts";
 
 let launched: Browser;
-/** A browser for the file that calls this, closed after its tests. */
+/**
+ * A browser for the file that calls this, closed after its tests. Each test ends with no page
+ * open: one that fails before it closes its own would slow the tests after it in the file.
+ */
 export function withBrowser() {
   test.before(async () => {
     launched = await chromium.launch();
   });
+  test.afterEach(() => Promise.all(launched.contexts().map((context) => context.close())));
   test.after(() => launched.close());
 }
 export const browser = () => launched;
