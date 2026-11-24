@@ -92,27 +92,23 @@ test(
 );
 
 test(
-  "a conversation not yet begun has its agent's computer in its head, its name on the line a begun one has",
+  "a conversation not yet begun has its agent's computer in its head, and the heading a begun one has",
   withGateway(async (gateway) => {
     gateway.noChats();
     computerWith(gateway, "terminal");
     const page = await visit(gateway, "a-research");
     await page.getByRole("main").getByRole("button", { name: "Message", exact: true }).click();
-    // Not begun, the name is the head's own heading; begun, it heads a block of its own. Each is
-    // read once it is there, since beginning replaces the one with the other.
-    const lineOf = async (selector: string) => {
-      const head = panel(page).locator(selector, { hasText: "Research" });
-      await head.waitFor();
-      return head.evaluate((h) => getComputedStyle(h).lineHeight);
-    };
-    assert.equal(await lineOf("header > h2"), "20px");
+    // Begun or not, the agent's name is the head's own heading, heard and not seen.
+    const heading = () => panel(page).locator("header > h2", { hasText: "Research" });
+    const hidden = () => heading().evaluate((h) => h.getBoundingClientRect().width <= 1);
+    assert.ok(await hidden());
     const computer = panel(page).getByRole("button", { name: "Research's computer" });
     await computer.click();
     assert.equal(await computer.getAttribute("aria-pressed"), "true");
     await input(page).fill("Why are checkouts failing?");
     await input(page).press("Enter");
     await mine(page, "Why are checkouts failing?").waitFor();
-    assert.equal(await lineOf("header > div > h2"), "20px");
+    assert.ok(await hidden());
     await page.close();
   }),
 );

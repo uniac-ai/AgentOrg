@@ -8,6 +8,7 @@ import {
   ArrowUpIcon,
   ChevronLeftIcon,
   CopyIcon,
+  LoaderCircleIcon,
   MonitorIcon,
   MoreHorizontalIcon,
   PlusIcon,
@@ -53,8 +54,10 @@ import {
   type Progress,
   type ProgressSaid,
   reasonOf,
+  type Tone,
+  WORD,
 } from "./data.ts";
-import { Face, type Faced } from "./face.tsx";
+import { Face, type Faced, MARK } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
@@ -405,72 +408,100 @@ export interface OnPage {
   details?: (() => void) | undefined;
 }
 
+/** How tall the head is, which it covers at the top of the room: taller with the read-only line. */
+const HEAD = { alone: 87, read: 111 } as const;
+
+/** The mark before a state's word in the head's pill: the face's own marks, and grey otherwise. */
+function StateMark({ tone }: { tone: Tone }) {
+  if (tone === "starting")
+    return (
+      <LoaderCircleIcon
+        aria-hidden
+        className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
+      />
+    );
+  return (
+    <span
+      aria-hidden
+      className={`size-1.5 rounded-full ${MARK[tone] ?? "bg-muted-foreground/50"}`}
+    />
+  );
+}
+
 /**
- * The head of your conversation with an agent: its face, which goes to its details, and its name,
- * in the middle; back to the list at its start; its computer, begun or not, at its end. One
- * between two agents is named by both, and says it is there to be read. On the chat page it has no
- * close, and a way back only where the list isn't beside it. It takes no room of its own: it lies
- * over the top of the room, where what is said goes up behind it, and only its buttons take the
- * pointer, so anywhere else on it the room is scrolled and pressed as if it weren't there.
+ * The head of your conversation with an agent: in the middle, its face in a round frame, which goes
+ * to its details, standing on a pill with its state in a word that slides out from under it while
+ * the pointer or the keyboard is on them, the frame and the resting pill centred together in the
+ * head; back to the list at its start; its computer, begun or not, at its end. The agent's name
+ * heads it for those who hear the page, not drawn. One between two agents is named by both, and
+ * says under the pill that it is there to be read. On the chat page it has no close, and a way back
+ * only where the list isn't beside it. It takes no room of its own: it lies over the top of the
+ * room, where what is said goes up behind it, and only its buttons and its pill take the pointer,
+ * so anywhere else on it the room is scrolled and pressed as if it weren't there.
  */
 function Head({
   agent,
   other,
-  begun,
   page,
   children,
 }: {
   agent: Faced;
   other?: { name: string } | undefined;
-  begun: boolean;
   page?: OnPage | undefined;
   children?: React.ReactNode;
 }) {
   const { show, close } = useChats();
   const back = page ? page.back : () => show({ kind: "list" });
   return (
-    <header className="pointer-events-none absolute inset-x-0 top-0 z-20 grid h-14 grid-cols-[1fr_auto_minmax(0,auto)_1fr] items-center gap-x-2.5 px-2.5 [&_button]:pointer-events-auto">
-      {back && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="All chats"
-          className="justify-self-start"
-          onClick={back}
-        >
-          <ChevronLeftIcon />
-        </Button>
-      )}
-      <button
-        type="button"
-        aria-label={`${agent.name}'s details`}
-        className="col-start-2 rounded-full"
-        onClick={() => {
-          // Beside the conversation where the page has room; else on the team page.
-          if (page?.details) return page.details();
-          go({ screen: "team", agent: agent.id });
-          // The chat is put away; the chat page leaves it as it was.
-          if (!page) close();
-        }}
-      >
-        <Face agent={agent} size={36} live />
-      </button>
-      {/* One not begun is headed by the agent alone, as the design draws it, on the same line. */}
-      {begun ? (
-        <div className="min-w-0">
-          <h2 className="truncate text-[15px] leading-5 font-semibold">
-            {other ? `${agent.name} and ${other.name}` : agent.name}
-          </h2>
-          {other && (
-            <div className="truncate text-[13px] leading-[18px] text-muted-foreground">
-              You can read it, not write in it
-            </div>
-          )}
+    <header
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2.5 px-2.5 pt-1.5 [&_button]:pointer-events-auto"
+      style={{ height: other ? HEAD.read : HEAD.alone }}
+    >
+      <h2 className="sr-only">{other ? `${agent.name} and ${other.name}` : agent.name}</h2>
+      {/* The ends' controls on one line through the middle of the frame and its resting pill. */}
+      <div className="flex h-[75px] items-center">
+        {back && (
+          <Button variant="ghost" size="icon-sm" aria-label="All chats" onClick={back}>
+            <ChevronLeftIcon />
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-col items-center">
+        <div className="group/state flex flex-col items-center duration-200 ease-out [transition-property:--lift] [--lift:0] hover:[--lift:1] has-focus-visible:[--lift:1] motion-reduce:transition-none">
+          <button
+            type="button"
+            aria-label={`${agent.name}'s details`}
+            className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line)] bg-[color-mix(in_srgb,var(--thread),white_calc((1_+_var(--lift))_*_4%))] shadow-[0_1px_2px_rgb(0_0_0/0.06)] [[data-theme=light]_&]:bg-[color-mix(in_srgb,var(--thread),black_calc((1_+_var(--lift))_*_3%))]"
+            onClick={() => {
+              // Beside the conversation where the page has room; else on the team page.
+              if (page?.details) return page.details();
+              go({ screen: "team", agent: agent.id });
+              // The chat is put away; the chat page leaves it as it was.
+              if (!page) close();
+            }}
+          >
+            <Face agent={agent} size={48} plain live />
+          </button>
+          {/* Behind the frame's foot, 7 px of it under the frame, which may cover the tops of its
+              words; with the pointer or the keyboard on the frame or the pill, it slides 6 px down,
+              its words clear. Both have the quiet line and a faint shadow; the frame is one small
+              step off the conversation's ground, lighter in the dark and darker in the light, and
+              with the pointer or the keyboard on them (`--lift` 1) the frame and the pill each go
+              one more such step, along with the slide. It is the step that eases, not the fills,
+              so a change of theme still comes in one render. */}
+          <div className="pointer-events-auto -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface),white_calc(var(--lift)_*_4%))] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-transform duration-200 ease-out group-hover/state:translate-y-1.5 group-has-focus-visible/state:translate-y-1.5 motion-reduce:transition-none [[data-theme=light]_&]:bg-[color-mix(in_srgb,var(--surface),black_calc(var(--lift)_*_3%))]">
+            <StateMark tone={agent.tone} />
+            {WORD[agent.tone]}
+          </div>
         </div>
-      ) : (
-        <h2 className="min-w-0 truncate text-[15px] leading-5 font-semibold">{agent.name}</h2>
-      )}
-      <div className="col-start-4 flex items-center gap-1 justify-self-end">
+        {/* Far enough under the pill to stay clear of it slid out. */}
+        {other && (
+          <div className="mt-2 text-xs leading-4 whitespace-nowrap text-muted-foreground">
+            You can read it, not write in it
+          </div>
+        )}
+      </div>
+      <div className="flex h-[75px] items-center gap-1 justify-self-end">
         {children}
         {!page && <CloseChats />}
       </div>
@@ -774,9 +805,11 @@ export function Thread({
     }
   };
 
+  /** How much of the room's top the head covers. */
+  const deep = other ? HEAD.read : HEAD.alone;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <Head agent={agent} other={other} begun={!!chat} page={page}>
+      <Head agent={agent} other={other} page={page}>
         {hasComputer && (
           <Button
             variant="ghost"
@@ -794,12 +827,12 @@ export function Thread({
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
           {/* From the room's top, behind the head and 40 px under it, what is said goes up into a
-              blur and the conversation's ground. Both are whole behind the head's face and name,
+              blur and the conversation's ground. Both are whole behind the head's frame and pill,
               which stay plain to read, and fade downward to nothing under it. Scrolled to its
               start, the room has neither. */}
           <GradualBlur
             position="top"
-            height={96}
+            height={deep + 40}
             curve="ease-out"
             tint="var(--thread)"
             autoHide
@@ -809,7 +842,8 @@ export function Thread({
             {/* The head's own height, which it covers, then room above the first message; with
                 none yet, what went wrong is first under the head. */}
             <MessageScrollerContent
-              className={`mx-auto w-full max-w-[720px] gap-6 px-4 pb-4 ${turns.length > 0 ? "pt-[68px]" : "pt-14"}`}
+              className="mx-auto w-full max-w-[720px] gap-6 px-4 pb-4"
+              style={{ paddingTop: turns.length > 0 ? deep + 12 : deep }}
             >
               {hasEarlier && (
                 <MessageScrollerItem>
