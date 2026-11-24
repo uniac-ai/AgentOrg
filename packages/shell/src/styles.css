@@ -530,6 +530,26 @@
   }
 }
 
+/* The box a message is written in: a thin line at rest, a little thicker and stronger under the
+   pointer, and the same while its words have the keyboard. The line is a shadow inside
+   the edge, so its width moves nothing in the box, and a width between two pixels is drawn as
+   such where a border or an outline would be rounded to whole pixels. */
+@layer components {
+  .chat-box {
+    box-shadow: inset 0 0 0 1px var(--line);
+    transition: box-shadow 120ms;
+  }
+  .chat-box:has(textarea):hover,
+  .chat-box:has(textarea:focus) {
+    box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-box {
+      transition: none;
+    }
+  }
+}
+
 /* A message that comes while its conversation is open, either side's: it rises a few pixels as it
    fades in, quickly. Simply there for a person who asks for less motion. */
 @keyframes message-in {

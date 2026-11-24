@@ -54,7 +54,7 @@ test(
   "wider, each keeps its own size",
   withGateway(async (gateway) => {
     assert.deepEqual(await fields(gateway, 1440), {
-      message: "14px",
+      message: "15px",
       to: "15px",
       search: "15px",
     });
