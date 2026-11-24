@@ -5,18 +5,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
-import { browser, withBrowser, withGateway } from "./build-kit.ts";
+import { withBrowser, withGateway } from "./build-kit.ts";
 import { chatsOf, one, open, PINS, rowNames, said, tileNames, until } from "./chat-list-kit.ts";
 
 withBrowser();
-// A test that fails leaves no page open to slow the ones after it.
-test.afterEach(() =>
-  Promise.all(
-    browser()
-      .contexts()
-      .map((context) => context.close()),
-  ),
-);
 
 /**
  * A conversation's row with its buttons, by its agent's id. It is found by what it is in the page
