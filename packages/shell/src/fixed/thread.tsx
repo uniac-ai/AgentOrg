@@ -8,13 +8,13 @@ import {
   ArrowUpIcon,
   ChevronLeftIcon,
   CopyIcon,
-  ImagePlusIcon,
   LoaderCircleIcon,
   MonitorIcon,
   MoreHorizontalIcon,
+  PlusIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Streamdown } from "streamdown";
 import { api, go, useConnection } from "../data.ts";
 import { Bubble, BubbleContent, BubbleGroup, BubbleReactions } from "../ui/bubble.tsx";
@@ -26,12 +26,6 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu.tsx";
 import GradualBlur from "../ui/gradual-blur.tsx";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupTextarea,
-} from "../ui/input-group.tsx";
 import { Marker, MarkerContent } from "../ui/marker.tsx";
 import { Message, MessageContent } from "../ui/message.tsx";
 import {
@@ -218,24 +212,26 @@ function Composer({
       changeBox(draft, (was) => ({ ...was, pictures: put }));
     }
   };
-  // Signed out of the model account, nothing can be sent: its place says why and holds the way in.
+  // Signed out of the model account, nothing can be sent: its place says why and holds the way in,
+  // whole, in a box with the corners, ground and line of the one it stands for.
   if (needs)
     return (
       // biome-ignore lint/a11y/useSemanticElements: one place with its name, not a set of fields.
       <div
         role="group"
         aria-label="Sign in to send"
-        className="flex min-h-[108px] flex-col justify-center gap-2.5 rounded-3xl bg-[var(--raised)] px-4 py-3.5"
+        className={`${BOX} flex min-h-[108px] flex-col justify-center gap-2.5 px-4 py-3.5`}
       >
         <span className="px-1 text-[15px] leading-5">{needs}</span>
         <SignInButton className="w-full" />
       </div>
     );
   return (
-    <InputGroup className="rounded-3xl border-0 bg-[var(--raised)] shadow-none">
+    // biome-ignore lint/a11y/useSemanticElements: one place to write in, with its buttons, not a set of fields.
+    <div role="group" data-slot="input-group" className={`${BOX} flex flex-col`}>
       {/* What is to be sent with the words, above them. Each can be taken out again, by a mark shown when it is pointed at. */}
       {box.pictures.length > 0 && (
-        <InputGroupAddon align="block-start" className="flex-wrap gap-2 px-3 pt-3">
+        <div className="flex flex-wrap gap-2 px-3 pt-3">
           {box.pictures.map(({ picture }, n) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: the same picture may be put in twice.
             <span key={n} className="group/picture relative size-16 shrink-0">
@@ -265,40 +261,21 @@ function Composer({
               </Button>
             </span>
           ))}
-        </InputGroupAddon>
+        </div>
       )}
-      <InputGroupTextarea
-        ref={words}
-        aria-label="Message"
-        placeholder={`Message ${name}`}
-        // It grows with what is written, to about two fifths of the chat; past that it scrolls, so
-        // the thread, and what went wrong above it, stay in view.
-        className="max-h-[40dvh] min-h-14 overflow-y-auto px-4 pt-3.5 text-[15px]"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onPaste={(event) => {
-          // Words copied with a picture of them, as from a sheet or a document, go in as words.
-          if (/\S/.test(event.clipboardData.getData("text/plain"))) return;
-          if (attach(event.clipboardData.files)) event.preventDefault();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            void submit();
-          }
-        }}
-      />
-      <InputGroupAddon align="block-end" className="gap-1 px-2.5 pb-2.5">
+      {/* One line: the plus, the words and Send. As the words take more lines the box grows up
+          from its foot, and the two buttons stay on the last line. */}
+      <div className="flex items-end gap-1 px-2">
         {/* The way to pick a picture, for one that isn't pasted. */}
-        <InputGroupButton
-          size="icon-sm"
+        <Button
+          size="icon"
           variant="ghost"
-          className="shrink-0 rounded-full"
+          className="mb-2 shrink-0 rounded-full text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)] dark:hover:bg-[var(--hover)]"
           aria-label="Attach a picture"
           onClick={() => picker.current?.click()}
         >
-          <ImagePlusIcon />
-        </InputGroupButton>
+          <PlusIcon className="size-5" />
+        </Button>
         <input
           ref={picker}
           type="file"
@@ -311,20 +288,46 @@ function Composer({
             event.target.value = "";
           }}
         />
-        <InputGroupButton
-          size="icon-sm"
+        <textarea
+          ref={words}
+          aria-label="Message"
+          placeholder={`Message ${name}`}
+          rows={1}
+          // One line of 24 between 12 above and below. It grows with what is written, to about two
+          // fifths of the chat; past that it scrolls, so the thread, and what went wrong above it,
+          // stay in view.
+          className="field-sizing-content max-h-[40dvh] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-3 text-[15px] leading-6 outline-none placeholder:text-[var(--muted)]"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onPaste={(event) => {
+            // Words copied with a picture of them, as from a sheet or a document, go in as words.
+            if (/\S/.test(event.clipboardData.getData("text/plain"))) return;
+            if (attach(event.clipboardData.files)) event.preventDefault();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void submit();
+            }
+          }}
+        />
+        <Button
+          size="icon"
           variant="default"
-          className="ml-auto shrink-0 rounded-full"
+          className="mb-2 shrink-0 rounded-full"
           aria-label="Send"
           disabled={!ready}
           onClick={() => void submit()}
         >
           <ArrowUpIcon />
-        </InputGroupButton>
-      </InputGroupAddon>
-    </InputGroup>
+        </Button>
+      </div>
+    </div>
   );
 }
+
+/** The box a message is written in, and the one that stands for it signed out: raised, round, with its line. */
+const BOX = "chat-box w-full min-w-0 rounded-3xl bg-[var(--raised)]";
 
 /**
  * What went wrong, in the one line a chat says it in, the whole of it where a pointer rests on it;
@@ -406,7 +409,7 @@ export interface OnPage {
 }
 
 /** How tall the head is, which it covers at the top of the room: taller with the read-only line. */
-const HEAD = { alone: 88, read: 108 } as const;
+const HEAD = { alone: 90, read: 110 } as const;
 
 /** The mark before a state's word in the head's pill: the face's own marks, and grey otherwise. */
 function StateMark({ tone }: { tone: Tone }) {
@@ -427,8 +430,8 @@ function StateMark({ tone }: { tone: Tone }) {
 
 /**
  * The head of your conversation with an agent: in the middle, its face in a round frame, which
- * goes to its details, and in front of the frame's foot a pill with its state in a word; back to
- * the list at its start; its computer, begun or not, at its end. The agent's name heads it for
+ * goes to its details, standing on a pill with its state in a word, the frame and the pill centred
+ * together in the head; back to the list at its start; its computer, begun or not, at its end. The agent's name heads it for
  * those who hear the page, not drawn. One between two agents is named by both, and says under the
  * pill that it is there to be read. On the chat page it has no close, and a way back only where the
  * list isn't beside it. It takes no room of its own: it lies over the top of the room, where what
@@ -450,12 +453,12 @@ function Head({
   const back = page ? page.back : () => show({ kind: "list" });
   return (
     <header
-      className="pointer-events-none absolute inset-x-0 top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2.5 px-2.5 pt-1.5 [&_button]:pointer-events-auto"
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2.5 px-2.5 pt-1 [&_button]:pointer-events-auto"
       style={{ height: other ? HEAD.read : HEAD.alone }}
     >
       <h2 className="sr-only">{other ? `${agent.name} and ${other.name}` : agent.name}</h2>
-      {/* The ends' controls on one line through the frame's middle. */}
-      <div className="flex h-15 items-center">
+      {/* The ends' controls on one line through the middle of the frame and its pill together. */}
+      <div className="flex h-[82px] items-center">
         {back && (
           <Button variant="ghost" size="icon-sm" aria-label="All chats" onClick={back}>
             <ChevronLeftIcon />
@@ -466,7 +469,7 @@ function Head({
         <button
           type="button"
           aria-label={`${agent.name}'s details`}
-          className="grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
+          className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
           onClick={() => {
             // Beside the conversation where the page has room; else on the team page.
             if (page?.details) return page.details();
@@ -477,8 +480,9 @@ function Head({
         >
           <Face agent={agent} size={48} plain live />
         </button>
-        {/* In front of the frame, over a third of its own height of the frame's foot. */}
-        <div className="relative -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[var(--card-shadow)]">
+        {/* Behind the frame's foot, 7 px of it under the frame: its words are in the 22 px below,
+            a quieter line and shadow than the frame's. */}
+        <div className="-mt-[7px] flex h-[29px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2.5 pt-[7px] text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)]">
           <StateMark tone={agent.tone} />
           {WORD[agent.tone]}
         </div>
@@ -488,7 +492,7 @@ function Head({
           </div>
         )}
       </div>
-      <div className="flex h-15 items-center gap-1 justify-self-end">
+      <div className="flex h-[82px] items-center gap-1 justify-self-end">
         {children}
         {!page && <CloseChats />}
       </div>
@@ -1002,8 +1006,24 @@ function Room({
   useEffect(() => {
     if (sent) scrollToEnd({ behavior: "auto" });
   }, [sent, scrollToEnd]);
+  // The room is made shorter as the box under it takes more lines. At its end, it keeps its end in
+  // view in the frame it is made shorter in, so the latest message is never under the box.
+  const room = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = room.current;
+    if (!element) return;
+    let height = element.clientHeight;
+    const keep = new ResizeObserver(() => {
+      const was = height;
+      height = element.clientHeight;
+      if (height < was && !away.current) element.scrollTop = element.scrollHeight;
+    });
+    keep.observe(element);
+    return () => keep.disconnect();
+  }, []);
   return (
     <MessageScrollerViewport
+      ref={room}
       className="no-bar"
       onScroll={({ currentTarget: room }) => {
         const up = room.scrollTop < top.current;
