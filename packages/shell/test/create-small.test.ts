@@ -1,18 +1,23 @@
-// Create for an agent, one small window: where it starts from, its name and what it's for, and what
-// that gives, shown and not asked. It sends the template's stack as saved, and what Create's check
-// refuses is said above Create. A template is still built in New template's window. In a real
-// browser over the stand-in gateway, whose check answers as management's does.
+// Create for an agent, one card: the template it starts from, its avatar and name, and what it's
+// for; what the template gives is shown beside the card, and not asked. It sends the template's
+// stack as saved, and what Create's check refuses is said above Create. A template is still built
+// in New template's window. In a real browser over the stand-in gateway, whose check answers as
+// management's does.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
 import {
   agentsRead,
+  badge,
   card,
+  detail,
+  edge,
   type Gateway,
   newTemplate,
   open,
   panel,
   plus,
+  startFrom,
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
@@ -39,10 +44,7 @@ async function create(page: Page, from?: string) {
   await agentsRead(page);
   await plus(page).click();
   await panel(page).getByRole("button", { name: "Create", exact: true }).waitFor();
-  if (from)
-    await panel(page)
-      .getByRole("button", { name: new RegExp(`^${from}`) })
-      .click();
+  if (from) await startFrom(page, from);
 }
 const made = (gateway: Gateway) => gateway.calls.filter((c) => c.method === "create").length;
 
@@ -70,7 +72,7 @@ const refusal = (page: Page) =>
   });
 
 test(
-  "Create sends the name and what it's for, with the template's stack as saved",
+  "Create sends the name, what it's for and the avatar, with the template's stack as saved",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await create(page, "Assistant");
@@ -78,7 +80,9 @@ test(
     await panel(page).getByLabel("What it's for").fill("Keeps dependencies current");
     await panel(page).getByRole("button", { name: "Create", exact: true }).click();
     await page.waitForURL(/#\/team\/a-6$/);
-    assert.deepEqual(gateway.calls.find((c) => c.method === "create")?.input, {
+    const { avatar, ...rest } = gateway.calls.find((c) => c.method === "create")?.input ?? {};
+    assert.match(String(avatar), /^v1[a-z0-9.-]*$/, "the avatar chosen, as its string");
+    assert.deepEqual(rest, {
       stack: {
         base: { provider: "bundled", creatable: "assistant" },
         units: [
@@ -95,11 +99,12 @@ test(
 );
 
 test(
-  "in Create only the name, what it's for and where it starts from can change: what it can do is each unit's logo and name, and no field of a unit is a control",
+  "in Create only the name, what it's for, the avatar and the template can change: what it can do is shown beside the card, each unit by its logo and its name, and no field of a unit is a control",
   withGateway(async (gateway) => {
     const page = await open(gateway);
-    await create(page, "Assistant");
+    await create(page);
     const window_ = panel(page);
+    await edge(page).click();
     const controls = await window_.evaluate((d) =>
       [
         ...d.querySelectorAll(
@@ -110,31 +115,19 @@ test(
         .map((e) => e.getAttribute("aria-label")),
     );
     assert.deepEqual(controls, ["Name", "What it's for"]);
-    const can = window_.getByRole("list", { name: "What it can do" });
-    assert.deepEqual(await can.getByRole("listitem").allInnerTexts(), ["Computer", "Web"]);
+    const can = detail(page);
+    assert.deepEqual(
+      (await can.getByRole("listitem").allInnerTexts()).map((text) => text.split("\n")[0]),
+      ["Computer", "Web"],
+    );
     assert.equal(await can.getByRole("button").count(), 0, "shown, not pressed");
-    assert.equal(await can.locator("svg").count(), 2, "each by its logo");
-    // No options, no rail, no menu.
-    assert.equal(await window_.locator("section").count(), 0);
+    // No options, no rail, no menu of units.
+    assert.equal(await window_.locator('form[aria-label="Build"]').count(), 0);
     assert.equal(await window_.getByRole("navigation", { name: "Sections" }).count(), 0);
     assert.equal(await window_.getByRole("button", { name: "Add a unit" }).count(), 0);
     assert.equal(await window_.getByRole("button", { name: "Build options" }).count(), 0);
-    // What a template is for is read out with its title.
-    assert.match(
-      (await window_.getByRole("button", { name: /^Assistant/ }).getAttribute("aria-current")) ??
-        "",
-      /true/,
-    );
-    await window_
-      .getByRole("button", { name: /^Assistant\b.*Does what you ask on a computer$/ })
-      .waitFor();
-    // A unit nobody offers here is named by its id, and holds Create back.
-    await window_.getByRole("button", { name: /^From elsewhere/ }).click();
-    assert.deepEqual(await can.getByRole("listitem").allInnerTexts(), ["mystery"]);
-    assert.equal(
-      await window_.getByRole("button", { name: "Create", exact: true }).isDisabled(),
-      true,
-    );
+    // The template it starts from is said by its badge.
+    assert.equal(await badge(page).getAttribute("aria-label"), "Template: Assistant");
     await page.close();
   }),
 );
@@ -171,18 +164,15 @@ test(
 );
 
 test(
-  "Team's own Create opens on Empty, with nothing it can do yet",
+  "Team's own Create opens on the Assistant, as its card alone",
   withGateway(async (gateway) => {
     const page = await open(gateway);
     await agentsRead(page);
     await plus(page).click();
     const window_ = panel(page);
     await window_.getByRole("form", { name: "Create" }).waitFor();
-    assert.equal(
-      await window_.getByRole("button", { name: "Empty" }).getAttribute("aria-current"),
-      "true",
-    );
-    assert.equal(await window_.getByRole("list", { name: "What it can do" }).count(), 0);
+    assert.equal(await badge(page).textContent(), "Assistant");
+    assert.equal(await detail(page).count(), 0);
     await page.close();
   }),
 );

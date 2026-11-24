@@ -43,14 +43,18 @@ export const panel = (page: Page) =>
 export const settingsWindow = (page: Page) => page.getByRole("dialog", { name: "Settings" });
 export const card = (page: Page, name: string) =>
   panel(page).getByRole("region", { name, exact: true });
-export async function fromTemplate(page: Page, name: string) {
-  await agentsRead(page);
-  await plus(page).click();
-  await panel(page)
-    .getByRole("button", { name: new RegExp(`^${name}`) })
-    .click();
-  await card(page, "Base").waitFor();
+/** The badge of the template Create starts from, at its card's top left. */
+export const badge = (page: Page) => panel(page).getByRole("button", { name: /^Template:/ });
+/** What Create starts from, chosen in the card the badge opens: Empty, or a template by its title. */
+export async function startFrom(page: Page, title: string) {
+  await badge(page).click();
+  await page.getByRole("menuitemradio", { name: new RegExp(`^${title}`) }).click();
+  await page.getByRole("menu").waitFor({ state: "detached" });
 }
+/** What Create shows the agent can do, once it is opened from the card's right edge. */
+export const detail = (page: Page) => panel(page).getByRole("region", { name: "What it can do" });
+/** Opens what the agent can do beside Create's card, or closes it. */
+export const edge = (page: Page) => panel(page).getByRole("button", { name: "What it can do" });
 /**
  * New template, from Settings: on its own, or from a template. It is the window that builds a stack,
  * its options in sections, which Create for an agent no longer has. Once its stack is drawn.

@@ -4,6 +4,7 @@ import test from "node:test";
 import type { Page } from "@playwright/test";
 import {
   agentsRead,
+  badge,
   card,
   choose,
   type Gateway,
@@ -12,6 +13,7 @@ import {
   panel,
   plus,
   settingsWindow,
+  startFrom,
   withBrowser,
   withGateway,
 } from "./build-kit.ts";
@@ -40,9 +42,7 @@ async function foreman(gateway: Gateway, page: Page) {
   gateway.addTemplate(LOCAL);
   await agentsRead(page);
   await plus(page).click();
-  await panel(page)
-    .getByRole("button", { name: /^Local assistant/ })
-    .click();
+  await startFrom(page, "Local assistant");
   await panel(page).getByLabel("Name").fill("Foreman");
   await panel(page).getByRole("button", { name: "Create", exact: true }).click();
 }
@@ -73,12 +73,7 @@ test(
     await panel(page).evaluate((e) =>
       Promise.all(e.getAnimations().map((moving) => moving.finished)),
     );
-    assert.equal(
-      await panel(page)
-        .getByRole("button", { name: /^Assistant/ })
-        .getAttribute("aria-current"),
-      "true",
-    );
+    assert.equal(await badge(page).textContent(), "Assistant");
     await page.keyboard.press("Escape");
     await panel(page).waitFor({ state: "detached" });
 
@@ -363,9 +358,6 @@ test(
     const page = await open(gateway);
     await agentsRead(page);
     await plus(page).click();
-    await panel(page)
-      .getByRole("button", { name: /^Assistant/ })
-      .click();
     await panel(page).getByLabel("Name").fill("Foreman");
     const create = panel(page).getByRole("button", { name: "Create", exact: true });
     const said = panel(page).getByRole("alert");
