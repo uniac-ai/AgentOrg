@@ -51,3 +51,39 @@ export function settle() {
 export const useCollapsed = () => useSyncExternalStore(watch, () => collapsed);
 /** Whether the list is being put away as the page opens: it is away at once, with no motion. */
 export const useOpenedAway = () => useSyncExternalStore(watch, () => opened);
+
+/**
+ * How wide the frame's side is, in pixels: the page's list beside what is chosen, and the frame's
+ * rows over it. `--side` in styles.css starts at `start`, and a person drags it from there.
+ */
+export const SIDE = {
+  start: 300,
+  /** Three pinned tiles of 88 in a row, 4 between them, in a list padded 8 at each side. */
+  least: 288,
+  /** A conversation's own room: the list is never wider than the narrowest a conversation is kept. */
+  most: 480,
+  /** Of the frame's width at most, so the card beside it stays the larger part. */
+  share: 0.4,
+  /** What an arrow key moves it by. */
+  step: 16,
+} as const;
+/** The width the person chose, and the frame's own width: 0 until it is measured. */
+let chosen: number = SIDE.start;
+let room = 0;
+/** The widest the side is in the frame as it is now. */
+const most = () =>
+  room ? Math.max(SIDE.least, Math.min(SIDE.most, Math.floor(room * SIDE.share))) : SIDE.most;
+/** Chooses the side's width, within its least and its most. */
+export function setSide(next: number) {
+  chosen = Math.round(Math.max(SIDE.least, Math.min(SIDE.most, next)));
+  tell();
+}
+/** The frame's width, measured: a width chosen in a wider frame is held to what this one has. */
+export function setRoom(next: number) {
+  if (next === room) return;
+  room = next;
+  tell();
+}
+/** The side's width now: what was chosen, or the most this frame has room for if that is less. */
+export const useSide = () => useSyncExternalStore(watch, () => Math.min(chosen, most()));
+export const useSideMost = () => useSyncExternalStore(watch, most);

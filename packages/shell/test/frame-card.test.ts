@@ -259,6 +259,7 @@ test(
     await page.evaluate(() => document.documentElement.style.setProperty("--corner", "80px"));
     assert.deepEqual(await boxOf("Hide list"), [90, 10, 32, 32]);
     await button("Hide list").click();
+    await page.mouse.move(800, 450);
     await away(page);
     assert.deepEqual(
       await team.evaluate((list) =>
@@ -285,7 +286,8 @@ test(
     await page.mouse.move(800, 450);
     await away(page);
     const card = (await frame(page)).card;
-    // Near the edge is not at it.
+    // Once it has gone, near the edge is not at it.
+    await side(page);
     await page.mouse.move(40, 300, { steps: 3 });
     await page.waitForTimeout(100);
     assert.equal(await page.locator("[data-shell][data-peek]").count(), 0);
@@ -363,6 +365,152 @@ test(
   }),
 );
 
+/** The left side's going and coming take long enough for a pointer to come back while it goes. */
+const SLOW =
+  '[data-shell] :is(nav[aria-label="Main"], [data-list], [data-side]) { transition-duration: 100s !important; }';
+/** Whether the left side is looked at, once a moment has passed in which it could have gone. */
+const stays = async (page: Page) => {
+  await page.waitForTimeout(100);
+  return (await page.locator("[data-shell][data-collapsed][data-peek]").count()) === 1;
+};
+
+test(
+  "put away by a press, the frame's left side is not taken from under the pointer: it stays where it was, over the card, which has the window behind it, for as long as the pointer is anywhere in its room, and goes when the pointer is past it; a pointer back in its room before it has gone brings it back, and once it has gone only the window's edge does; a press on it while the keyboard has it keeps it",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, 1440, 900, "#/chat");
+    await opened(page);
+    const there = {
+      button: [10, 10, 32, 32],
+      rows: [0, 0, 300, 900],
+      list: [0, 0, 300, 900],
+      notice: [12, 798, 276, 40],
+    };
+    assert.deepEqual(await side(page), there);
+    // Nothing of it moves as it is put away under the pointer.
+    await page.getByRole("button", { name: "Hide list" }).click();
+    await looked(page);
+    assert.equal(
+      await page.evaluate(
+        () =>
+          document
+            .getAnimations()
+            .filter((one) => (one as CSSTransition).transitionProperty === "translate").length,
+      ),
+      0,
+    );
+    assert.deepEqual(await side(page), there);
+    assert.deepEqual((await frame(page)).card, [6, 6, 1428, 888]);
+    assert.equal(
+      await page.getByRole("button", { name: "Show list" }).getAttribute("aria-expanded"),
+      "false",
+    );
+    // Its gaps, its list, the room under the list's last row, its row of places and the little
+    // past its end are all on it.
+    for (const [x, y] of [
+      [150, 26],
+      [150, 300],
+      [150, 760],
+      [150, 880],
+      [296, 450],
+      [310, 450],
+    ] as const) {
+      await page.mouse.move(x, y, { steps: 3 });
+      assert.ok(await stays(page), `at ${x}, ${y}`);
+    }
+    await page.mouse.move(330, 450, { steps: 3 });
+    await away(page);
+    // Gone, the pointer in its room does not bring it: the window's edge does.
+    await side(page);
+    await page.mouse.move(150, 450, { steps: 3 });
+    assert.equal(await stays(page), false);
+    await page.mouse.move(8, 450, { steps: 3 });
+    await looked(page);
+    await side(page);
+    // On its way off the window it is still there to come back to.
+    const slow = await page.addStyleTag({ content: SLOW });
+    await page.mouse.move(330, 450, { steps: 3 });
+    await away(page);
+    assert.ok(
+      await page.evaluate(() => {
+        const rows = document.querySelector('nav[aria-label="Main"]') as Element;
+        return rows.getAnimations().length > 0 && rows.getBoundingClientRect().right > 200;
+      }),
+      "it has not gone far yet",
+    );
+    await page.mouse.move(200, 450, { steps: 3 });
+    await looked(page);
+    await slow.evaluate((style) => (style as Element).remove());
+    assert.deepEqual(await side(page), there);
+    // The keyboard on one of its parts keeps it; a press on it then is the pointer's hold.
+    await page.mouse.move(700, 450, { steps: 3 });
+    await away(page);
+    await side(page);
+    await page.keyboard.press("Tab");
+    await looked(page);
+    await page.mouse.click(150, 26);
+    assert.ok(await stays(page), "pressed on, it stays");
+    await page.mouse.move(700, 450, { steps: 3 });
+    await away(page);
+    await page.close();
+  }),
+);
+
+test(
+  "looked at, the frame's left side stays while a menu opened from one of its rows is open and while a row is dragged, wherever the pointer goes meanwhile, and goes as the menu closes or the row is let go with the pointer past it",
+  withGateway(async (gateway) => {
+    const page = await open(gateway, 1440, 900, "#/chat");
+    await opened(page);
+    await page.getByRole("button", { name: "Hide list" }).click();
+    await looked(page);
+    const row = page
+      .getByRole("main")
+      .getByRole("list", { name: "Chats" })
+      .getByRole("button")
+      .filter({ hasText: "Research" });
+    const at = await row.boundingBox();
+    assert.ok(at);
+    const y = at.y + at.height / 2;
+    // A right-click near the row's end opens its menu past the side's end.
+    await page.mouse.click(250, y, { button: "right" });
+    const pin = page.getByRole("menuitem", { name: "Pin", exact: true });
+    const item = await pin.boundingBox();
+    assert.ok(item);
+    const past = item.x + item.width - 8;
+    assert.ok(past > 312, `the menu's items run past the side: ${past}`);
+    await page.mouse.move(past, item.y + item.height / 2, { steps: 4 });
+    assert.ok(await stays(page), "it stays while its menu is open");
+    // Chosen, the menu closes with the pointer past the side.
+    await page.mouse.down();
+    await page.mouse.up();
+    await away(page);
+    for (let tries = 0; !gateway.notes.has("ui/pinned-conversations"); tries++) {
+      assert.ok(tries < 100, "the pin is kept");
+      await page.waitForTimeout(40);
+    }
+    assert.deepEqual(gateway.notes.get("ui/pinned-conversations"), ["a-research"]);
+    await side(page);
+    // A row picked up and carried past the side keeps it until it is let go.
+    await page.mouse.move(8, 450, { steps: 3 });
+    await looked(page);
+    await side(page);
+    const other = await page
+      .getByRole("main")
+      .getByRole("list", { name: "Chats" })
+      .getByRole("button")
+      .filter({ hasText: "Reviewer" })
+      .boundingBox();
+    assert.ok(other);
+    await page.mouse.move(150, other.y + other.height / 2, { steps: 3 });
+    await page.mouse.down();
+    await page.mouse.move(500, 500, { steps: 6 });
+    await page.locator("[data-dragged]").waitFor();
+    assert.ok(await stays(page), "it stays while a row is dragged");
+    await page.mouse.up();
+    await away(page);
+    await page.close();
+  }),
+);
+
 test(
   "with the list away, a touch brings the frame's left side back by a swipe in from the window's left edge, and sends it away by a touch past it or by choosing a conversation",
   withGateway(async (gateway) => {
@@ -377,7 +525,8 @@ test(
     );
     await page.goto(`${gateway.url}/#/chat`);
     await opened(page);
-    await page.getByRole("button", { name: "Hide list" }).click();
+    // Put away by a touch, it goes at once: no pointer is left on it.
+    await page.touchscreen.tap(26, 26);
     await away(page);
     /** A finger down at the first point, moved through the rest, and lifted. */
     const touch = (points: [number, number][]) =>
@@ -427,12 +576,15 @@ test(
       [60, 402],
     ]);
     await looked(page);
-    await page
+    await side(page);
+    const row = await page
       .getByRole("main")
       .getByRole("list", { name: "Chats" })
       .getByRole("button")
       .filter({ hasText: "Reviewer" })
-      .click();
+      .boundingBox();
+    assert.ok(row);
+    await page.touchscreen.tap(row.x + row.width / 2, row.y + row.height / 2);
     await page.locator('main section[aria-label="Conversation with Reviewer"]').waitFor();
     await away(page);
     await page.close();

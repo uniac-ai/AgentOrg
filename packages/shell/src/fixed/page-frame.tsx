@@ -4,6 +4,7 @@
 import { PlusIcon } from "lucide-react";
 import { cn } from "../cn.ts";
 import { Button } from "../ui/button.tsx";
+import { SideHandle } from "./side-handle.tsx";
 
 /**
  * How a part of the frame's left side goes with the list while it is put away: off the window's
@@ -17,7 +18,8 @@ export const SIDE_PART =
  * The page's list, under the strip and over the row of places. Beside what is chosen it is as wide
  * as the frame's side; alone, as the page. Put away from `beside` what is chosen, it is off the
  * window's left edge, and looked at it lies over the page at the frame's side, on the ground, with
- * a line and a shadow at its end. A sideways scroll over it changes the place: the frame finds it
+ * a line and a shadow at its end. Beside what is chosen, the line between the two is the handle
+ * that makes it wider or narrower. A sideways scroll over it changes the place: the frame finds it
  * by its mark.
  */
 export function ListPanel({
@@ -35,12 +37,13 @@ export function ListPanel({
       aria-label={label}
       data-list
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col wide:pt-[var(--strip)] wide:pb-[var(--foot)] split:w-[var(--side)] split:flex-none",
+        "flex min-h-0 min-w-0 flex-1 flex-col wide:pt-[var(--strip)] wide:pb-[var(--foot)] split:relative split:w-[var(--side)] split:flex-none",
         beside &&
           `away:absolute away:inset-y-0 away:left-0 away:z-30 away:w-[var(--side)] away:flex-none away:border-r away:bg-[var(--ground)] peek:shadow-2xl ${SIDE_PART}`,
       )}
     >
       {children}
+      <SideHandle />
     </section>
   );
 }
