@@ -119,7 +119,11 @@ const head = (thread: Locator) =>
       frameOnTop: frame.contains(met),
       lines: [drawn.borderTopColor, getComputedStyle(pill).borderTopColor],
       tokens: [colour("var(--line)"), colour("var(--line)")],
-      grounds: [drawn.backgroundColor, colour("var(--thread)")],
+      ground: drawn.backgroundColor,
+      thread: colour("var(--thread)"),
+      lighter: colour("color-mix(in srgb, var(--thread), white 4%)"),
+      darker: colour("color-mix(in srgb, var(--thread), black 3%)"),
+      light: document.documentElement.dataset.theme === "light",
       shadows: [drawn.boxShadow, getComputedStyle(pill).boxShadow],
       word: (pill.textContent ?? "").trim(),
       seen,
@@ -164,7 +168,8 @@ for (const [where, width, has] of [
       );
       // The pill at rest: 22 tall, round-ended, edged by one line, centred under the frame and 7 of
       // it under the frame's foot, behind it. Both are edged in the quiet line colour with the same
-      // faint shadow, and the frame is on the conversation's own ground.
+      // faint shadow. The frame is one small step off the conversation's ground: lighter in the
+      // dark, darker in the light.
       assert.equal(now.pill.height, 22);
       assert.ok(now.pillRound, "the pill's ends are round");
       assert.equal(now.pillBorder, "1px");
@@ -174,7 +179,20 @@ for (const [where, width, has] of [
       assert.deepEqual(now.lines, now.tokens);
       assert.equal(now.shadows[0], now.shadows[1]);
       assert.notEqual(now.shadows[0], "none");
-      assert.equal(now.grounds[0], now.grounds[1]);
+      assert.notEqual(now.ground, now.thread);
+      assert.equal(now.ground, now.light ? now.darker : now.lighter);
+      if (where === "chat" && width === 1440) {
+        await page.evaluate(() => {
+          document.documentElement.dataset.theme = "light";
+        });
+        const light = await head(thread);
+        assert.ok(light.light);
+        assert.notEqual(light.ground, light.thread);
+        assert.equal(light.ground, light.darker);
+        await page.evaluate(() => {
+          document.documentElement.dataset.theme = "dark";
+        });
+      }
       // 6 above the frame and the resting pill, and 6 below them.
       assert.equal(now.deep, 87);
       assert.equal(now.deep - now.pill.bottom, 6);
