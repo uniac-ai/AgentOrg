@@ -36,7 +36,20 @@ async function conversation(
       .click();
   }
   await thread.locator('[data-slot="bubble"]').first().waitFor();
+  await rest(page, thread);
   return { page, thread };
+}
+
+/** The pill under a head's frame. */
+const pillOf = (thread: Locator) => thread.locator('header button[aria-label$="details"] + div');
+
+/** The pointer off the head, and its pill come to rest under the frame. */
+async function rest(page: Page, thread: Locator) {
+  await page.mouse.move(0, 0);
+  await page.waitForFunction(
+    (pill) => !!pill && getComputedStyle(pill).translate === "none",
+    await pillOf(thread).elementHandle(),
+  );
 }
 
 /**
@@ -135,11 +148,11 @@ for (const [where, width, has] of [
       researchSays(gateway, "receipt");
       const { page, thread } = await conversation(gateway, where, width);
       const now = await head(thread);
-      // The frame: a 60 circle 4 from the head's top, edged by one line and a shadow, the face 48
+      // The frame: a 60 circle 6 from the head's top, edged by one line and a shadow, the face 48
       // in it, centred on the head.
       assert.deepEqual(
         [now.frame.top, now.frame.width, now.frame.height, now.avatar],
-        [4, 60, 60, 48],
+        [6, 60, 60, 48],
       );
       assert.ok(now.round, "the frame is round");
       assert.deepEqual(now.border, ["1px", "solid"]);
@@ -148,10 +161,10 @@ for (const [where, width, has] of [
         Math.abs(now.frameMiddle - now.middle) <= 0.5,
         `the frame is centred at ${now.frameMiddle}, the head at ${now.middle}`,
       );
-      // The pill: 29 tall, its words in the 22 under the frame, round-ended, edged by one line,
-      // centred under the frame and 7 of it under the frame's foot, behind it. Its line is the
-      // quieter line colour, the frame's the stronger, and its shadow is not the frame's.
-      assert.equal(now.pill.height, 29);
+      // The pill at rest: 22 tall, round-ended, edged by one line, centred under the frame and 7 of
+      // it under the frame's foot, behind it. Its line is the quieter line colour, the frame's the
+      // stronger, and its shadow is not the frame's.
+      assert.equal(now.pill.height, 22);
       assert.ok(now.pillRound, "the pill's ends are round");
       assert.equal(now.pillBorder, "1px");
       assert.ok(Math.abs(now.pillMiddle - now.frameMiddle) <= 0.5, "the pill is centred on it");
@@ -160,9 +173,9 @@ for (const [where, width, has] of [
       assert.deepEqual(now.lines, now.tokens);
       assert.notEqual(now.shadows[1], now.shadows[0]);
       assert.notEqual(now.shadows[1], "none");
-      // 4 above the two and 4 below them.
-      assert.equal(now.deep, 90);
-      assert.equal(now.deep - now.pill.bottom, 4);
+      // 6 above the frame and the resting pill, and 6 below them.
+      assert.equal(now.deep, 87);
+      assert.equal(now.deep - now.pill.bottom, 6);
       // The name is not drawn; it heads the conversation for those who hear it.
       assert.deepEqual(now.seen, ["Working"]);
       assert.equal(now.heading, "Research");
@@ -256,7 +269,7 @@ test(
 );
 
 test(
-  "a conversation between two agents is headed by both, heard and not seen, and says under the pill, small and quiet, that it is there to be read; the head is 110 tall, and its first message starts 12 under it",
+  "a conversation between two agents is headed by both, heard and not seen, and says under the pill, small and quiet, that it is there to be read; the head is 111 tall, and its first message starts 12 under it",
   withGateway(async (gateway) => {
     between(gateway);
     const page = await browser().newPage({ viewport: { width: 1440, height: 900 } });
@@ -274,11 +287,12 @@ test(
       .click();
     const thread = page.getByRole("complementary", { name: "Chats" });
     await thread.locator('[data-slot="bubble"]').first().waitFor();
+    await rest(page, thread);
     const now = await head(thread);
     assert.equal(now.heading, "Release notes and Research");
     assert.ok(now.headingHidden, "the heading takes no room on the screen");
     assert.deepEqual(now.seen, ["Idle", "You can read it, not write in it"]);
-    assert.equal(now.deep, 110);
+    assert.equal(now.deep, 111);
     const line = await thread
       .locator("header")
       .getByText("You can read it, not write in it")
@@ -298,7 +312,8 @@ test(
           quiet: style.color === quiet,
         };
       });
-    assert.equal(line.top, now.pill.bottom + 4);
+    // 8 under the resting pill, clear of it slid out.
+    assert.equal(line.top, now.pill.bottom + 8);
     assert.ok(Math.abs(line.middle - now.frameMiddle) <= 0.5, "centred under the pill");
     assert.deepEqual([line.size, line.quiet], ["12px", true]);
     // The first message, who said it above its bubble.
@@ -356,7 +371,7 @@ test(
         { ...start, layers: start.layers > 0 },
         {
           headOverRoom: [0, 0],
-          headDeep: 90,
+          headDeep: 87,
           first: 12,
           blurFrom: 0,
           blurPastHead: 40,
@@ -423,6 +438,70 @@ test(
     const [head, line] = [await thread.locator("header").boundingBox(), await wrong.boundingBox()];
     assert.ok(head && line);
     assert.equal(Math.round(line.y - (head.y + head.height)), 0);
+    await page.close();
+  }),
+);
+
+test(
+  "with the pointer on the frame or the pill, or the keyboard on the frame, the pill slides 6 px down from under the frame, its words clear of it, and back as they leave; the head's height and the room stay as they are; with reduced motion it moves at once",
+  withGateway(async (gateway) => {
+    researchSays(gateway, "oneLine");
+    const { page, thread } = await conversation(gateway, "chat");
+    const pill = pillOf(thread);
+    const frame = thread.getByRole("button", { name: "Research's details" });
+    /** Where the pill and its words are, the frame's foot, the head's height and the first message. */
+    const read = () =>
+      pill.evaluate((pill) => {
+        const header = pill.closest("header") as Element;
+        const words = document.createRange();
+        words.selectNodeContents(pill.lastChild as Node);
+        const frame = pill.previousElementSibling as Element;
+        const section = header.parentElement as Element;
+        return {
+          top: pill.getBoundingClientRect().top,
+          words: words.getBoundingClientRect().top,
+          foot: frame.getBoundingClientRect().bottom,
+          deep: header.getBoundingClientRect().height,
+          first: (section.querySelector('[data-slot="bubble"]') as Element).getBoundingClientRect()
+            .top,
+        };
+      });
+    /** Waits for the pill to come to where it moves: out by 6, or at rest. */
+    const settles = async (out: boolean) =>
+      page.waitForFunction(([pill, want]) => !!pill && getComputedStyle(pill).translate === want, [
+        await pill.elementHandle(),
+        out ? "0px 6px" : "none",
+      ] as const);
+    const resting = await read();
+    // At rest the frame's foot is over the tops of its words.
+    assert.ok(resting.words < resting.foot, "at rest the frame covers the words' tops");
+    await frame.hover();
+    await settles(true);
+    const out = await read();
+    assert.equal(out.top - resting.top, 6);
+    assert.ok(
+      out.words >= out.foot,
+      `its words start at ${out.words}, the frame ends at ${out.foot}`,
+    );
+    assert.deepEqual([out.deep, out.first], [resting.deep, resting.first]);
+    // On the pill itself, below the frame, it stays out.
+    const box = await pill.boundingBox();
+    assert.ok(box);
+    await page.mouse.move(box.x + 4, box.y + box.height - 3);
+    await settles(true);
+    await rest(page, thread);
+    assert.deepEqual(await read(), resting);
+    // The keyboard on the frame.
+    await page.keyboard.press("Tab");
+    await frame.focus();
+    await settles(true);
+    await frame.blur();
+    await settles(false);
+    // Reduced motion: no slide, the pill out in the same render as the pointer comes.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await pill.evaluate((pill) => getComputedStyle(pill).transitionProperty), "none");
+    await frame.hover();
+    assert.equal(await pill.evaluate((pill) => getComputedStyle(pill).translate), "0px 6px");
     await page.close();
   }),
 );

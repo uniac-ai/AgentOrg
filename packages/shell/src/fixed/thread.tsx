@@ -409,7 +409,7 @@ export interface OnPage {
 }
 
 /** How tall the head is, which it covers at the top of the room: taller with the read-only line. */
-const HEAD = { alone: 90, read: 110 } as const;
+const HEAD = { alone: 87, read: 111 } as const;
 
 /** The mark before a state's word in the head's pill: the face's own marks, and grey otherwise. */
 function StateMark({ tone }: { tone: Tone }) {
@@ -429,14 +429,15 @@ function StateMark({ tone }: { tone: Tone }) {
 }
 
 /**
- * The head of your conversation with an agent: in the middle, its face in a round frame, which
- * goes to its details, standing on a pill with its state in a word, the frame and the pill centred
- * together in the head; back to the list at its start; its computer, begun or not, at its end. The agent's name heads it for
- * those who hear the page, not drawn. One between two agents is named by both, and says under the
- * pill that it is there to be read. On the chat page it has no close, and a way back only where the
- * list isn't beside it. It takes no room of its own: it lies over the top of the room, where what
- * is said goes up behind it, and only its buttons take the pointer, so anywhere else on it the room
- * is scrolled and pressed as if it weren't there.
+ * The head of your conversation with an agent: in the middle, its face in a round frame, which goes
+ * to its details, standing on a pill with its state in a word that slides out from under it while
+ * the pointer or the keyboard is on them, the frame and the resting pill centred together in the
+ * head; back to the list at its start; its computer, begun or not, at its end. The agent's name
+ * heads it for those who hear the page, not drawn. One between two agents is named by both, and
+ * says under the pill that it is there to be read. On the chat page it has no close, and a way back
+ * only where the list isn't beside it. It takes no room of its own: it lies over the top of the
+ * room, where what is said goes up behind it, and only its buttons and its pill take the pointer,
+ * so anywhere else on it the room is scrolled and pressed as if it weren't there.
  */
 function Head({
   agent,
@@ -453,12 +454,12 @@ function Head({
   const back = page ? page.back : () => show({ kind: "list" });
   return (
     <header
-      className="pointer-events-none absolute inset-x-0 top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2.5 px-2.5 pt-1 [&_button]:pointer-events-auto"
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2.5 px-2.5 pt-1.5 [&_button]:pointer-events-auto"
       style={{ height: other ? HEAD.read : HEAD.alone }}
     >
       <h2 className="sr-only">{other ? `${agent.name} and ${other.name}` : agent.name}</h2>
-      {/* The ends' controls on one line through the middle of the frame and its pill together. */}
-      <div className="flex h-[82px] items-center">
+      {/* The ends' controls on one line through the middle of the frame and its resting pill. */}
+      <div className="flex h-[75px] items-center">
         {back && (
           <Button variant="ghost" size="icon-sm" aria-label="All chats" onClick={back}>
             <ChevronLeftIcon />
@@ -466,33 +467,37 @@ function Head({
         )}
       </div>
       <div className="flex flex-col items-center">
-        <button
-          type="button"
-          aria-label={`${agent.name}'s details`}
-          className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
-          onClick={() => {
-            // Beside the conversation where the page has room; else on the team page.
-            if (page?.details) return page.details();
-            go({ screen: "team", agent: agent.id });
-            // The chat is put away; the chat page leaves it as it was.
-            if (!page) close();
-          }}
-        >
-          <Face agent={agent} size={48} plain live />
-        </button>
-        {/* Behind the frame's foot, 7 px of it under the frame: its words are in the 22 px below,
-            a quieter line and shadow than the frame's. */}
-        <div className="-mt-[7px] flex h-[29px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2.5 pt-[7px] text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)]">
-          <StateMark tone={agent.tone} />
-          {WORD[agent.tone]}
+        <div className="group/state flex flex-col items-center">
+          <button
+            type="button"
+            aria-label={`${agent.name}'s details`}
+            className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
+            onClick={() => {
+              // Beside the conversation where the page has room; else on the team page.
+              if (page?.details) return page.details();
+              go({ screen: "team", agent: agent.id });
+              // The chat is put away; the chat page leaves it as it was.
+              if (!page) close();
+            }}
+          >
+            <Face agent={agent} size={48} plain live />
+          </button>
+          {/* Behind the frame's foot, 7 px of it under the frame, which may cover the tops of its
+              words; with the pointer or the keyboard on the frame or the pill, it slides 6 px down,
+              its words clear. A quieter line and shadow than the frame's. */}
+          <div className="pointer-events-auto -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-transform duration-200 ease-out group-hover/state:translate-y-1.5 group-has-focus-visible/state:translate-y-1.5 motion-reduce:transition-none">
+            <StateMark tone={agent.tone} />
+            {WORD[agent.tone]}
+          </div>
         </div>
+        {/* Far enough under the pill to stay clear of it slid out. */}
         {other && (
-          <div className="mt-1 text-xs leading-4 whitespace-nowrap text-muted-foreground">
+          <div className="mt-2 text-xs leading-4 whitespace-nowrap text-muted-foreground">
             You can read it, not write in it
           </div>
         )}
       </div>
-      <div className="flex h-[82px] items-center gap-1 justify-self-end">
+      <div className="flex h-[75px] items-center gap-1 justify-self-end">
         {children}
         {!page && <CloseChats />}
       </div>
