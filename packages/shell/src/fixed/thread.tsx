@@ -9,6 +9,7 @@ import {
   ChevronLeftIcon,
   CopyIcon,
   ImagePlusIcon,
+  LoaderCircleIcon,
   MonitorIcon,
   MoreHorizontalIcon,
   XIcon,
@@ -59,8 +60,10 @@ import {
   type Progress,
   type ProgressSaid,
   reasonOf,
+  type Tone,
+  WORD,
 } from "./data.ts";
-import { Face, type Faced } from "./face.tsx";
+import { Face, type Faced, MARK } from "./face.tsx";
 import { needsOf, SignInButton, useLogin } from "./login.tsx";
 import { fixOf } from "./notice.ts";
 import { fit, type Put, type Sent, sourceOf, together } from "./pictures.ts";
@@ -402,72 +405,90 @@ export interface OnPage {
   details?: (() => void) | undefined;
 }
 
+/** How tall the head is, which it covers at the top of the room: taller with the read-only line. */
+const HEAD = { alone: 88, read: 108 } as const;
+
+/** The mark before a state's word in the head's pill: the face's own marks, and grey otherwise. */
+function StateMark({ tone }: { tone: Tone }) {
+  if (tone === "starting")
+    return (
+      <LoaderCircleIcon
+        aria-hidden
+        className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
+      />
+    );
+  return (
+    <span
+      aria-hidden
+      className={`size-1.5 rounded-full ${MARK[tone] ?? "bg-muted-foreground/50"}`}
+    />
+  );
+}
+
 /**
- * The head of your conversation with an agent: its face, which goes to its details, and its name,
- * in the middle; back to the list at its start; its computer, begun or not, at its end. One
- * between two agents is named by both, and says it is there to be read. On the chat page it has no
- * close, and a way back only where the list isn't beside it. It takes no room of its own: it lies
- * over the top of the room, where what is said goes up behind it, and only its buttons take the
- * pointer, so anywhere else on it the room is scrolled and pressed as if it weren't there.
+ * The head of your conversation with an agent: in the middle, its face in a round frame, which
+ * goes to its details, and in front of the frame's foot a pill with its state in a word; back to
+ * the list at its start; its computer, begun or not, at its end. The agent's name heads it for
+ * those who hear the page, not drawn. One between two agents is named by both, and says under the
+ * pill that it is there to be read. On the chat page it has no close, and a way back only where the
+ * list isn't beside it. It takes no room of its own: it lies over the top of the room, where what
+ * is said goes up behind it, and only its buttons take the pointer, so anywhere else on it the room
+ * is scrolled and pressed as if it weren't there.
  */
 function Head({
   agent,
   other,
-  begun,
   page,
   children,
 }: {
   agent: Faced;
   other?: { name: string } | undefined;
-  begun: boolean;
   page?: OnPage | undefined;
   children?: React.ReactNode;
 }) {
   const { show, close } = useChats();
   const back = page ? page.back : () => show({ kind: "list" });
   return (
-    <header className="pointer-events-none absolute inset-x-0 top-0 z-20 grid h-14 grid-cols-[1fr_auto_minmax(0,auto)_1fr] items-center gap-x-2.5 px-2.5 [&_button]:pointer-events-auto">
-      {back && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="All chats"
-          className="justify-self-start"
-          onClick={back}
+    <header
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-x-2.5 px-2.5 pt-1.5 [&_button]:pointer-events-auto"
+      style={{ height: other ? HEAD.read : HEAD.alone }}
+    >
+      <h2 className="sr-only">{other ? `${agent.name} and ${other.name}` : agent.name}</h2>
+      {/* The ends' controls on one line through the frame's middle. */}
+      <div className="flex h-15 items-center">
+        {back && (
+          <Button variant="ghost" size="icon-sm" aria-label="All chats" onClick={back}>
+            <ChevronLeftIcon />
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-col items-center">
+        <button
+          type="button"
+          aria-label={`${agent.name}'s details`}
+          className="grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
+          onClick={() => {
+            // Beside the conversation where the page has room; else on the team page.
+            if (page?.details) return page.details();
+            go({ screen: "team", agent: agent.id });
+            // The chat is put away; the chat page leaves it as it was.
+            if (!page) close();
+          }}
         >
-          <ChevronLeftIcon />
-        </Button>
-      )}
-      <button
-        type="button"
-        aria-label={`${agent.name}'s details`}
-        className="col-start-2 rounded-full"
-        onClick={() => {
-          // Beside the conversation where the page has room; else on the team page.
-          if (page?.details) return page.details();
-          go({ screen: "team", agent: agent.id });
-          // The chat is put away; the chat page leaves it as it was.
-          if (!page) close();
-        }}
-      >
-        <Face agent={agent} size={36} live />
-      </button>
-      {/* One not begun is headed by the agent alone, as the design draws it, on the same line. */}
-      {begun ? (
-        <div className="min-w-0">
-          <h2 className="truncate text-[15px] leading-5 font-semibold">
-            {other ? `${agent.name} and ${other.name}` : agent.name}
-          </h2>
-          {other && (
-            <div className="truncate text-[13px] leading-[18px] text-muted-foreground">
-              You can read it, not write in it
-            </div>
-          )}
+          <Face agent={agent} size={48} plain live />
+        </button>
+        {/* In front of the frame, over a third of its own height of the frame's foot. */}
+        <div className="relative -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[var(--card-shadow)]">
+          <StateMark tone={agent.tone} />
+          {WORD[agent.tone]}
         </div>
-      ) : (
-        <h2 className="min-w-0 truncate text-[15px] leading-5 font-semibold">{agent.name}</h2>
-      )}
-      <div className="col-start-4 flex items-center gap-1 justify-self-end">
+        {other && (
+          <div className="mt-1 text-xs leading-4 whitespace-nowrap text-muted-foreground">
+            You can read it, not write in it
+          </div>
+        )}
+      </div>
+      <div className="flex h-15 items-center gap-1 justify-self-end">
         {children}
         {!page && <CloseChats />}
       </div>
@@ -771,9 +792,11 @@ export function Thread({
     }
   };
 
+  /** How much of the room's top the head covers. */
+  const deep = other ? HEAD.read : HEAD.alone;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <Head agent={agent} other={other} begun={!!chat} page={page}>
+      <Head agent={agent} other={other} page={page}>
         {hasComputer && (
           <Button
             variant="ghost"
@@ -791,12 +814,12 @@ export function Thread({
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
           {/* From the room's top, behind the head and 40 px under it, what is said goes up into a
-              blur and the conversation's ground. Both are whole behind the head's face and name,
+              blur and the conversation's ground. Both are whole behind the head's frame and pill,
               which stay plain to read, and fade downward to nothing under it. Scrolled to its
               start, the room has neither. */}
           <GradualBlur
             position="top"
-            height={96}
+            height={deep + 40}
             curve="ease-out"
             tint="var(--thread)"
             autoHide
@@ -806,7 +829,8 @@ export function Thread({
             {/* The head's own height, which it covers, then room above the first message; with
                 none yet, what went wrong is first under the head. */}
             <MessageScrollerContent
-              className={`mx-auto w-full max-w-[720px] gap-6 px-4 pb-4 ${turns.length > 0 ? "pt-[68px]" : "pt-14"}`}
+              className="mx-auto w-full max-w-[720px] gap-6 px-4 pb-4"
+              style={{ paddingTop: turns.length > 0 ? deep + 12 : deep }}
             >
               {hasEarlier && (
                 <MessageScrollerItem>

@@ -1,11 +1,13 @@
-// A conversation's head, in a real browser over the stand-in gateway: its agent's face and name in
-// the middle, its other controls at its ends, the head lying over the top of the room, and the blur
-// what is said goes up into behind it.
+// A conversation's head, in a real browser over the stand-in gateway: its agent's face in a round
+// frame in the middle with its state in a pill in front of the frame, its name heard and not seen,
+// its other controls at its ends, the head lying over the top of the room, and the blur what is
+// said goes up into behind it.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Locator, Page } from "@playwright/test";
 import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
-import { computerWith, researchSays } from "./design/samples.ts";
+import { between, computerWith, researchSays } from "./design/samples.ts";
+import type { Agent } from "./stand-in.ts";
 
 withBrowser();
 
@@ -38,32 +40,77 @@ async function conversation(
 }
 
 /**
- * The head, read at one moment: its own middle; the middle of its face and name together; and each
- * of its buttons by name, as how far it starts from the head's start and ends from the head's end.
+ * The head, read at one moment: its middle and height; its frame (the face's button) and the pill
+ * in front of it, each as a box relative to the head, with how the frame is drawn; the pill's word
+ * and which of the two is on top where they meet; the text a person sees in it and its heading's
+ * words; and each of its other buttons by name, as its box relative to the head.
  */
 const head = (thread: Locator) =>
   thread.locator("header").evaluate((header) => {
     const box = header.getBoundingClientRect();
-    const face = header.querySelector('button[aria-label$="details"]') as Element;
-    const name = header.querySelector("h2") as Element;
-    // The name as wide as its words, not as the room it is given.
-    const words = document.createRange();
-    words.selectNodeContents(name);
+    const relative = (r: DOMRect) => ({
+      left: r.left - box.left,
+      top: r.top - box.top,
+      width: r.width,
+      height: r.height,
+      right: r.right - box.left,
+      bottom: r.bottom - box.top,
+    });
+    const frame = header.querySelector('button[aria-label$="details"]') as HTMLElement;
+    const framed = frame.getBoundingClientRect();
+    const drawn = getComputedStyle(frame);
+    const avatar = frame.querySelector("[data-face] svg") as Element;
+    const pill = frame.nextElementSibling as HTMLElement;
+    const pilled = pill.getBoundingClientRect();
+    // Where the two meet, just inside the pill's top: the pill takes no pointer, so for this one
+    // look it is let take it, to be found there.
+    pill.style.pointerEvents = "auto";
+    const met = document.elementFromPoint(
+      (pilled.left + pilled.right) / 2,
+      pilled.top + 2,
+    ) as Element;
+    pill.style.pointerEvents = "";
+    // The words a person sees: text in an element wider than the one clipped pixel a heard-only
+    // element is.
+    const seen: string[] = [];
+    const walker = document.createTreeWalker(header, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const words = (node.textContent ?? "").trim();
+      const shown = (node.parentElement as Element).getBoundingClientRect().width > 1;
+      if (words && shown) seen.push(words);
+    }
+    const heading = header.querySelector("h2") as Element;
     return {
       middle: (box.left + box.right) / 2,
-      who: (face.getBoundingClientRect().left + words.getBoundingClientRect().right) / 2,
-      named: (name.textContent ?? "").trim(),
+      deep: Math.round(box.height),
+      wide: box.width,
+      frame: relative(framed),
+      frameMiddle: (framed.left + framed.right) / 2,
+      round: Number.parseFloat(drawn.borderTopLeftRadius) >= framed.width / 2,
+      border: [drawn.borderTopWidth, drawn.borderTopStyle],
+      shadow: drawn.boxShadow !== "none",
+      avatar: Math.round(avatar.getBoundingClientRect().width),
+      pill: relative(pilled),
+      pillMiddle: (pilled.left + pilled.right) / 2,
+      pillRound: Number.parseFloat(getComputedStyle(pill).borderTopLeftRadius) >= pilled.height / 2,
+      pillBorder: getComputedStyle(pill).borderTopWidth,
+      pillOnTop: pill.contains(met),
+      word: (pill.textContent ?? "").trim(),
+      seen,
+      heading: (heading.textContent ?? "").trim(),
+      headingHidden: heading.getBoundingClientRect().width <= 1,
       buttons: Object.fromEntries(
-        [...header.querySelectorAll("button")].map((button) => {
-          const b = button.getBoundingClientRect();
-          return [
-            button.getAttribute("aria-label"),
-            [Math.round(b.left - box.left), Math.round(box.right - b.right)],
-          ];
-        }),
+        [...header.querySelectorAll("button")].map((button) => [
+          button.getAttribute("aria-label"),
+          relative(button.getBoundingClientRect()),
+        ]),
       ),
     };
   });
+
+type Box = { left: number; top: number; right: number; bottom: number };
+const apart = (a: Box, b: Box) =>
+  a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
 
 for (const [where, width, has] of [
   ["chat", 1440, ["Research's details", "Research's computer"]],
@@ -71,20 +118,48 @@ for (const [where, width, has] of [
   ["floating", 1440, ["All chats", "Research's details", "Research's computer", "Close chats"]],
 ] as const)
   test(
-    `the agent's face and name are in the middle of the head, with ${has.length - 1} other control${has.length > 2 ? "s" : ""} at its ends: ${where}, ${width} wide`,
+    `the head is the agent's face in a round frame in its middle, its state in a pill in front of the frame's foot, its name heard and not seen, with ${has.length - 1} other control${has.length > 2 ? "s" : ""} on a line through the frame's middle at its ends, apart from both: ${where}, ${width} wide`,
     withGateway(async (gateway) => {
-      researchSays(gateway, "oneLine");
+      researchSays(gateway, "receipt");
       const { page, thread } = await conversation(gateway, where, width);
       const now = await head(thread);
-      assert.equal(now.named, "Research");
-      assert.ok(
-        Math.abs(now.who - now.middle) <= 1,
-        `its face and name are centred at ${now.who}, the head at ${now.middle}`,
+      // The frame: a 60 circle 6 from the head's top, edged by one line and a shadow, the face 48
+      // in it, centred on the head.
+      assert.deepEqual(
+        [now.frame.top, now.frame.width, now.frame.height, now.avatar],
+        [6, 60, 60, 48],
       );
+      assert.ok(now.round, "the frame is round");
+      assert.deepEqual(now.border, ["1px", "solid"]);
+      assert.ok(now.shadow, "the frame has a shadow");
+      assert.ok(
+        Math.abs(now.frameMiddle - now.middle) <= 0.5,
+        `the frame is centred at ${now.frameMiddle}, the head at ${now.middle}`,
+      );
+      // The pill: 22 tall, round-ended, edged by one line, centred under the frame and over 7 of
+      // its foot, a third of its own height, drawn in front of it.
+      assert.equal(now.pill.height, 22);
+      assert.ok(now.pillRound, "the pill's ends are round");
+      assert.equal(now.pillBorder, "1px");
+      assert.ok(Math.abs(now.pillMiddle - now.frameMiddle) <= 0.5, "the pill is centred on it");
+      assert.equal(now.frame.bottom - now.pill.top, 7);
+      assert.ok(now.pillOnTop, "the pill is in front of the frame");
+      assert.equal(now.deep, 88);
+      // The name is not drawn; it heads the conversation for those who hear it.
+      assert.deepEqual(now.seen, ["Working"]);
+      assert.equal(now.heading, "Research");
+      assert.ok(now.headingHidden, "the heading takes no room on the screen");
       assert.deepEqual(Object.keys(now.buttons), has);
-      // The way back starts the head; the last control ends it.
-      if (now.buttons["All chats"]) assert.equal(now.buttons["All chats"][0], 10);
-      assert.equal(now.buttons[has.at(-1) as string]?.[1], 10);
+      // The way back starts the head; the last control ends it; each is on the frame's middle
+      // line, apart from the frame and the pill.
+      if (now.buttons["All chats"]) assert.equal(now.buttons["All chats"].left, 10);
+      const last = now.buttons[has.at(-1) as string] as Box;
+      assert.equal(Math.round(now.wide - last.right), 10);
+      for (const name of has.filter((one) => !one.endsWith("details"))) {
+        const button = now.buttons[name] as Box & { top: number; height: number };
+        assert.equal(button.top + button.height / 2, now.frame.top + now.frame.height / 2, name);
+        assert.ok(apart(button, now.frame) && apart(button, now.pill), `${name} is apart`);
+      }
       // Each still does what it did. On a phone the computer opens over the conversation, so
       // there the way back is the one pressed.
       if (width >= 1440) {
@@ -103,6 +178,119 @@ for (const [where, width, has] of [
       await page.close();
     }),
   );
+
+test(
+  "the pill says each state in the word the shell has for it, after the mark the face has for it elsewhere, green and pulsing while working, red with a problem, a spinner while starting, grey otherwise; the face in the head has no mark of its own",
+  withGateway(async (gateway) => {
+    (gateway.agents.get("a-triage") as Agent).status = { state: "starting" };
+    const page = await browser().newPage({ viewport: { width: 1440, height: 900 } });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    for (const [agent, name, word, mark] of [
+      ["a-research", "Research", "Working", "--ok"],
+      ["a-reviewer", "Reviewer", "Idle", "grey"],
+      ["a-triage", "Triage", "Starting", "spinner"],
+      ["a-weekly", "Weekly report", "Stopped", "grey"],
+      ["a-broken", "Broken", "Has a problem", "--bad"],
+    ] as const) {
+      await page.goto(`${gateway.url}/#/chat/${agent}`);
+      const header = page
+        .getByRole("main")
+        .getByRole("region", { name: `Conversation with ${name}` })
+        .locator("header");
+      await header.getByText(word, { exact: true }).waitFor();
+      const read = await header.evaluate((header) => {
+        const frame = header.querySelector('button[aria-label$="details"]') as Element;
+        const pill = frame.nextElementSibling as Element;
+        const first = pill.firstElementChild as Element;
+        const colour = (value: string) => {
+          const probe = document.createElement("i");
+          probe.style.color = value;
+          header.append(probe);
+          const its = getComputedStyle(probe).color;
+          probe.remove();
+          return its;
+        };
+        return {
+          word: (pill.textContent ?? "").trim(),
+          spins: first.tagName.toLowerCase() === "svg" && first.classList.contains("animate-spin"),
+          ground: getComputedStyle(first).backgroundColor,
+          pulses: first.classList.contains("pulse"),
+          ok: colour("var(--ok)"),
+          bad: colour("var(--bad)"),
+          marks: frame.querySelectorAll('[role="img"]').length,
+        };
+      });
+      assert.equal(read.word, word);
+      assert.equal(read.marks, 0, `${name}: the face has no mark`);
+      assert.equal(read.spins, mark === "spinner", `${name}: spins`);
+      assert.equal(read.pulses, mark === "--ok", `${name}: pulses`);
+      if (mark === "--ok") assert.equal(read.ground, read.ok, name);
+      if (mark === "--bad") assert.equal(read.ground, read.bad, name);
+      if (mark === "grey")
+        assert.ok(![read.ok, read.bad, "rgba(0, 0, 0, 0)"].includes(read.ground), name);
+    }
+    await page.close();
+  }),
+);
+
+test(
+  "a conversation between two agents is headed by both, heard and not seen, and says under the pill, small and quiet, that it is there to be read; the head is 108 tall, and its first message starts 12 under it",
+  withGateway(async (gateway) => {
+    between(gateway);
+    const page = await browser().newPage({ viewport: { width: 1440, height: 900 } });
+    page.setDefaultTimeout(8000);
+    await page.addInitScript(
+      (session) => localStorage.setItem("agentorg.session", session),
+      SESSION,
+    );
+    await page.goto(`${gateway.url}/#/a/a-release/chats`);
+    await page
+      .getByRole("main")
+      .getByRole("list", { name: "Release notes's chats with other agents" })
+      .getByRole("button")
+      .first()
+      .click();
+    const thread = page.getByRole("complementary", { name: "Chats" });
+    await thread.locator('[data-slot="bubble"]').first().waitFor();
+    const now = await head(thread);
+    assert.equal(now.heading, "Release notes and Research");
+    assert.ok(now.headingHidden, "the heading takes no room on the screen");
+    assert.deepEqual(now.seen, ["Idle", "You can read it, not write in it"]);
+    assert.equal(now.deep, 108);
+    const line = await thread
+      .locator("header")
+      .getByText("You can read it, not write in it")
+      .evaluate((line) => {
+        const header = (line.closest("header") as Element).getBoundingClientRect();
+        const box = line.getBoundingClientRect();
+        const style = getComputedStyle(line);
+        const muted = document.createElement("i");
+        muted.className = "text-muted-foreground";
+        line.append(muted);
+        const quiet = getComputedStyle(muted).color;
+        muted.remove();
+        return {
+          top: box.top - header.top,
+          middle: (box.left + box.right) / 2,
+          size: style.fontSize,
+          quiet: style.color === quiet,
+        };
+      });
+    assert.equal(line.top, now.pill.bottom + 4);
+    assert.ok(Math.abs(line.middle - now.frameMiddle) <= 0.5, "centred under the pill");
+    assert.deepEqual([line.size, line.quiet], ["12px", true]);
+    // The first message, who said it above its bubble.
+    const first = await thread.locator('[data-slot="message-scroller-item"]').first().boundingBox();
+    const box = await thread.locator("header").boundingBox();
+    assert.ok(first && box);
+    assert.equal(Math.round(first.y - (box.y + box.height)), 12);
+    await page.close();
+  }),
+);
 
 test(
   "the head takes no room: it lies over the top of the room, whose first message starts 12 px under it; behind it and 40 px under it a blur in the conversation's ground lies over what is said, none where the room is at its start, all of it once what is said has gone up; and the wheel over the head moves the room",
@@ -150,7 +338,7 @@ test(
         { ...start, layers: start.layers > 0 },
         {
           headOverRoom: [0, 0],
-          headDeep: 56,
+          headDeep: 88,
           first: 12,
           blurFrom: 0,
           blurPastHead: 40,
