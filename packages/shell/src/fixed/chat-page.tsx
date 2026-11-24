@@ -18,7 +18,7 @@ import { Computer, hasComputer, surfacesOf } from "./computer.tsx";
 import { useComputers } from "./computers.tsx";
 import { ListHead, ListPanel, PAGE_CARD } from "./page-frame.tsx";
 import { Nothing, UNREAD } from "./parts.tsx";
-import { useCollapsed, useSplit } from "./split.ts";
+import { setKept, useCollapsed, useSide, useSplit } from "./split.ts";
 import { Thread } from "./thread.tsx";
 import { facedOf, useAgents } from "./watch.tsx";
 
@@ -35,7 +35,8 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   // What the page has beyond what it keeps beside its sidebar: its list, unless that is put away,
   // and a conversation.
   const collapsed = useCollapsed();
-  const beyond = width - (collapsed ? 0 : LIST) - CONVERSATION;
+  const side = useSide();
+  const beyond = width - (collapsed ? 0 : side) - CONVERSATION;
   // Its agent's details are shown there too, in the computer's place, which a computer opened after
   // them takes. The face opens and closes them where the page has room for their column.
   const [detailed, setDetailed] = useState(false);
@@ -47,6 +48,13 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
           if (shown) close();
         }
       : undefined;
+  // While either is open beside the conversation, the list is held to what leaves the
+  // conversation its own room beside it.
+  const besideIt = !split ? 0 : detailed && details ? DETAILS : shown ? COMPUTER[0] : 0;
+  useLayoutEffect(() => {
+    setKept(besideIt && CONVERSATION + besideIt);
+    return () => setKept(0);
+  }, [besideIt]);
   // The first start: while no conversation has begun at all, once that is known, the first agent's
   // conversation is open, empty. Its row comes with its first message. One taken off the list has
   // begun.
@@ -130,8 +138,6 @@ export function ChatPage({ agent }: { agent?: string | undefined }) {
   );
 }
 
-/** The list beside what is chosen: `--side` in styles.css. */
-const LIST = 300;
 /** A conversation's own room beside what is open with it, with the 6 beside the card and its line. */
 const CONVERSATION = 480;
 /** The computer's sidebar: what the page has beyond what it keeps, within 480 to 720. */

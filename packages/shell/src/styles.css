@@ -44,8 +44,8 @@
     }
   }
 }
-/* The list put away and looked at: the pointer is near the window's left edge, or the keyboard is
-   in the frame's left side, which lies over the page for as long. */
+/* The list put away and looked at: the pointer is at the window's left edge or still on the
+   frame's left side, or the keyboard is in it, and it lies over the page for as long. */
 @custom-variant peek {
   @container app (width >= 56rem) {
     &:where([data-shell][data-collapsed][data-peek] *) {
@@ -396,7 +396,8 @@
     --tab-open: 120px;
     /* The row of places along the foot. */
     --foot: 56px;
-    /* The strip along the top, and the page's list beside what is chosen in it. */
+    /* The strip along the top, and the page's list beside what is chosen in it: where its width
+       starts, `SIDE` in fixed/split.ts, before the frame sets the one the person chose. */
     --strip: 52px;
     --side: 300px;
   }

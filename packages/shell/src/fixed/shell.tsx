@@ -1,9 +1,9 @@
 // The fixed frontend: the ground, with the page on it. Wider than a phone, the page's list is at
 // the left, on the ground itself, between the frame's two rows: Search at the end of a strip along
 // the top, and the places with Settings along the foot. What the page shows is in cards beside
-// them. With the list put away the card has the window, and that left side comes back over it
-// while it is looked at. On a phone the places and Search run along the foot, and the page has
-// the rest.
+// them. The list is as wide as the person drags it. With the list put away the card has the
+// window, and that left side comes back over it while it is looked at. On a phone the places and
+// Search run along the foot, and the page has the rest.
 import {
   MessageCircleIcon,
   PanelLeftIcon,
@@ -31,7 +31,17 @@ import { SIDE_PART } from "./page-frame.tsx";
 import { PresenceProvider } from "./presence.tsx";
 import { Search } from "./search.tsx";
 import { SettingsWindow } from "./settings-window.tsx";
-import { setCollapsed, settle, useCollapsed, useOpenedAway } from "./split.ts";
+import { useKeptSide } from "./side-handle.tsx";
+import {
+  SIDE,
+  setCollapsed,
+  setRoom,
+  settle,
+  useCollapsed,
+  useOpenedAway,
+  useSide,
+  useSplit,
+} from "./split.ts";
 import { TeamPage } from "./team-page.tsx";
 import { AgentsProvider } from "./watch.tsx";
 
@@ -289,7 +299,8 @@ const LIST_COLLAPSED = "ui/list-collapsed";
  * chosen: first in the strip along the top, after the room left for a window's own buttons, and
  * drawn as quietly as Search. With the list away, this, Search and the row of places go with it,
  * and what is chosen has the window; looked at, they are back over the page, and this brings them
- * back for good. Search still opens from its key. The choice is the person's, kept in their store:
+ * back for good. Put away by a press, they are looked at still, and go when the pointer leaves
+ * them. Search still opens from its key. The choice is the person's, kept in their store:
  * it is as it was left when the page opens again, away at once as the store answers. Their going
  * and coming is seen only when a person puts the list away, or looks at it.
  */
@@ -372,39 +383,50 @@ function ShellBar({ notice, dismiss }: Required<Notice>) {
   );
 }
 
-/** The frame's side, `--side` in styles.css; how near the window's left edge the pointer brings
- * it back over the page, and how far past it the pointer sends it away again. */
-const SIDE = 300;
+/** How near the window's left edge the pointer brings the frame's left side back over the page,
+ * and how far past the side it sends it away again. */
 const EDGE = 16;
 const PAST = 12;
 /** The parts of the frame's left side: its rows, the page's list, and what is marked as one. */
 const SIDE_PARTS = 'nav[aria-label="Main"], [data-list], [data-side]';
+/** A menu opened from one of them, while it is open: its row or its button says so. */
+const MENU_OPEN = `:is(${SIDE_PARTS}) [data-state="open"]`;
+/** Whether the left side is on its way off the window, or back onto it. */
+const moving = () => !!document.querySelector('nav[aria-label="Main"]')?.getAnimations().length;
 
 /**
- * Whether the frame's left side is looked at while the list is put away. A pointer looks at it by
- * coming to the window's left edge, or leaving the window across it, until it goes past the side or
- * out of the window another way. The keyboard looks at it while it is on one of its parts, having
- * come there by a key and not by a press, the button that brings the list back being the first
- * thing Tab comes to. A touch looks at it by a swipe in from the left edge, until a touch past it
- * or another place is gone to.
+ * Whether the frame's left side is looked at while the list is put away, `side` wide. A pointer
+ * looks at it by coming to the window's left edge, or leaving the window across it; put away by a
+ * press on it, it is looked at already. It stays for as long as the pointer is anywhere in the
+ * side's room, whatever is under it there, and while a menu opened from one of its parts is open or
+ * a press begun on one is still down, wherever the pointer goes meanwhile. Then it goes as the
+ * pointer goes past the side or out of the window another way, and a pointer back in the side's
+ * room before it has gone brings it back. The keyboard looks at it while it is on one of its parts,
+ * having come there by a key and not by a press, the button that brings the list back being the
+ * first thing Tab comes to. A touch looks at it by a swipe in from the left edge, until a touch
+ * past it or another place is gone to.
  */
-function usePeek(collapsed: boolean) {
+function usePeek(collapsed: boolean, side: number) {
   const route = useRoute();
   const [peek, setPeek] = useState(false);
   const held = useRef({ pointer: false, keys: false, touch: false });
   const say = useRef(() => {});
   say.current = () => setPeek(held.current.pointer || held.current.keys || held.current.touch);
-  /** Whether the last thing done was a key, not a press. */
+  const wide = useRef(side);
+  wide.current = side;
+  /** Whether it is put away as the page opens, by no press. */
+  const opened = useRef(false);
+  opened.current = useOpenedAway();
+  /** Whether the last thing done was a key, not a press; and where a mouse last pressed. */
   const keyboard = useRef(false);
+  const pressed = useRef<number>(undefined);
   useEffect(() => {
     const key = () => {
       keyboard.current = true;
     };
-    const press = () => {
+    const press = (event: PointerEvent) => {
       keyboard.current = false;
-      if (!held.current.keys) return;
-      held.current.keys = false;
-      say.current();
+      pressed.current = event.pointerType === "touch" ? undefined : event.clientX;
     };
     addEventListener("keydown", key, true);
     addEventListener("pointerdown", press, true);
@@ -413,27 +435,68 @@ function usePeek(collapsed: boolean) {
       removeEventListener("pointerdown", press, true);
     };
   }, []);
-  useEffect(() => {
+  const keyed = (target: EventTarget | null) =>
+    keyboard.current && target instanceof Element && !!target.closest(SIDE_PARTS);
+  /** In the side's room, or the little past it that is still on it. */
+  const near = (x: number) => x <= wide.current + PAST;
+  // What has it as the list is put away or brought back is said in that same render: the list is
+  // never drawn put away and not looked at when it is, so it does not start to go.
+  const [was, setWas] = useState(collapsed);
+  if (was !== collapsed) {
+    setWas(collapsed);
     const by = held.current;
-    const keyed = (target: EventTarget | null) =>
-      keyboard.current && target instanceof Element && !!target.closest(SIDE_PARTS);
-    by.pointer = false;
     by.touch = false;
     // Put away from the keyboard, it is still where the keyboard is.
     by.keys = collapsed && keyed(document.activeElement);
-    say.current();
+    // Put away by a press on it, it is still under the pointer.
+    by.pointer =
+      collapsed &&
+      !opened.current &&
+      !keyboard.current &&
+      pressed.current !== undefined &&
+      near(pressed.current);
+    setPeek(by.pointer || by.keys || by.touch);
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: what it asks is read as it is asked.
+  useEffect(() => {
+    const by = held.current;
     if (!collapsed) return;
+    /** Whether the pointer was last in the side's room; and whether a press begun on a part is down. */
+    let inside = by.pointer;
+    let down = false;
+    const kept = () => down || !!document.querySelector(MENU_OPEN);
+    const look = (now: boolean) => {
+      inside = now;
+      by.pointer = now || (by.pointer && kept());
+      say.current();
+    };
+    /** At the edge it is looked at; in the side's room, while the side is there or not yet gone. */
+    const at = (x: number) =>
+      x <= EDGE || (near(x) && (by.pointer || by.keys || by.touch || moving()));
     const move = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") look(at(event.clientX));
+    };
+    const press = (event: PointerEvent) => {
+      const mouse = event.pointerType !== "touch";
+      // On it while the keyboard has it, the pointer has it from here on.
+      const now = mouse ? at(event.clientX) : inside;
+      if (mouse) down = event.target instanceof Element && !!event.target.closest(SIDE_PARTS);
+      by.keys = false;
+      look(now);
+    };
+    const lift = (event: PointerEvent) => {
       if (event.pointerType === "touch") return;
-      const now = event.clientX <= EDGE ? true : event.clientX > SIDE + PAST ? false : by.pointer;
-      if (now === by.pointer) return;
-      by.pointer = now;
-      say.current();
+      down = false;
+      look(at(event.clientX));
     };
-    const leave = (event: MouseEvent) => {
-      by.pointer = event.clientX <= 0;
-      say.current();
-    };
+    const leave = (event: MouseEvent) => look(event.clientX <= 0);
+    // What kept it after the pointer left is gone: a menu has closed, or its row has gone with it.
+    const shell = document.querySelector("[data-shell]");
+    const watching = new MutationObserver(() => {
+      if (by.pointer && !inside) look(false);
+    });
+    if (shell)
+      watching.observe(shell, { subtree: true, childList: true, attributeFilter: ["data-state"] });
     const focus = (event: FocusEvent) => {
       by.keys = keyed(event.target);
       say.current();
@@ -449,7 +512,7 @@ function usePeek(collapsed: boolean) {
       const touch = event.touches[0];
       if (!touch) return;
       from = touch.clientX <= EDGE + 8 ? { x: touch.clientX, y: touch.clientY } : undefined;
-      if (!by.touch || touch.clientX <= SIDE) return;
+      if (!by.touch || touch.clientX <= wide.current) return;
       by.touch = false;
       say.current();
     };
@@ -464,6 +527,9 @@ function usePeek(collapsed: boolean) {
     };
     const root = document.documentElement;
     addEventListener("pointermove", move);
+    addEventListener("pointerdown", press, true);
+    addEventListener("pointerup", lift, true);
+    addEventListener("pointercancel", lift, true);
     root.addEventListener("mouseleave", leave);
     addEventListener("focusin", focus);
     addEventListener("focusout", blur);
@@ -471,11 +537,15 @@ function usePeek(collapsed: boolean) {
     addEventListener("touchmove", swiped, { passive: true });
     return () => {
       removeEventListener("pointermove", move);
+      removeEventListener("pointerdown", press, true);
+      removeEventListener("pointerup", lift, true);
+      removeEventListener("pointercancel", lift, true);
       root.removeEventListener("mouseleave", leave);
       removeEventListener("focusin", focus);
       removeEventListener("focusout", blur);
       removeEventListener("touchstart", touched);
       removeEventListener("touchmove", swiped);
+      watching.disconnect();
     };
   }, [collapsed]);
   // A touch that chose something has what it came for.
@@ -492,7 +562,14 @@ function usePeek(collapsed: boolean) {
 function Frame({ notice, dismiss }: Required<Notice>) {
   const route = useRoute();
   const collapsed = useCollapsed();
-  const peek = usePeek(collapsed);
+  // Where a page has its list beside what is chosen, the side is as wide as the person chose,
+  // within what the frame, measured, has room for; narrower, the frame is laid out as it starts.
+  useKeptSide();
+  const [shell, split, width] = useSplit<HTMLDivElement>();
+  useLayoutEffect(() => setRoom(width), [width]);
+  const chosen = useSide();
+  const side = split ? chosen : SIDE.start;
+  const peek = usePeek(collapsed, side);
   const openedAway = useOpenedAway();
   // Out of reach, all of it is under the notice: the keyboard doesn't reach it either.
   const offline = useOffline();
@@ -507,10 +584,12 @@ function Frame({ notice, dismiss }: Required<Notice>) {
         <SignInBanner />
         {/* The ground, under the frame's rows and the page's list and around its cards. */}
         <div
+          ref={shell}
           data-shell
           data-collapsed={collapsed || undefined}
           data-peek={peek || undefined}
           data-instant={openedAway || undefined}
+          style={{ "--side": `${side}px` } as React.CSSProperties}
           className="@container/app relative flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--ground)]"
         >
           <Collapse />
