@@ -1,7 +1,7 @@
 // The box a message is written in, in a real browser over the stand-in gateway: its thin line, a
-// little thicker and stronger under the pointer and a step stronger while its words have the
-// keyboard; pictures above the words with the line of buttons at its foot; and, signed out, the
-// place that stands for it at its size.
+// little thicker and stronger under the pointer and the same while its words have the keyboard;
+// pictures above the words with the line of buttons at its foot; and, signed out, the place that
+// stands for it.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "@playwright/test";
@@ -43,12 +43,12 @@ async function line(page: Page, shadow: string) {
   return box(page).evaluate((element) => getComputedStyle(element).outlineStyle);
 }
 
-for (const [theme, rest, hover, focus] of [
-  ["dark", "rgba(255, 255, 255, 0.08)", "rgba(255, 255, 255, 0.14)", "rgba(255, 255, 255, 0.22)"],
-  ["light", "rgba(0, 0, 0, 0.07)", "rgba(0, 0, 0, 0.14)", "rgba(0, 0, 0, 0.2)"],
+for (const [theme, rest, strong] of [
+  ["dark", "rgba(255, 255, 255, 0.08)", "rgba(255, 255, 255, 0.14)"],
+  ["light", "rgba(0, 0, 0, 0.07)", "rgba(0, 0, 0, 0.14)"],
 ] as const)
   test(
-    `the box's line is 1 px of the card's line at rest, 1.5 px and stronger under the pointer, and a step stronger again while its words have the keyboard, with nothing drawn outside it (${theme})`,
+    `the box's line is 1 px of the card's line at rest, 1.5 px and stronger under the pointer, and the same while its words have the keyboard, with nothing drawn outside it (${theme})`,
     withGateway(async (gateway) => {
       sampleChats(gateway);
       const page = await open(gateway, theme);
@@ -62,11 +62,16 @@ for (const [theme, rest, hover, focus] of [
       assert.equal(await line(page, `${rest} 0px 0px 0px 1px inset`), "none");
       const before = await words(page).boundingBox();
       await box(page).hover();
-      assert.equal(await line(page, `${hover} 0px 0px 0px 1.5px inset`), "none");
+      assert.equal(await line(page, `${strong} 0px 0px 0px 1.5px inset`), "none");
       assert.deepEqual(await words(page).boundingBox(), before, "its width moves nothing");
-      await words(page).focus();
       await page.mouse.move(700, 400);
-      assert.equal(await line(page, `${focus} 0px 0px 0px 1.5px inset`), "none");
+      assert.equal(await line(page, `${rest} 0px 0px 0px 1px inset`), "none");
+      // With the keyboard and the pointer elsewhere, it is the line it has under the pointer.
+      await words(page).focus();
+      assert.equal(await line(page, `${strong} 0px 0px 0px 1.5px inset`), "none");
+      // Both, it is still that line.
+      await box(page).hover();
+      assert.equal(await line(page, `${strong} 0px 0px 0px 1.5px inset`), "none");
       // The words themselves draw no ring of their own.
       const own = await words(page).evaluate((text) => {
         const style = getComputedStyle(text);

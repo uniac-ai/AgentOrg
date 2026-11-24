@@ -309,8 +309,6 @@
 :root {
   /* 14%, at the step of 255 nearest to it: what is mixed from it comes out as in the design. */
   --line-strong: #ffffff24;
-  /* A step past it: the line of a field that has the keyboard. */
-  --line-focus: rgb(255 255 255 / 0.22);
   --edge: rgb(255 255 255 / 0.1);
   --unread: rgb(10 132 255);
   /* The names a secondary button's hover mixes; without them it has no colour while hovered. */
@@ -322,7 +320,6 @@
 }
 :root[data-theme="light"] {
   --line-strong: #00000024;
-  --line-focus: rgb(0 0 0 / 0.2);
   --edge: rgb(0 0 0 / 0.1);
   --unread: rgb(0 122 255);
 }
@@ -534,7 +531,7 @@
 }
 
 /* The box a message is written in: a thin line at rest, a little thicker and stronger under the
-   pointer, and a step stronger again while its words have the keyboard. The line is a shadow inside
+   pointer, and the same while its words have the keyboard. The line is a shadow inside
    the edge, so its width moves nothing in the box, and a width between two pixels is drawn as
    such where a border or an outline would be rounded to whole pixels. */
 @layer components {
@@ -542,11 +539,9 @@
     box-shadow: inset 0 0 0 1px var(--line);
     transition: box-shadow 120ms;
   }
-  .chat-box:has(textarea):hover {
-    box-shadow: inset 0 0 0 1.5px var(--line-strong);
-  }
+  .chat-box:has(textarea):hover,
   .chat-box:has(textarea:focus) {
-    box-shadow: inset 0 0 0 1.5px var(--line-focus);
+    box-shadow: inset 0 0 0 1.5px var(--line-strong);
   }
   @media (prefers-reduced-motion: reduce) {
     .chat-box {
