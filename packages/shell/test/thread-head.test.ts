@@ -463,7 +463,7 @@ test(
 );
 
 test(
-  "with the pointer on the frame or the pill, or the keyboard on the frame, the pill slides 6 px down from under the frame, its words clear of it, and back as they leave; the head's height and the room stay as they are; with reduced motion it moves at once",
+  "with the pointer on the frame or the pill, or the keyboard on the frame, the pill slides 6 px down from under the frame, its words clear of it, and the frame and the pill each go one small step lighter in the dark and darker in the light, and back as they leave; the head's height and the room stay as they are; with reduced motion they change at once",
   withGateway(async (gateway) => {
     researchSays(gateway, "oneLine");
     const { page, thread } = await conversation(gateway, "chat");
@@ -492,11 +492,41 @@ test(
         await pill.elementHandle(),
         out ? "0px 6px" : "none",
       ] as const);
+    /**
+     * Whether the frame and the pill have their fills: the frame one small step off the ground
+     * (lighter in the dark, darker in the light) and the pill on the surface at rest, each one
+     * more such step out.
+     */
+    const tint = ([pill, out]: readonly [Element | null, boolean]) => {
+      if (!pill) return false;
+      const frame = pill.previousElementSibling as Element;
+      const [toward, step] =
+        document.documentElement.dataset.theme === "light" ? ["black", 3] : ["white", 4];
+      const colour = (value: string) => {
+        const probe = document.createElement("i");
+        probe.style.color = value;
+        pill.append(probe);
+        const its = getComputedStyle(probe).color;
+        probe.remove();
+        return its;
+      };
+      return (
+        getComputedStyle(frame).backgroundColor ===
+          colour(`color-mix(in srgb, var(--thread), ${toward} ${(out ? 2 : 1) * step}%)`) &&
+        getComputedStyle(pill).backgroundColor ===
+          colour(`color-mix(in srgb, var(--surface), ${toward} ${out ? step : 0}%)`)
+      );
+    };
+    /** Waits for the frame and the pill to come to their fills, out or at rest. */
+    const tinted = async (out: boolean) =>
+      page.waitForFunction(tint, [await pill.elementHandle(), out] as const);
     const resting = await read();
+    await tinted(false);
     // At rest the frame's foot is over the tops of its words.
     assert.ok(resting.words < resting.foot, "at rest the frame covers the words' tops");
     await frame.hover();
     await settles(true);
+    await tinted(true);
     const out = await read();
     assert.equal(out.top - resting.top, 6);
     assert.ok(
@@ -509,19 +539,43 @@ test(
     assert.ok(box);
     await page.mouse.move(box.x + 4, box.y + box.height - 3);
     await settles(true);
+    await tinted(true);
     await rest(page, thread);
+    await tinted(false);
     assert.deepEqual(await read(), resting);
     // The keyboard on the frame.
     await page.keyboard.press("Tab");
     await frame.focus();
     await settles(true);
+    await tinted(true);
     await frame.blur();
     await settles(false);
-    // Reduced motion: no slide, the pill out in the same render as the pointer comes.
+    await tinted(false);
+    // In the light, the steps go darker.
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "light";
+    });
+    await tinted(false);
+    await frame.hover();
+    await tinted(true);
+    await rest(page, thread);
+    await tinted(false);
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "dark";
+    });
+    // Reduced motion: no slide or fade, the pill out and both fills in the same render as the
+    // pointer comes.
     await page.emulateMedia({ reducedMotion: "reduce" });
-    assert.equal(await pill.evaluate((pill) => getComputedStyle(pill).transitionProperty), "none");
+    assert.deepEqual(
+      await pill.evaluate((pill) => [
+        getComputedStyle(pill.parentElement as Element).transitionProperty,
+        getComputedStyle(pill).transitionProperty,
+      ]),
+      ["none", "none"],
+    );
     await frame.hover();
     assert.equal(await pill.evaluate((pill) => getComputedStyle(pill).translate), "0px 6px");
+    assert.ok(await page.evaluate(tint, [await pill.elementHandle(), true] as const));
     await page.close();
   }),
 );

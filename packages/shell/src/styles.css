@@ -164,6 +164,14 @@
   }
 }
 
+/* How far the conversation head's frame and pill are stepped off their fills: 0 at rest, 1 with the
+   pointer or the keyboard on them. A number, so it eases between the two. */
+@property --lift {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
 /* The shimmer, from `shadcn/tailwind.css` 4.23.0 (MIT): its rules as there, set out as this sheet is, its last in a layer. */
 @property --shimmer-angle {
   syntax: "<angle>";

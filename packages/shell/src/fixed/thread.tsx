@@ -467,11 +467,11 @@ function Head({
         )}
       </div>
       <div className="flex flex-col items-center">
-        <div className="group/state flex flex-col items-center">
+        <div className="group/state flex flex-col items-center duration-200 ease-out [transition-property:--lift] [--lift:0] hover:[--lift:1] has-focus-visible:[--lift:1] motion-reduce:transition-none">
           <button
             type="button"
             aria-label={`${agent.name}'s details`}
-            className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line)] bg-[color-mix(in_srgb,var(--thread),white_4%)] shadow-[0_1px_2px_rgb(0_0_0/0.06)] [[data-theme=light]_&]:bg-[color-mix(in_srgb,var(--thread),black_3%)]"
+            className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line)] bg-[color-mix(in_srgb,var(--thread),white_calc((1_+_var(--lift))_*_4%))] shadow-[0_1px_2px_rgb(0_0_0/0.06)] [[data-theme=light]_&]:bg-[color-mix(in_srgb,var(--thread),black_calc((1_+_var(--lift))_*_3%))]"
             onClick={() => {
               // Beside the conversation where the page has room; else on the team page.
               if (page?.details) return page.details();
@@ -485,8 +485,11 @@ function Head({
           {/* Behind the frame's foot, 7 px of it under the frame, which may cover the tops of its
               words; with the pointer or the keyboard on the frame or the pill, it slides 6 px down,
               its words clear. Both have the quiet line and a faint shadow; the frame is one small
-              step off the conversation's ground, lighter in the dark and darker in the light. */}
-          <div className="pointer-events-auto -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-transform duration-200 ease-out group-hover/state:translate-y-1.5 group-has-focus-visible/state:translate-y-1.5 motion-reduce:transition-none">
+              step off the conversation's ground, lighter in the dark and darker in the light, and
+              with the pointer or the keyboard on them (`--lift` 1) the frame and the pill each go
+              one more such step, along with the slide. It is the step that eases, not the fills,
+              so a change of theme still comes in one render. */}
+          <div className="pointer-events-auto -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface),white_calc(var(--lift)_*_4%))] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-transform duration-200 ease-out group-hover/state:translate-y-1.5 group-has-focus-visible/state:translate-y-1.5 motion-reduce:transition-none [[data-theme=light]_&]:bg-[color-mix(in_srgb,var(--surface),black_calc(var(--lift)_*_3%))]">
             <StateMark tone={agent.tone} />
             {WORD[agent.tone]}
           </div>
