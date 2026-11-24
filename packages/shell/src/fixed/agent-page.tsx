@@ -113,7 +113,7 @@ export function AgentPage({
     <div className="no-bar h-full overflow-y-auto">
       <div className="mx-auto max-w-[1080px] px-6 pb-28 tight:px-4">
         <header className="flex items-center gap-5 pt-8 tight:flex-wrap tight:gap-x-4 tight:gap-y-5 phone:pt-2">
-          <Face agent={facedOf(watched)} size={88} plain />
+          <Face agent={facedOf(watched)} size={88} plain live />
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-[30px] leading-9 font-semibold tracking-tight">
               {entry.name}
