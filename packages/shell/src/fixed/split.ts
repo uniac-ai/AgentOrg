@@ -58,8 +58,11 @@ export const useOpenedAway = () => useSyncExternalStore(watch, () => opened);
  */
 export const SIDE = {
   start: 300,
-  /** Three pinned tiles of 88 in a row, 4 between them, in a list padded 8 at each side. */
-  least: 288,
+  /**
+   * A row with a name of two words whole: 150 for its face, its time and the room around them,
+   * and 106 for the name. Under 288 the pinned tiles, 88 at least, are two to a row.
+   */
+  least: 256,
   /** A conversation's own room: the list is never wider than the narrowest a conversation is kept. */
   most: 480,
   /** Of the frame's width at most, so the card beside it stays the larger part. */
@@ -70,9 +73,19 @@ export const SIDE = {
 /** The width the person chose, and the frame's own width: 0 until it is measured. */
 let chosen: number = SIDE.start;
 let room = 0;
-/** The widest the side is in the frame as it is now. */
+/** What a page keeps beside the list while something is open beside its conversation: else 0. */
+let kept = 0;
+/**
+ * The widest the side is in the frame as it is now: its share of the frame, and what the page
+ * leaves of it, which holds a list made wider and never one as wide as it starts.
+ */
 const most = () =>
-  room ? Math.max(SIDE.least, Math.min(SIDE.most, Math.floor(room * SIDE.share))) : SIDE.most;
+  room
+    ? Math.max(
+        SIDE.least,
+        Math.min(SIDE.most, Math.floor(room * SIDE.share), Math.max(SIDE.start, room - kept)),
+      )
+    : SIDE.most;
 /** Chooses the side's width, within its least and its most. */
 export function setSide(next: number) {
   chosen = Math.round(Math.max(SIDE.least, Math.min(SIDE.most, next)));
@@ -82,6 +95,12 @@ export function setSide(next: number) {
 export function setRoom(next: number) {
   if (next === room) return;
   room = next;
+  tell();
+}
+/** A page says what it keeps beside the list: the side is held to what is left of the frame. */
+export function setKept(next: number) {
+  if (next === kept) return;
+  kept = next;
   tell();
 }
 /** The side's width now: what was chosen, or the most this frame has room for if that is less. */

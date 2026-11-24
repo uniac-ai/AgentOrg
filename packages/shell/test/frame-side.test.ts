@@ -7,6 +7,7 @@ import test from "node:test";
 import type { Page } from "@playwright/test";
 import { browser, type Gateway, SESSION, withBrowser, withGateway } from "./build-kit.ts";
 import { chatsOf, one, PINS, rows, said, tiles, until } from "./chat-list-kit.ts";
+import { computerWith } from "./design/samples.ts";
 
 withBrowser();
 
@@ -50,7 +51,7 @@ const sidesAt = (side: number, width = 1440, most = 480) => ({
   rows: [0, side],
   card: [side, width - side - 6],
   handle: [side - 4, 8],
-  says: [288, side, most],
+  says: [256, side, most],
 });
 /** Whether the handle's line is drawn, once its fading has run. */
 const lineShown = (page: Page) =>
@@ -62,7 +63,7 @@ const lineShown = (page: Page) =>
     });
 
 test(
-  "the line between the list and the card is a handle: nothing is drawn on it until it is pointed at, and dragged it makes the list as wide as the pointer says, between 288 and 480, the frame's rows as wide and the card taking the rest; the width is kept in the person's store as the drag ends, and the page opens again at it; a double click puts it back at 300",
+  "the line between the list and the card is a handle: nothing is drawn on it until it is pointed at, and dragged it makes the list as wide as the pointer says, between 256 and 480, the frame's rows as wide and the card taking the rest; the width is kept in the person's store as the drag ends, and the page opens again at it; a double click puts it back at 300",
   withGateway(async (gateway) => {
     let page = await open(gateway, 1440);
     await opened(page);
@@ -93,7 +94,7 @@ test(
     await page.mouse.move(700, 100, { steps: 2 });
     assert.equal(await lineShown(page), true, "the line shows while the pointer is off it");
     await page.mouse.move(60, 460, { steps: 4 });
-    assert.deepEqual(await sides(page), sidesAt(288));
+    assert.deepEqual(await sides(page), sidesAt(256));
     await page.mouse.move(353, 470, { steps: 4 });
     await page.mouse.up();
     assert.deepEqual(await sides(page), sidesAt(352));
@@ -160,17 +161,20 @@ test(
     await until(() => gateway.notes.get(WIDTH), 316);
     await page.keyboard.press("ArrowLeft");
     await page.keyboard.press("ArrowLeft");
-    // A step past its least ends at it.
-    assert.deepEqual(await sides(page), sidesAt(288));
+    assert.deepEqual(await sides(page), sidesAt(284));
     await page.keyboard.press("ArrowLeft");
-    assert.deepEqual(await sides(page), sidesAt(288));
+    await page.keyboard.press("ArrowLeft");
+    // A step past its least ends at it.
+    assert.deepEqual(await sides(page), sidesAt(256));
+    await page.keyboard.press("ArrowLeft");
+    assert.deepEqual(await sides(page), sidesAt(256));
     await page.keyboard.press("End");
     assert.deepEqual(await sides(page), sidesAt(480));
     await page.keyboard.press("ArrowRight");
     assert.deepEqual(await sides(page), sidesAt(480));
     await until(() => gateway.notes.get(WIDTH), 480);
     await page.keyboard.press("Home");
-    assert.deepEqual(await sides(page), sidesAt(288));
+    assert.deepEqual(await sides(page), sidesAt(256));
     await page.keyboard.press("End");
     await until(() => gateway.notes.get(WIDTH), 480);
     // Another key is not its own.
@@ -193,36 +197,82 @@ test(
 );
 
 test(
-  "at its least the side holds what it held: three pinned tiles in a row, a row's name whole beside its time and clear of its buttons, the strip's two buttons and the row of places clear of each other, and the plan's notice no wider than it",
+  "while an agent's computer is open beside its conversation, a list made wider is held to what leaves the conversation its own room, and is as wide as was chosen again when the computer closes; a list as wide as it starts is not made narrower",
+  withGateway(async (gateway) => {
+    computerWith(gateway, "terminal");
+    gateway.notes.set(WIDTH, 480);
+    const page = await open(gateway, 1300, "#/chat/a-research");
+    await opened(page);
+    assert.deepEqual(await sides(page), sidesAt(480, 1300));
+    const conversation = page.locator('main section[aria-label="Conversation with Research"]');
+    await conversation.getByRole("button", { name: "Research's computer" }).click();
+    await page.locator('[data-beside="open"]').waitFor();
+    // 1300 less the conversation's 480 and the computer's 480.
+    await page.locator('[role="separator"][aria-valuemax="340"]').waitFor();
+    const beside = page.locator("[data-beside]");
+    await beside.evaluate((part) =>
+      Promise.all(part.getAnimations().map((moving) => moving.finished)),
+    );
+    const seen = await sides(page);
+    assert.deepEqual(
+      [seen.list, seen.says],
+      [
+        [0, 340],
+        [256, 340, 340],
+      ],
+    );
+    // The conversation has its 480, less the 6 beside the card and the card's lines.
+    assert.deepEqual(
+      [(await conversation.boundingBox())?.width, (await beside.boundingBox())?.width],
+      [472, 480],
+    );
+    assert.equal(gateway.notes.get(WIDTH), 480, "what was chosen is kept");
+    await page.getByRole("main").getByRole("button", { name: "Close Research's computer" }).click();
+    await beside.waitFor({ state: "detached" });
+    assert.deepEqual(await sides(page), sidesAt(480, 1300));
+    // In a window with no room for all three, a list as wide as it starts stays so.
+    gateway.notes.set(WIDTH, 300);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await page.reload();
+    await opened(page);
+    await conversation.getByRole("button", { name: "Research's computer" }).click();
+    await page.locator('[data-beside="open"]').waitFor();
+    assert.deepEqual((await sides(page)).list, [0, 300]);
+    await page.close();
+  }),
+);
+
+test(
+  "at its least the side holds what it held: a row's name whole beside its time and clear of its buttons, the strip's two buttons and the row of places clear of each other, and the plan's notice no wider than it, its link and its close whole; the pinned tiles are two to a row there, none narrower than 88, and three to a row from 288",
   withGateway(async (gateway) => {
     gateway.converse("a-reviewer", [said("r", "The first of them.", "2026-03-05T22:46:00Z")]);
     gateway.converse("a-research", [said("s", "The second.", "2026-03-05T22:40:00Z")]);
     gateway.converse("a-triage", [said("t", "The third.", "2026-03-05T22:30:00Z")]);
     gateway.converse("a-weekly", [said("w", "Said last year.", "2025-12-31T12:00:00Z")]);
-    gateway.notes.set(PINS, ["a-reviewer", "a-research", "a-triage"]);
-    gateway.notes.set(WIDTH, 288);
+    gateway.notes.set(PINS, ["a-weekly", "a-research", "a-triage"]);
+    gateway.notes.set(WIDTH, 256);
     const page = await open(gateway, 1440);
     await opened(page);
     const list = chatsOf(page);
-    await one(list, "Weekly report").waitFor();
-    assert.deepEqual(await sides(page), sidesAt(288));
-    // The tiles: three of 88 in one row, 8 from the list's sides and 4 apart.
-    assert.deepEqual(
-      await tiles(list).evaluateAll((all) =>
+    await one(list, "Reviewer").waitFor();
+    assert.deepEqual(await sides(page), sidesAt(256));
+    /** Each tile's left, top and width. */
+    const tiled = () =>
+      tiles(list).evaluateAll((all) =>
         all.map((tile) => {
           const box = tile.getBoundingClientRect();
           return [box.x, box.y, box.width];
         }),
-      ),
-      [
-        [8, 92, 88],
-        [100, 92, 88],
-        [192, 92, 88],
-      ],
-    );
+      );
+    // The tiles: two of 118 to a row, 8 from the list's sides and 4 apart, the third under them.
+    assert.deepEqual(await tiled(), [
+      [8, 92, 118],
+      [130, 92, 118],
+      [8, 186, 118],
+    ]);
     // The row: its name is whole, clear of its time, which is inside the row; pointed at, its two
     // buttons are inside it too, clear of the name.
-    const row = one(list, "Weekly report");
+    const row = one(list, "Reviewer");
     await row.hover();
     assert.deepEqual(
       await row.evaluate(async (row) => {
@@ -246,7 +296,7 @@ test(
           }),
         };
       }),
-      { row: [8, 272], whole: true, clear: true, inside: true, buttons: [true, true] },
+      { row: [8, 240], whole: true, clear: true, inside: true, buttons: [true, true] },
     );
     // The frame's own buttons: the strip's two at its ends, the places from the row's start and
     // Settings at its end, none over another; and the notice's close, inside the side.
@@ -260,14 +310,39 @@ test(
     );
     assert.deepEqual(boxes, [
       ["Hide list", 10, 32],
-      ["Search", 246, 32],
+      ["Search", 214, 32],
       ["Chat", 8, 44],
       ["Team", 56, 44],
-      ["Settings", 236, 44],
-      ["Dismiss", 246, 24],
+      ["Settings", 204, 44],
+      ["Dismiss", 214, 24],
     ]);
-    const notice = await page.getByRole("status").filter({ hasText: "ChatGPT plan" }).boundingBox();
-    assert.deepEqual([notice?.x, notice?.width], [12, 264]);
+    // The notice: as wide as the side less 12 at each end, its link whole before its close.
+    const notice = page.getByRole("status").filter({ hasText: "ChatGPT plan" });
+    assert.deepEqual(
+      await notice.evaluate((bar) => {
+        const box = bar.getBoundingClientRect();
+        const link = bar.querySelector("a") as HTMLElement;
+        const close = (bar.querySelector("button") as Element).getBoundingClientRect();
+        return [
+          box.x,
+          box.width,
+          link.scrollWidth <= link.clientWidth,
+          link.getBoundingClientRect().right <= close.left,
+        ];
+      }),
+      [12, 232, true, true],
+    );
+    // Dragged to 288, the tiles are three to a row of 88.
+    await page.mouse.move(256, 500);
+    await page.mouse.down();
+    await page.mouse.move(288, 500, { steps: 4 });
+    await page.mouse.up();
+    assert.deepEqual(await sides(page), sidesAt(288));
+    assert.deepEqual(await tiled(), [
+      [8, 92, 88],
+      [100, 92, 88],
+      [192, 92, 88],
+    ]);
     await page.close();
   }),
 );
