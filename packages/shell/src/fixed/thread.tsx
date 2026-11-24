@@ -471,7 +471,7 @@ function Head({
           <button
             type="button"
             aria-label={`${agent.name}'s details`}
-            className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--surface)] shadow-[var(--card-shadow)]"
+            className="relative z-10 grid size-15 place-items-center overflow-hidden rounded-full border border-[var(--line)] bg-[var(--thread)] shadow-[0_1px_2px_rgb(0_0_0/0.06)]"
             onClick={() => {
               // Beside the conversation where the page has room; else on the team page.
               if (page?.details) return page.details();
@@ -484,7 +484,8 @@ function Head({
           </button>
           {/* Behind the frame's foot, 7 px of it under the frame, which may cover the tops of its
               words; with the pointer or the keyboard on the frame or the pill, it slides 6 px down,
-              its words clear. A quieter line and shadow than the frame's. */}
+              its words clear. It is a step lighter than the frame, which is on the conversation's
+              own ground; both have the quiet line and a faint shadow. */}
           <div className="pointer-events-auto -mt-[7px] flex h-[22px] items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2.5 text-xs leading-4 whitespace-nowrap shadow-[0_1px_2px_rgb(0_0_0/0.06)] transition-transform duration-200 ease-out group-hover/state:translate-y-1.5 group-has-focus-visible/state:translate-y-1.5 motion-reduce:transition-none">
             <StateMark tone={agent.tone} />
             {WORD[agent.tone]}

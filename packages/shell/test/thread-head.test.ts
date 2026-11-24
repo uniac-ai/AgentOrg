@@ -118,7 +118,8 @@ const head = (thread: Locator) =>
       pillBorder: getComputedStyle(pill).borderTopWidth,
       frameOnTop: frame.contains(met),
       lines: [drawn.borderTopColor, getComputedStyle(pill).borderTopColor],
-      tokens: [colour("var(--line-strong)"), colour("var(--line)")],
+      tokens: [colour("var(--line)"), colour("var(--line)")],
+      grounds: [drawn.backgroundColor, colour("var(--thread)")],
       shadows: [drawn.boxShadow, getComputedStyle(pill).boxShadow],
       word: (pill.textContent ?? "").trim(),
       seen,
@@ -162,8 +163,8 @@ for (const [where, width, has] of [
         `the frame is centred at ${now.frameMiddle}, the head at ${now.middle}`,
       );
       // The pill at rest: 22 tall, round-ended, edged by one line, centred under the frame and 7 of
-      // it under the frame's foot, behind it. Its line is the quieter line colour, the frame's the
-      // stronger, and its shadow is not the frame's.
+      // it under the frame's foot, behind it. Both are edged in the quiet line colour with the same
+      // faint shadow, and the frame is on the conversation's own ground.
       assert.equal(now.pill.height, 22);
       assert.ok(now.pillRound, "the pill's ends are round");
       assert.equal(now.pillBorder, "1px");
@@ -171,8 +172,9 @@ for (const [where, width, has] of [
       assert.equal(now.frame.bottom - now.pill.top, 7);
       assert.ok(now.frameOnTop, "the frame is in front of the pill");
       assert.deepEqual(now.lines, now.tokens);
-      assert.notEqual(now.shadows[1], now.shadows[0]);
-      assert.notEqual(now.shadows[1], "none");
+      assert.equal(now.shadows[0], now.shadows[1]);
+      assert.notEqual(now.shadows[0], "none");
+      assert.equal(now.grounds[0], now.grounds[1]);
       // 6 above the frame and the resting pill, and 6 below them.
       assert.equal(now.deep, 87);
       assert.equal(now.deep - now.pill.bottom, 6);
