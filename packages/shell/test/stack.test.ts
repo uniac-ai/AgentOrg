@@ -1,6 +1,8 @@
 // What a stack comes to, worked out from form descriptions alone.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { comingRound } from "../src/fixed/avatar-ring.ts";
+import { freshName, NAMES } from "../src/fixed/names.ts";
 import {
   answersOf,
   type CatalogUnit,
@@ -9,7 +11,6 @@ import {
   givesOf,
   isReady,
   isShown,
-  offeredName,
   placeholderOf,
   toStack,
 } from "../src/fixed/stack.ts";
@@ -140,11 +141,45 @@ test("{name} in greyed text is the agent's name, and stays as written with no ag
   assert.equal(placeholderOf(form[2] as Field, "Wren"), undefined);
 });
 
-test("an agent is offered the first of the names that no agent has, and none once all are taken", () => {
-  assert.equal(offeredName([]), "Scout");
-  assert.equal(offeredName(["Scout", "Wren"]), "Juniper");
-  assert.equal(offeredName(["scout"]), "Wren", "a name in another case is the same name");
-  assert.equal(offeredName(["Scout", "Wren", "Juniper", "Cedar", "Maple", "Sage"]), "");
+test("an agent is offered one of a few hundred names, each letters alone and no two the same in any case; never one that is taken, and none once all are", () => {
+  assert.ok(NAMES.length >= 300);
+  for (const name of NAMES) assert.match(name, /^[A-Z][a-z]+$/);
+  assert.equal(new Set(NAMES.map((name) => name.toLowerCase())).size, NAMES.length);
+  // Whatever is drawn, the name is one nothing has.
+  for (const random of [() => 0, () => 0.5, () => 0.999999]) {
+    const name = freshName(["scout", "WREN"], random);
+    assert.ok(NAMES.includes(name));
+    assert.notEqual(name, "Scout", "a name in another case is the same name");
+    assert.notEqual(name, "Wren");
+  }
+  assert.equal(
+    freshName(
+      NAMES.filter((name) => name !== "Sage"),
+      () => 0.7,
+    ),
+    "Sage",
+  );
+  assert.equal(freshName(NAMES), "");
+});
+
+test("as the choice moves round a ring of twenty, the place that comes round to the far side is the one half the ring ahead", () => {
+  assert.deepEqual(comingRound(0, 1, 20), [11]);
+  assert.deepEqual(comingRound(0, 3, 20), [11, 12, 13]);
+  assert.deepEqual(comingRound(19, 1, 20), [10, 11], "across the ring's join");
+  // Going left, the one that was farthest ahead is now farthest behind.
+  assert.deepEqual(comingRound(0, 19, 20), [10]);
+  assert.deepEqual(comingRound(5, 3, 20), [15, 14]);
+  assert.deepEqual(comingRound(4, 4, 20), []);
+  // The place chosen, and those beside it, never come round.
+  for (let from = 0; from < 20; from++)
+    for (let to = 0; to < 20; to++) {
+      const steps = Math.min((to - from + 20) % 20, (from - to + 20) % 20);
+      if (steps > 4) continue;
+      for (const place of comingRound(from, to, 20)) {
+        const apart = Math.min((place - to + 20) % 20, (to - place + 20) % 20);
+        assert.ok(apart >= 6, `${from} to ${to}: ${place}`);
+      }
+    }
 });
 
 test("a unit's answers are read with their questions, and a secret or a hidden field is never read back", () => {

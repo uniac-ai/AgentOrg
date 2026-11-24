@@ -137,7 +137,8 @@ test(
     await opened(create);
     assert.equal(await windows.count(), 2, "over Settings, which stays");
     // From nothing, to make one with the name it offers.
-    await create.getByRole("button", { name: "Empty" }).click();
+    await create.getByRole("button", { name: /^Template:/ }).click();
+    await page.getByRole("menuitemradio", { name: /^Empty/ }).click();
     await create.getByRole("button", { name: "Create", exact: true }).click();
     await page.waitForURL(/#\/team\/a-6$/);
     await windows.first().waitFor({ state: "detached" });

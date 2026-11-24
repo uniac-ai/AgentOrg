@@ -15,6 +15,11 @@ import {
 
 const EMPTY: Catalog = { bases: [], units: [], templates: [] };
 
+/** The template Create opens on: the Assistant, where the catalog has one. */
+const assistantOf = (catalog: Catalog) =>
+  catalog.templates.find((t) => t.id === "assistant") ??
+  catalog.templates.find((t) => t.title.toLowerCase() === "assistant");
+
 function readCatalog(): Promise<Catalog> {
   return Promise.all([
     api.call<Pick<Catalog, "bases" | "units">>("agents", "units"),
@@ -40,15 +45,19 @@ function useBuildingState() {
    * part switched off, a browser set up), and draws the stack once they are read: so no answer is
    * drawn as it was and then changed. Until then it has its templates, and no stack.
    */
+  const fromOf = (one: { template?: Template | undefined; assistant: boolean }) =>
+    one.assistant ? assistantOf(catalog) : one.template;
   const [opening, setOpening] = useState<{
     template?: Template | undefined;
+    /** It starts from the Assistant, as the catalog read by then has it. */
+    assistant: boolean;
     mode: Draft["mode"];
     was: Catalog | undefined;
   }>();
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new read, or none to be had, is the sign.
   useEffect(() => {
     if (!opening || (read.value === opening.was && !read.error)) return;
-    setDraft(draftFrom(opening.template, catalog, opening.mode, nextKey));
+    setDraft(draftFrom(fromOf(opening), catalog, opening.mode, nextKey));
     setOpening(undefined);
   }, [opening, read.value, read.error]);
 
@@ -59,20 +68,21 @@ function useBuildingState() {
     change((was) => ({ units: was.units.map((u) => (u.key === key ? { ...u, ...next(u) } : u)) }));
 
   /**
-   * A template, or nothing, fills the window. Chosen in the open window, it keeps what was typed
-   * for an agent; opening the window starts clean, whatever a closed one was left holding.
+   * A template, or nothing, fills the window; or, with `assistant`, the Assistant where there is
+   * one. Chosen in the open window, it keeps what was typed for an agent; opening the window starts
+   * clean, whatever a closed one was left holding.
    */
-  const start = (template?: Template, mode: Draft["mode"] = "agent") => {
+  const start = (template?: Template, mode: Draft["mode"] = "agent", assistant = false) => {
     // Opening, or opened with its units still being read: the template chosen now is the one the
     // stack is drawn from when they are.
     if (!open || opening) {
       setDraft(undefined);
-      setOpening({ template, mode, was: opening ? opening.was : read.value });
+      setOpening({ template, assistant, mode, was: opening ? opening.was : read.value });
       if (!open) reread();
       setOpen(true);
       return;
     }
-    const next = draftFrom(template, catalog, mode, nextKey);
+    const next = draftFrom(fromOf({ template, assistant }), catalog, mode, nextKey);
     setDraft((was) => ({
       ...next,
       ...(mode === "agent" && open && was ? { name: was.name, purpose: was.purpose } : {}),
@@ -87,16 +97,16 @@ function useBuildingState() {
      * window says which from the start.
      */
     choosing: opening
-      ? { from: opening.template, mode: opening.mode }
+      ? { from: fromOf(opening), mode: opening.mode }
       : draft && { from: draft.from, mode: draft.mode },
     /** Whether the catalog has been read, or couldn't be. */
     catalogRead: { loaded: read.loaded, ...(read.error ? { error: read.error } : {}) },
     draft,
     open,
-    /** The window opens on an empty stack. */
-    show: () => start(),
+    /** The window opens to make an agent, from the Assistant where there is one. */
+    show: () => start(undefined, "agent", true),
     hide: () => setOpen(false),
-    start,
+    start: (template?: Template, mode?: Draft["mode"]) => start(template, mode),
     setText: (text: Partial<Pick<Draft, "name" | "purpose">>) => change(() => text),
     setBase: (base: CatalogBase) => change(() => ({ base, answers: {} })),
     setAnswer: (id: string, value: string) =>
