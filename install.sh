@@ -5,7 +5,9 @@
 # agents; a Node of AgentOrg's own; the core, as a background service that starts at every login;
 # and a launcher, `agentorg`. Then it opens the dashboard, signed in. Run again, it puts back what
 # is missing. With --update, or when the release it pins is newer than the one installed, it moves
-# to that release, and puts back what ran before if the new one doesn't answer.
+# to that release, and puts back what ran before if the new one doesn't answer. Once the new one
+# answers, what ran before is kept as one step back: with --back, the script of the release that
+# made that step puts it back, with the home as it was just before the update.
 #
 #   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash -s -- --update
@@ -35,6 +37,8 @@ RELEASES="https://github.com/uniac-ai/AgentOrg/releases/download"
 ROOT="$HOME/.agentorg"
 BIN="$HOME/.local/bin"
 CORE_APP="$ROOT/AgentOrg Core.app"
+# What an update keeps once the new release answers: the one step agentorg update --back puts back.
+PREVIOUS="$ROOT/previous"
 RECORD="$HOME/Library/Application Support/AgentOrg/computer/server.json"
 # The line the launcher carries, so nothing overwrites a file that isn't AgentOrg's.
 MARK="# AgentOrg's launcher, written by its install script."
@@ -46,6 +50,7 @@ die() {
 }
 
 update=false
+going_back=false
 open=true
 channel="${AGENTORG_CHANNEL:-}"
 app_file=""
@@ -58,6 +63,7 @@ given() {
 while [ $# -gt 0 ]; do
   case "$1" in
   --update) update=true ;;
+  --back) going_back=true ;;
   --no-open) open=false ;;
   --channel)
     [ $# -ge 2 ] || die "--channel takes latest or next."
@@ -74,8 +80,8 @@ while [ $# -gt 0 ]; do
     shift
     ;;
   -h | --help)
-    say "Installs AgentOrg $AGENTORG_VERSION on this Mac, or with --update moves to it."
-    say "Usage: bash install.sh [--update] [--no-open] [--channel latest|next] [--app FILE.zip] [--core FILE.tgz] [--node FILE.tar.gz]"
+    say "Installs AgentOrg $AGENTORG_VERSION on this Mac, or with --update moves to it, or with --back puts back the release before it."
+    say "Usage: bash install.sh [--update | --back] [--no-open] [--channel latest|next] [--app FILE.zip] [--core FILE.tgz] [--node FILE.tar.gz]"
     exit 0
     ;;
   *) die "Unknown option $1. Run it with --help to see what it takes." ;;
@@ -83,6 +89,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$channel" in "" | latest | next) ;; *) die "AgentOrg's channels are latest and next, not $channel." ;; esac
+[ "$update" = false ] || [ "$going_back" = false ] || die "Give --update or --back, not both."
 
 # This Mac: macOS 13 or later on Apple silicon (also under Rosetta), and the person's own account.
 [ "$(uname -s)" = Darwin ] || die "This installs AgentOrg on a Mac. On another system, run it from npm: npx @agentorg/cli@next"
@@ -91,7 +98,8 @@ version="$(sw_vers -productVersion)"
 [ "${version%%.*}" -ge 13 ] || die "AgentOrg needs macOS 13 or later; this Mac has $version."
 [ "$(id -u)" -ne 0 ] || die "Run this as yourself, not as root or with sudo: AgentOrg is installed for the account that uses it."
 # With no Mac app published for this release and none given, nothing is installed, and nothing made.
-[ -n "$APP_SHA256" ] || [ -n "$app_file" ] ||
+# Going back fetches nothing.
+[ "$going_back" = true ] || [ -n "$APP_SHA256" ] || [ -n "$app_file" ] ||
   die "AgentOrg's Mac app for $AGENTORG_VERSION isn't published yet, so this can't install it. (A rehearsal gives a build of it with --app FILE.zip.)"
 for tool in curl tar shasum ditto; do
   command -v "$tool" >/dev/null || die "$tool is missing from this Mac."
@@ -436,13 +444,105 @@ update() {
     [ -d "$before" ] || rm -rf "$kept"
     die "AgentOrg's Mac app of $AGENTORG_VERSION didn't start. $said, and so is its Mac app."
   fi
-  # Both answer: what was kept for going back goes.
-  rm -rf "$kept" "$ROOT/app/$from"
-  say "AgentOrg is updated to $AGENTORG_VERSION."
+  # Both answer: what was kept is the one step back, in place of any kept before, with its core.
+  local older
+  older="$(cat "$PREVIOUS/version" 2>/dev/null || true)"
+  if [ -n "$older" ] && [ "$older" != "$from" ] && [ "$older" != "$AGENTORG_VERSION" ]; then
+    rm -rf "${ROOT:?}/app/$older"
+  fi
+  rm -rf "$PREVIOUS"
+  printf '%s\n' "$from" >"$kept/version"
+  mv "$kept" "$PREVIOUS" || rm -rf "$kept" "$ROOT/app/$from"
+  say "AgentOrg is updated to $AGENTORG_VERSION. agentorg update --back puts $from back, with the home as it was just before this update."
+}
+
+# --- Going back ----------------------------------------------------------------------------------
+
+# The release before the last update, with its home as it was just before that update, from what
+# the update kept in $PREVIOUS. What runs now is kept until that one answers, so either can stand;
+# once it does, what changed since that update is gone. One step only: nothing is kept to go
+# forward again, which is an update.
+go_back() {
+  local now to ahead="$ROOT/back-ahead" status=0 old_pid running app_moved=false
+  now="$(readlink "$ROOT/app/current")"
+  to="$(cat "$PREVIOUS/version" 2>/dev/null || true)"
+  if [ -z "$to" ] || [ ! -f "$ROOT/app/$to/node_modules/@agentorg/cli/dist/src/cli.js" ]; then
+    die "There is no release to go back to: AgentOrg keeps the one before its last update, and has none."
+  fi
+  [ -f "$PREVIOUS/home/hub.db" ] ||
+    die "The home kept before the update to $now isn't a whole AgentOrg home, so AgentOrg stays at $now."
+  # An earlier go back cut off between taking the home away and putting one in left it here.
+  if [ -d "$ahead/home" ] && [ ! -e "$home" ]; then
+    mv "$ahead/home" "$home" || die "An earlier go back left AgentOrg's home at $ahead/home. Move it back to $home."
+    say "Put back the home an earlier go back kept."
+  fi
+  say "Going back to AgentOrg $to (current: $now), with its home as it was just before the update to $now."
+  rm -rf "$ahead"
+  mkdir -p "$ahead"
+  if there="$(installed_app)" && [ -f "$PREVIOUS/app.zip" ]; then
+    ditto -c -k --keepParent "$there" "$ahead/app.zip" || die "Couldn't keep a copy of the Mac app there now, so nothing was changed."
+  fi
+  "$BIN/agentorg" stop >/dev/null
+  # Forward again to what ran: its program, core and home, then its app. True when the core answers.
+  forward() {
+    "$BIN/agentorg" stop >/dev/null 2>&1 || true
+    if [ -d "$ahead/AgentOrg Core.app" ]; then
+      rm -rf "$CORE_APP" && mv "$ahead/AgentOrg Core.app" "$CORE_APP" || return 1
+    fi
+    use_core "$now"
+    if [ -d "$ahead/home" ]; then
+      rm -rf "$home" && mv "$ahead/home" "$home" || return 1
+    fi
+    write_launcher
+    start_core >/dev/null && [ -n "$(running_version)" ]
+  }
+  stays() {
+    if forward; then
+      [ "$app_moved" = false ] || [ ! -f "$ahead/app.zip" ] || place_app "$ahead/app.zip" >/dev/null || true
+      rm -rf "$ahead"
+      printf '%s' "AgentOrg $now stays, as it was"
+    else
+      printf '%s' "AgentOrg $now couldn't be started again: run agentorg start, and see $home/logs/core.log. What it ran is in $ahead"
+    fi
+  }
+  if ! mv "$home" "$ahead/home"; then
+    start_core >/dev/null || true
+    rm -rf "$ahead"
+    die "Couldn't move the home aside, so AgentOrg $now runs as it was."
+  fi
+  # A copy, so the step kept stays whole until the release before answers.
+  if ! cp -Rpc "$PREVIOUS/home/" "$home" 2>/dev/null && ! { rm -rf "$home" && cp -Rp "$PREVIOUS/home/" "$home"; }; then
+    die "Couldn't put back the home kept before the update to $now. $(stays)."
+  fi
+  if [ -d "$PREVIOUS/AgentOrg Core.app" ]; then
+    if ! { mv "$CORE_APP" "$ahead/AgentOrg Core.app" && cp -Rp "$PREVIOUS/AgentOrg Core.app" "$CORE_APP"; }; then
+      die "Couldn't put back AgentOrg Core of $to. $(stays)."
+    fi
+  fi
+  use_core "$to"
+  write_launcher
+  running="$(start_core >/dev/null && running_version || true)"
+  if [ -z "$running" ] || [ "$running" != "$(installed_version "$to")" ]; then
+    die "AgentOrg $to didn't answer. $(stays)."
+  fi
+  if [ -f "$PREVIOUS/app.zip" ]; then
+    old_pid="$(app_pid || true)"
+    app_moved=true
+    place_app "$PREVIOUS/app.zip" || status=$?
+    if [ "$status" -eq 1 ] || { [ "$status" -eq 0 ] && ! wait_app "$old_pid"; }; then
+      die "AgentOrg's Mac app of $to didn't start. $(stays)."
+    fi
+  fi
+  # The release before answers: what ran after it goes, and with it the step kept.
+  rm -rf "$ahead" "$PREVIOUS" "${ROOT:?}/app/$now"
+  say "AgentOrg is back to $to. What changed after the update to $now is gone."
 }
 
 if [ "$update" = true ] && [ ! -L "$ROOT/app/current" ]; then
   die "AgentOrg isn't installed here by this script yet. Run it without --update: $LINE"
+fi
+if [ "$going_back" = true ] && [ ! -L "$ROOT/app/current" ]; then
+  die "AgentOrg isn't installed here by this script, so there is no release to go back to."
 fi
 mkdir -p "$ROOT"
 chmod 700 "$ROOT"
@@ -455,7 +555,9 @@ if [ -z "$channel" ]; then
   if [ -L "$ROOT/app/current" ]; then channel=next; else channel=latest; fi
 fi
 printf '%s\n' "$channel" >"$ROOT/channel.tmp" && mv "$ROOT/channel.tmp" "$ROOT/channel"
-if [ -L "$ROOT/app/current" ] && { [ "$update" = true ] || [ "$(readlink "$ROOT/app/current")" != "$AGENTORG_VERSION" ]; }; then
+if [ "$going_back" = true ]; then
+  go_back
+elif [ -L "$ROOT/app/current" ] && { [ "$update" = true ] || [ "$(readlink "$ROOT/app/current")" != "$AGENTORG_VERSION" ]; }; then
   update
 else
   install

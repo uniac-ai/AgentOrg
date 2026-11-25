@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { plistPath, ServiceError, type ServiceSystem, stop } from "./service.js";
@@ -37,12 +45,22 @@ export function layout(userHome: string) {
   return {
     root,
     /**
-     * Node, the core, its bundle, what an update keeps, the channel and the update last read for
-     * it: all of it the line's own.
+     * Node, the core, its bundle, what an update keeps while it runs and once it is done, what
+     * going back keeps while it runs, the channel and the update last read for it: all of it the
+     * line's own.
      */
-    parts: ["app", "runtime", "AgentOrg Core.app", "update-backup", "channel", "update.json"].map(
-      (name) => join(root, name),
-    ),
+    parts: [
+      "app",
+      "runtime",
+      "AgentOrg Core.app",
+      "update-backup",
+      "previous",
+      "back-ahead",
+      "channel",
+      "update.json",
+    ].map((name) => join(root, name)),
+    /** What the last update kept: the release before it, with the home as it was just before. */
+    previous: join(root, "previous"),
     /** The channel the line installed from, as install.sh records it: `latest` or `next`. */
     channel: join(root, "channel"),
     launcher: join(userHome, ".local", "bin", "agentorg"),
@@ -157,24 +175,6 @@ export async function update(
   home: string,
   channel: Channel,
 ): Promise<number> {
-  /** What `url` answers; a release's file that isn't there is its release not being up yet. */
-  const fetched = async (what: string, url: string, release?: string) => {
-    let got: Buffer | number;
-    try {
-      got = await body(url);
-    } catch (error) {
-      throw new ServiceError(
-        `Couldn't fetch ${what} from ${url}: ${error instanceof Error ? error.message : String(error)}.`,
-      );
-    }
-    if (got === 404 && release !== undefined)
-      throw new ServiceError(
-        `AgentOrg ${release} is on npm, but its release isn't up yet: try again in a few minutes.`,
-      );
-    if (typeof got === "number")
-      throw new ServiceError(`Couldn't fetch ${what} from ${url}: it answered ${got}.`);
-    return got;
-  };
   let version: string;
   try {
     ({ version } = await channelRelease(from, channel));
@@ -182,11 +182,48 @@ export async function update(
     if (error instanceof ServiceError) throw new ServiceError(nothingRun(error.message));
     throw error;
   }
+  return runRelease(from, version, ["--update"], home, {
+    env: { AGENTORG_CHANNEL: channel },
+    upYet: true,
+  });
+}
+
+/**
+ * Fetch release `version`'s install.sh and SHA256SUMS from `from`, and run install.sh with `args`
+ * on `home`, with the terminal's output, once its SHA-256 is the one listed. Its exit code is the
+ * script's. With `upYet`, a file that isn't there is the release not being up yet, as npm names a
+ * version a few minutes before its release has its files.
+ */
+async function runRelease(
+  from: typeof RELEASE,
+  version: string,
+  args: string[],
+  home: string,
+  { upYet = false, env = {} }: { upYet?: boolean; env?: Record<string, string> },
+): Promise<number> {
+  /** What `url` answers. */
+  const fetched = async (what: string, url: string) => {
+    let got: Buffer | number;
+    try {
+      got = await body(url);
+    } catch (error) {
+      throw new ServiceError(
+        nothingRun(
+          `Couldn't fetch ${what} from ${url}: ${error instanceof Error ? error.message : String(error)}.`,
+        ),
+      );
+    }
+    if (got === 404 && upYet)
+      throw new ServiceError(
+        `AgentOrg ${version} is on npm, but its release isn't up yet: try again in a few minutes.`,
+      );
+    if (typeof got === "number")
+      throw new ServiceError(nothingRun(`Couldn't fetch ${what} from ${url}: it answered ${got}.`));
+    return got;
+  };
   const at = `${from.releases}/v${version}`;
-  const script = await fetched(`AgentOrg ${version}'s install.sh`, `${at}/install.sh`, version);
-  const sums = (
-    await fetched(`AgentOrg ${version}'s SHA256SUMS`, `${at}/SHA256SUMS`, version)
-  ).toString();
+  const script = await fetched(`AgentOrg ${version}'s install.sh`, `${at}/install.sh`);
+  const sums = (await fetched(`AgentOrg ${version}'s SHA256SUMS`, `${at}/SHA256SUMS`)).toString();
   const listed = sums.match(/^([0-9a-f]{64}) [ *]install\.sh$/m)?.[1];
   if (listed === undefined)
     throw new ServiceError(
@@ -202,9 +239,9 @@ export async function update(
     const file = join(folder, "install.sh");
     writeFileSync(file, script, { mode: 0o700 });
     return await new Promise((done, failed) =>
-      spawn("bash", [file, "--update"], {
+      spawn("bash", [file, ...args], {
         stdio: ["ignore", "inherit", "inherit"],
-        env: { ...process.env, AGENTORG_HUB_HOME: home, AGENTORG_CHANNEL: channel },
+        env: { ...process.env, ...env, AGENTORG_HUB_HOME: home },
       })
         .once("error", failed)
         .once("exit", (code) => done(code ?? 1)),
@@ -212,6 +249,41 @@ export async function update(
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }
+}
+
+/** The step `agentorg update --back` takes: from the release running now to the one before it. */
+export interface BackStep {
+  now: string;
+  to: string;
+}
+
+/** The one step back the line's last update kept, if there is one. */
+export function backStep(userHome: string): BackStep | undefined {
+  const { root, previous } = layout(userHome);
+  try {
+    const now = readlinkSync(join(root, "app", "current"));
+    const to = readFileSync(join(previous, "version"), "utf8").trim();
+    return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(to) && to !== now ? { now, to } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why `agentorg update --back` doesn't run: no update kept a step back. */
+export const NO_STEP_BACK =
+  "There is no release to go back to: AgentOrg keeps the one before its last update, and has none.";
+
+/** What `agentorg update --back` says before it goes: what goes back, and what is lost. */
+export const backWarning = ({ now, to }: BackStep) =>
+  `This puts back AgentOrg ${to} (current: ${now}), with its home as it was just before the update to ${now}. Everything since that update is lost: chats, agents and settings made or changed after it. It goes one step back only.`;
+
+/**
+ * `agentorg update --back`: run release `step.now`'s own install.sh, fetched and checked as
+ * `update` does, with `--back` on `home`. That script made the step back when it updated, and
+ * puts it back. Its exit code is the script's.
+ */
+export async function back(from: typeof RELEASE, home: string, step: BackStep): Promise<number> {
+  return runRelease(from, step.now, ["--back"], home, {});
 }
 
 /** The Mac app's own uninstall, as `agentorg uninstall` runs it: its privacy grants go with it. */
@@ -236,11 +308,14 @@ export async function uninstall(
 ): Promise<string[]> {
   if (system.platform !== "darwin") throw new ServiceError(ELSEWHERE);
   const { root, parts, launcher, macApps, agents } = layout(system.userHome);
-  // An update cut off before it put the home back leaves the only copy among what it kept.
-  const leftHome = join(root, "update-backup", "home");
-  if (!existsSync(home) && existsSync(leftHome))
+  // An update, or a going back, cut off before it put a home in place leaves the only copy among
+  // what it kept.
+  const leftHome = ["update-backup", "back-ahead"]
+    .map((kept) => join(root, kept, "home"))
+    .find((kept) => existsSync(kept));
+  if (!existsSync(home) && leftHome)
     throw new ServiceError(
-      `An update that didn't finish left AgentOrg's home at ${leftHome}. Move it back to ${home}, then run agentorg uninstall again.`,
+      `${leftHome.includes("back-ahead") ? "Going back a release" : "An update"} that didn't finish left AgentOrg's home at ${leftHome}. Move it back to ${home}, then run agentorg uninstall again.`,
     );
   if (deleteHome && existsSync(home) && !existsSync(join(home, "hub.db")))
     throw new ServiceError(`${home} isn't an AgentOrg home, so nothing was removed.`);

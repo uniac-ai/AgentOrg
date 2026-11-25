@@ -21,6 +21,8 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
   status                                    whether it runs, where, and as a service
   update                                    update AgentOrg and its Mac app, as the one line
                                             installed them on a Mac, on the channel it installed
+  update --back [--yes]                     put back the release before the last update, with
+                                            the home as it was then; what changed since is lost
   uninstall [--delete-home]                 remove the service and what the line installed,
                                             its Mac app too; the home stays unless --delete-home
   hub [--port N]                            run a bare Hub, without the shell
@@ -49,6 +51,8 @@ const { values, positionals } = parseArgs({
     frontend: { type: "string" },
     "no-open": { type: "boolean" },
     "delete-home": { type: "boolean" },
+    back: { type: "boolean" },
+    yes: { type: "boolean", short: "y" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean" },
   },
@@ -61,6 +65,7 @@ const [command, ...rest] = positionals as string[];
 if (command !== "hub") {
   const known = ["home", "port", "frontend", "no-open", "help", "version"];
   if (command === "uninstall") known.push("delete-home");
+  if (command === "update") known.push("back", "yes");
   const unknown = Object.keys(values).find((name) => !known.includes(name));
   if (unknown !== undefined)
     usage(
@@ -306,6 +311,18 @@ function nodeByName(): string {
   return process.execPath;
 }
 
+/** The person's yes to `question` in this terminal; no where there is no terminal to ask in. */
+async function confirmed(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const { createInterface } = await import("node:readline/promises");
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^y(es)?$/i.test((await terminal.question(question)).trim());
+  } finally {
+    terminal.close();
+  }
+}
+
 /** The service commands' view of this machine: the real `launchctl`, on this account. */
 async function serviceCommand(name: "start" | "stop" | "status" | "update" | "uninstall") {
   const service = await import("./service.js");
@@ -347,7 +364,18 @@ async function serviceCommand(name: "start" | "stop" | "status" | "update" | "un
           say: (line) => write(process.stdout, line),
         });
       else if (process.platform !== "darwin") throw new service.ServiceError(installed.ELSEWHERE);
-      else {
+      else if (values.back) {
+        const step = installed.backStep(homedir());
+        if (!step) throw new service.ServiceError(installed.NO_STEP_BACK);
+        write(process.stdout, installed.backWarning(step));
+        if (!values.yes && !(await confirmed("Go back? [y/N] ")))
+          throw new service.ServiceError(
+            process.stdin.isTTY
+              ? "Nothing was changed."
+              : "Nothing was changed: run agentorg update --back --yes to go back without being asked.",
+          );
+        process.exitCode = await installed.back(installed.RELEASE, home, step);
+      } else {
         const channel = installed.recordedChannel(homedir());
         write(process.stdout, `Checking for updates on AgentOrg's ${channel} channel...`);
         process.exitCode = await installed.update(installed.RELEASE, home, channel);
@@ -408,6 +436,7 @@ else if (["start", "stop", "status", "update", "uninstall"].includes(command)) {
   if (rest.length > 0) usage(`agentorg ${command} takes no arguments.`);
   if (values.port !== undefined || values.frontend !== undefined)
     usage(`agentorg ${command} takes no --port or --frontend.`);
+  if (values.yes && !values.back) usage("--yes goes with agentorg update --back.");
   await serviceCommand(command as "start" | "stop" | "status" | "update" | "uninstall");
 } else if (command === "open") {
   const app = running();
