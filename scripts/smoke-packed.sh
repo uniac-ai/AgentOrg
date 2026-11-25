@@ -11,10 +11,11 @@
 # - 0.0.7, 0.0.8 and 0.0.9: an agent that must still run, bound as it was (to its model and a
 #   connection's tools among others), whose two chats must become one conversation with the
 #   person, the one last written in, which takes a message;
-# - 0.0.10 to 0.0.38: an agent with an AgentOrg control unit that must still run, bound as it was,
+# - 0.0.10 to 0.0.39: an agent with an AgentOrg control unit that must still run, bound as it was,
 #   whose conversation takes a message, and whose unit's skill is this build's.
 # Bound as it was, but that this build reads an agent's settings at their second major, through the
-# same binding, and gives an agent with a control unit management's agents@1 beside its tools.
+# same binding, and gives an agent with a control unit management's agents@1 beside its tools, as
+# 0.0.39 already did.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -106,13 +107,14 @@ agent_bindings() {
     ' "$3"
 }
 # What an agent bound as $1 says is bound on this build: its settings binding, the same one, at
-# their second major, and management's agents@1 beside a control unit's tools.
+# their second major, and management's agents@1 beside a control unit's tools, where the version
+# hadn't bound them so already.
 bound_now() {
   local management
   management="$(awk '$1 == "control" { print $3 }' "$1")"
   {
     sed 's/^settings agent\.settings@1 /settings agent.settings@2 /' "$1"
-    [ -z "$management" ] || echo "agents agents@1 $management agents"
+    [ -z "$management" ] || grep -q '^agents agents@1 ' "$1" || echo "agents agents@1 $management agents"
   } | LC_ALL=C sort
 }
 # Make a connection to the MCP test fixture with `agentorg` ($1) on a home ($2), once a way to
@@ -622,7 +624,7 @@ for v in 0.0.7 0.0.8 0.0.9; do
   stop_app
 done
 
-# 0.0.10 to 0.0.38 keep one conversation with each agent where those before them kept chats, and
+# 0.0.10 to 0.0.39 keep one conversation with each agent where those before them kept chats, and
 # take the same commands, so they share this section. Each agent has an AgentOrg control unit,
 # whose skill the version copied into the home: this build brings it up to date at its first
 # start, if it isn't already.
@@ -632,7 +634,7 @@ node --input-type=module -e '
   process.stdout.write(skillFile("SKILL.md"));
 ' "$work/install/node_modules/@agentorg/cli/dist/node_modules/@agentorg/manager/dist/src/control.js" >"$work/delegating-now.md"
 [ -s "$work/delegating-now.md" ] || { echo "This build gave no delegating skill" >&2; exit 1; }
-for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0.0.20 0.0.21 0.0.22 0.0.23 0.0.24 0.0.25 0.0.26 0.0.27 0.0.28 0.0.29 0.0.30 0.0.31 0.0.32 0.0.33 0.0.34 0.0.35 0.0.36 0.0.37 0.0.38; do
+for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0.0.20 0.0.21 0.0.22 0.0.23 0.0.24 0.0.25 0.0.26 0.0.27 0.0.28 0.0.29 0.0.30 0.0.31 0.0.32 0.0.33 0.0.34 0.0.35 0.0.36 0.0.37 0.0.38 0.0.39; do
   step "a home the published $v made: its agent runs, bound as it was, its conversation takes a message, and its unit's skill is this build's"
   oldv="$work/old-$v"
   mkdir "$oldv"
