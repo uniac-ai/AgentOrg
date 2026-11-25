@@ -469,8 +469,11 @@ async function counting(request, init) {
     frontDesk,
     hearing,
     compaction,
-    // A compaction's piece of history: the long conversation's weeks whose messages it read.
-    ...(compaction ? { read: weeksRead(input) } : {}),
+    // A compaction's request: the long conversation's weeks whose messages its piece of history
+    // read, and what it was given, kept with what it wrote.
+    ...(compaction
+      ? { read: weeksRead(input), said: input.map((item) => textOf(item)).join("\n") }
+      : {}),
     // The agent's own, having read the stop: what it calls then is after it read it.
     readStop: !hearing && input.some((item) => item.role === "user" && textOf(item).endsWith(STOP)),
     colleague: typeof body.instructions === "string" && body.instructions.includes(COLLEAGUE),
@@ -527,6 +530,12 @@ async function readUsage(stream, record) {
     record.tools = (event.response?.output ?? [])
       .filter((item) => item.type === "function_call")
       .map((item) => item.name);
+    if (record.compaction)
+      record.wrote = (event.response?.output ?? [])
+        .filter((item) => item.type === "message")
+        .flatMap((item) => item.content ?? [])
+        .map((part) => part.text ?? "")
+        .join("");
     record.done = now();
     if (record.tools.some((name) => !OWN.has(name))) for (const wake of calledWaiters) wake();
     // What the front desk called beyond its own functions, with what it was given.
@@ -1020,21 +1029,28 @@ async function playLong(kept) {
         ...(ended ? {} : { cut: stoppedWhy }),
         said: text,
         seconds: round(now() - at),
-        requests: theirs.map(({ input, cached, compaction, read, tools, ...times }) => ({
-          input,
-          cached,
-          share: input ? round((100 * cached) / input) : 0,
-          ...(compaction ? { compaction: true } : {}),
-          ...(read?.length ? { read } : {}),
-          tools: tools.filter((one) => !OWN.has(one)),
-          // Seconds from its start to its first output, and to its end, completed or not.
-          ...(times.first !== undefined ? { first: round(times.first - times.at) } : {}),
-          ...(times.ended !== undefined ? { seconds: round(times.ended - times.at) } : {}),
-        })),
+        requests: theirs.map(
+          ({ input, cached, compaction, read, tools, said, wrote, ...times }) => ({
+            input,
+            cached,
+            share: input ? round((100 * cached) / input) : 0,
+            ...(compaction ? { compaction: true } : {}),
+            ...(read?.length ? { read } : {}),
+            tools: tools.filter((one) => !OWN.has(one)),
+            // Seconds from its start to its first output, and to its end, completed or not.
+            ...(times.first !== undefined ? { first: round(times.first - times.at) } : {}),
+            ...(times.ended !== undefined ? { seconds: round(times.ended - times.at) } : {}),
+          }),
+        ),
         replies: replies.filter((one) => one.at >= at).map((one) => one.text),
         compacted: theirs.some((r) => r.compaction),
       };
+      // What each of its compaction's requests was given and wrote, for the compaction to keep.
+      const summaries = theirs
+        .filter((r) => r.compaction)
+        .map(({ said, wrote }) => ({ said, wrote }));
       turns.push(turn);
+      Object.defineProperty(turn, "summaries", { value: summaries });
       console.log(
         `turn ${turn.n} (${kept.week ? `week ${kept.week}` : kept.check ? `check ${kept.check}` : kept.kind}): ${turn.requests
           .map((r) => `${r.compaction ? "summary " : ""}${r.cached}/${r.input}`)
@@ -1055,16 +1071,34 @@ async function playLong(kept) {
       const summarized = [...new Set(turn.requests.flatMap((r) => r.read ?? []))].sort(
         (a, b) => a - b,
       );
-      compactions.push({ turn: turn.n, week: week.week, summarized, checks: {} });
+      compactions.push({
+        turn: turn.n,
+        week: week.week,
+        summarized,
+        checks: {},
+        requests: turn.summaries,
+      });
       const k = compactions.length;
       const covered = weeks[(summarized[0] ?? week.week - 1) - 1] ?? weeks[0];
       compactions[k - 1].asked = covered.week;
-      for (const check of long.checks(k, covered)) {
+      // For the question only the summary can answer: a week the first compaction summarized,
+      // its kth, so a later one asks what came through the summaries that updated it; or, past
+      // those, the kth week this one summarized.
+      const first = compactions[0].summarized;
+      const of = first[k - 1] ?? summarized[k - 1] ?? summarized[0];
+      const remembered = of === undefined ? undefined : weeks[of - 1];
+      if (remembered) compactions[k - 1].remembered = remembered.week;
+      for (const check of long.checks(k, covered, remembered)) {
         if (stoppedWhy) break;
         const asked = await say(check.say, { kind: "check", check: check.id, after: k });
         const memory = memoryOf(agent);
         asked.memory = memory;
-        asked.pass = check.pass(asked.replies.join("\n\n"), memory);
+        asked.pass = check.pass(
+          asked.replies.join("\n\n"),
+          memory,
+          asked.requests.flatMap((r) => r.tools),
+        );
+        if (check.inMemory) asked.inMemory = check.inMemory(memory);
         if (check.expected) asked.expected = check.expected;
         compactions[k - 1].checks[check.id] = asked.pass;
       }

@@ -7,7 +7,8 @@
 //
 // The tickets are made here from a fixed seed, so every run reads the same files and the checks
 // know the answers: each week has at least one refund over €500, and some tickets mention a
-// chargeback, which the person asks to have listed from week 3 on.
+// chargeback, which the person asks to have listed from week 3 on. Each region's issues are counted
+// from its file, for a question only the summary of a week can answer.
 
 export const REGIONS = [
   {
@@ -168,6 +169,8 @@ export function tickets() {
   for (let week = 1; week <= WEEKS; week++) {
     const refunds = [];
     const chargebacks = [];
+    /** Each region's issues, most tickets first, counted from its file. */
+    const issues = {};
     // At least one big refund a week, in a region of its own; another region may have one too.
     const bigIn = new Set([Math.floor(random() * 4)]);
     if (random() < 0.4) bigIn.add(Math.floor(random() * 4));
@@ -236,8 +239,12 @@ export function tickets() {
         refunds.push({ id: last.id, region: region.code, amount });
       }
       files[`${weekFolder(week)}/${region.name}.txt`] = lines.join("\n");
+      const counts = {};
+      for (const [, issue] of lines.join("\n").matchAll(/ · issue: ([^\n]+)/g))
+        counts[issue] = (counts[issue] ?? 0) + 1;
+      issues[region.code] = Object.entries(counts).sort((a, b) => b[1] - a[1]);
     }
-    weeks.push({ week, refunds, chargebacks });
+    weeks.push({ week, refunds, chargebacks, issues });
   }
   return { files, weeks };
 }
@@ -251,14 +258,56 @@ export const SAY = {
     `${week === CHARGEBACKS_FROM ? "From this week on, also list every ticket that mentions a chargeback. " : ""}Week ${week}: read the four region files in ${weekFolder(week)} in full, and add week ${week} to the digest: for each region, its two most common issues, and every refund over €500 with its ticket number.`,
 };
 
+/** How a reply may name each issue, in its own words or the export's. */
+const SAID = {
+  "late delivery": /\blate\b|deliver|courier|delay/i,
+  "damaged on arrival": /damag|broken|crack/i,
+  "charged twice": /charged twice|double|duplicate/i,
+  "can't log in to the app": /log ?in|sign ?in|\bapp\b/i,
+  "warranty repair": /warranty|repair/i,
+  "missing parts": /missing|parts/i,
+  "subscription cancellation": /subscri|cancel/i,
+};
+
+/**
+ * The question only the summary can answer, after compaction `k`: a region's two most common
+ * issues in `week`, a week the summary covers, asked to be answered without opening a file. The
+ * region is the first, from the `k`th, whose second issue has more tickets than its third. It holds
+ * when the reply names both, no tool was called for it, and no memory line holds them.
+ */
+function recalled(k, week) {
+  const codes = REGIONS.map(({ code }) => code);
+  const order = [...codes.slice((k - 1) % 4), ...codes.slice(0, (k - 1) % 4)];
+  const region =
+    order.find((code) => (week.issues[code][1]?.[1] ?? 0) > (week.issues[code][2]?.[1] ?? 0)) ??
+    order[0];
+  const top = week.issues[region].slice(0, 2).map(([issue]) => issue);
+  const inMemory = (memory) =>
+    memory.some(
+      (line) =>
+        new RegExp(`week\\s*${week.week}\\b`, "i").test(line) ||
+        top.every((issue) => SAID[issue].test(line)),
+    );
+  return {
+    id: "summary",
+    say: `From what you remember of our conversation, without opening any file: what were ${region}'s two most common issues in week ${week.week}?`,
+    expected: { week: week.week, region, issues: top },
+    inMemory,
+    pass: (reply, memory, tools) =>
+      tools.length === 0 && top.every((issue) => SAID[issue].test(reply)) && !inMemory(memory),
+  };
+}
+
 /** Amounts written with a thousands separator read as plain digits. */
 const digits = (text) => text.replace(/(\d)[\s,.  ](?=\d{3}\b)/g, "$1");
 
 /**
- * The three questions after compaction `k`, each with its check of the reply and of the agent's
- * memory lines. `week` is a week the compaction covered, with its refunds.
+ * The questions after compaction `k`, each with its check of the reply, of the agent's memory
+ * lines and of the tools it called. `week` is a week the compaction covered, with its refunds.
+ * `remembered`, a week the summary covers, comes first: before any question the agent might open
+ * the digest for, which would put the weeks back in what it reads.
  */
-export function checks(k, week) {
+export function checks(k, week, remembered) {
   const largest = week.refunds.reduce((a, b) => (b.amount > a.amount ? b : a));
   const asked = [
     { region: "DK", amount: 640, what: "a damaged blender" },
@@ -266,6 +315,7 @@ export function checks(k, week) {
     { region: "FI", amount: 980, what: "a double charge" },
   ][(k - 1) % 3];
   return [
+    ...(remembered ? [recalled(k, remembered)] : []),
     {
       id: "start",
       say: "Quick check before we go on: where are you keeping the digest, and which codes did I ask you to use for the regions?",
