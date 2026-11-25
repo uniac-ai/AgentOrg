@@ -89,7 +89,10 @@ test(
     (gateway.agents.get("a-triage") as Agent).avatar = "not-an-avatar";
     const page = await open(gateway, "#/team");
     await page.locator('[data-face="a-broken"]').waitFor();
-    const seen = new Map((await faces(page)).map((face) => [face.agent, face]));
+    // The list's faces, still pictures; the open agent's page beside it has a live one.
+    const seen = new Map(
+      (await faces(page)).filter((face) => !face.live).map((face) => [face.agent, face]),
+    );
     assert.equal(
       seen.get("a-research")?.picture,
       toSvg(gateway.agents.get("a-research")?.avatar as string),
@@ -139,6 +142,9 @@ test(
         [...eyes].every((eye) => eye.getBBox().height < eye.getBBox().width / 2)
       );
     });
+    // On the agent's own page, under Team, its face is live too.
+    await page.goto(`${gateway.url}/#/a/a-research`);
+    await page.locator('header [data-face="a-research"] svg path').first().waitFor();
     await page.close();
   }),
 );
