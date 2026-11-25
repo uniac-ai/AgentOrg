@@ -338,9 +338,9 @@ export async function startPrograms(
   /**
    * The first Assistant, on a home with no agents: once AgentOrg Mac's service answers, its parts
    * are switched on, once, and one agent is made with its computer, the screen when it can be
-   * had, the web, and its own agents. The file under `programs` says how far it got, so a start
-   * that didn't finish goes on from there without switching anything again. A home that has
-   * agents, or gets one while the app waits, gets none.
+   * had, the web, its own agents, and memory. The file under `programs` says how far it got, so
+   * a start that didn't finish goes on from there without switching anything again. A home that
+   * has agents, or gets one while the app waits, gets none.
    */
   const made = join(root, MADE_FILE);
   const kept = (() => {
@@ -399,6 +399,8 @@ export async function startPrograms(
         },
         { provider: computer, unit: "web", values: { service: "exa" } },
         { provider: management, unit: "control", values: FIRST_CONTROL },
+        // Management's Memory unit asks nothing: it is named with no values.
+        { provider: management, unit: "memory" },
       ],
     };
     // Why this computer can't be had now, if it can't: its unit's check says.
