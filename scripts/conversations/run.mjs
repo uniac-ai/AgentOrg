@@ -346,13 +346,17 @@ const SUMMARIZING = "You are a context summarization assistant.";
 const STOP = GROUPS.flatMap((group) => group.steps).find((step) => step.n === 12)?.say;
 /**
  * The weeks of the long conversation a compaction's request read, by the person's "Week N: read"
- * messages in the history it was given to summarize; none from a split turn's own piece, which
- * keeps the turn's opening apart.
+ * messages in what it was given: `read` from a piece of history, `opened` from a split turn's own
+ * piece, which holds that turn's opening message, its aside too, and none of its results.
  */
-const weeksRead = (input) => {
+const weeksOf = (input) => {
   const text = input.map((item) => textOf(item)).join("\n");
-  if (!text.startsWith("<conversation>")) return [];
-  return [...new Set([...text.matchAll(/Week (\d+): read/g)].map((match) => Number(match[1])))];
+  const weeks = [
+    ...new Set([...text.matchAll(/Week (\d+): read/g)].map((match) => Number(match[1]))),
+  ];
+  if (text.startsWith("<conversation>")) return { read: weeks };
+  if (text.startsWith("# Conversation")) return { opened: weeks };
+  return {};
 };
 /** A message's text, as a request's input holds it. */
 const textOf = (item) =>
@@ -472,7 +476,7 @@ async function counting(request, init) {
     // A compaction's request: the long conversation's weeks whose messages its piece of history
     // read, and what it was given, kept with what it wrote.
     ...(compaction
-      ? { read: weeksRead(input), said: input.map((item) => textOf(item)).join("\n") }
+      ? { ...weeksOf(input), said: input.map((item) => textOf(item)).join("\n") }
       : {}),
     // The agent's own, having read the stop: what it calls then is after it read it.
     readStop: !hearing && input.some((item) => item.role === "user" && textOf(item).endsWith(STOP)),
@@ -1030,12 +1034,13 @@ async function playLong(kept) {
         said: text,
         seconds: round(now() - at),
         requests: theirs.map(
-          ({ input, cached, compaction, read, tools, said, wrote, ...times }) => ({
+          ({ input, cached, compaction, read, opened, tools, said, wrote, ...times }) => ({
             input,
             cached,
             share: input ? round((100 * cached) / input) : 0,
             ...(compaction ? { compaction: true } : {}),
             ...(read?.length ? { read } : {}),
+            ...(opened?.length ? { opened } : {}),
             tools: tools.filter((one) => !OWN.has(one)),
             // Seconds from its start to its first output, and to its end, completed or not.
             ...(times.first !== undefined ? { first: round(times.first - times.at) } : {}),
@@ -1068,33 +1073,38 @@ async function playLong(kept) {
       // The weeks its summary request read, the earliest of which the step check asks about; with
       // none read, as when only questions came between it and the compaction before, the week
       // before this one.
-      const summarized = [...new Set(turn.requests.flatMap((r) => r.read ?? []))].sort(
-        (a, b) => a - b,
-      );
+      const weeksIn = (key) =>
+        [...new Set(turn.requests.flatMap((r) => r[key] ?? []))].sort((a, b) => a - b);
+      const summarized = weeksIn("read");
+      // The weeks whose opening its split turn summarized: their asides are in what it was given.
+      const opened = weeksIn("opened");
       compactions.push({
         turn: turn.n,
         week: week.week,
         summarized,
+        opened,
         checks: {},
         requests: turn.summaries,
       });
       const k = compactions.length;
       const covered = weeks[(summarized[0] ?? week.week - 1) - 1] ?? weeks[0];
       compactions[k - 1].asked = covered.week;
-      // The asides asked about, each a week not asked before where there is one: one this
-      // compaction's summary read, its last for the first compaction, which leaves its earlier
-      // weeks for later; and after a later compaction, one the first summarized too, which came
-      // through the summaries that updated it.
+      // The asides asked about, never a week asked about before: one whose message this
+      // compaction's summary read, in its history or its split turn, the last for the first
+      // compaction, which leaves its earlier weeks for later; and after a later compaction, one
+      // the first summarized too, which came through the summaries that updated it. None where
+      // every such week was asked about already.
       const before = new Set(compactions.flatMap((one) => (one.asides ?? []).map((a) => a.week)));
       const unasked = (span) => span.filter((one) => !before.has(one));
+      const spanOf = (one) =>
+        [...new Set([...one.summarized, ...one.opened])].sort((a, b) => a - b);
       const asides = [];
-      const own = k === 1 ? unasked(summarized).at(-1) : unasked(summarized)[0];
+      const own =
+        k === 1 ? unasked(spanOf(compactions[0])).at(-1) : unasked(spanOf(compactions[k - 1]))[0];
       if (own !== undefined) asides.push({ week: own, id: "aside" });
       if (k > 1) {
-        const first = compactions[0].summarized.filter((one) => one !== own);
-        const fresh = unasked(first)[0];
+        const fresh = unasked(spanOf(compactions[0])).find((one) => one !== own);
         if (fresh !== undefined) asides.push({ week: fresh, id: "aside-first" });
-        else if (first.length > 0) asides.push({ week: first[0], id: "aside-first", again: true });
       }
       compactions[k - 1].asides = asides;
       for (const check of long.checks(k, covered, asides)) {
