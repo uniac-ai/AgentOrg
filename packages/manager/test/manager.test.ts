@@ -1665,6 +1665,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
       ["mcp", "Management"],
       ["control", "Management"],
       ["skill", "Management"],
+      ["memory", "Management"],
       ["files", "Units"],
       ["machine", "Units"],
       ["desk", "Units"],
@@ -1681,7 +1682,7 @@ test("every unit on offer is listed, management's own among them", async (t) => 
   // What a host reads to leave a unit out of a stack that has it.
   assert.deepEqual(
     units.filter((one) => one.once).map((one) => one.id),
-    ["desk", "badge"],
+    ["memory", "desk", "badge"],
   );
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("library-one") } });
   const again = (await s.calls.agents.units({})).units[2];
@@ -4237,7 +4238,7 @@ test("an agent whose creatable gives it a capability holds it with no unit, the 
   assert.ok((await bound()).includes(`${now?.person?.operations.work} ${agent} tools`));
 });
 
-test("the Memory unit builds a capability made of the memory plugin, with no Actor: the agent's settings say it, and the unit isn't among those on offer", async (t) => {
+test("the Memory unit builds a capability made of the memory plugin, with no Actor: the agent's settings say it, and the unit is on offer", async (t) => {
   const s = await setup(t);
   const actors = await s.openActors();
   const reached = async () =>
@@ -4280,9 +4281,12 @@ test("the Memory unit builds a capability made of the memory plugin, with no Act
   const kept = () =>
     JSON.parse(readFileSync(join(s.dir, "manager.json"), "utf8")).agents[agent].capabilities;
   assert.deepEqual(kept(), [built]);
-  // The unit isn't among those on offer, though a stack names it: what it tells the agent, and
-  // whose its lines are, come before a person is offered it.
-  assert.ok(!(await s.calls.agents.units({})).units.some((one) => one.id === "memory"));
+  // The unit is on offer, for a person to add to an agent once, with nothing to fill in.
+  const offered = (await s.calls.agents.units({})).units.find((one) => one.id === "memory");
+  assert.deepEqual(
+    [offered?.provider, offered?.title, offered?.once, offered?.form],
+    [s.management.actorId, "Memory", true, []],
+  );
 
   // Taken off, the agent is told and holds no plugin; added to it living, it is told again.
   await s.calls.agents.removeUnit({ agent, instance: built.from as string });

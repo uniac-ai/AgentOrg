@@ -1987,15 +1987,10 @@ export function createStacks(parts: StackParts) {
       ]);
       return {
         bases: bases.flat(),
-        // What the MCP unit stands for isn't listed apart from it. Nor is the Memory unit, which a
-        // stack or a template names: what it tells the agent, and whose its lines are, come before
-        // a person is offered it.
+        // What the MCP unit stands for isn't listed apart from it.
         units: offers
-          .filter(
-            ({ unit, provider }) =>
-              !(provider === self
-                ? [CONNECTION_UNIT, MEMORY_UNIT].includes(unit.id)
-                : slotFieldOf(unit)),
+          .filter(({ unit, provider }) =>
+            provider === self ? unit.id !== CONNECTION_UNIT : !slotFieldOf(unit),
           )
           .map(({ unit, provider, providerName }) => ({ ...unit, provider, providerName })),
       };
