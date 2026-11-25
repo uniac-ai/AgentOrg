@@ -382,13 +382,12 @@ test("an agent given Memory keeps a line it writes, and is told it at its next t
     redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
   });
   await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
-  // Made from a stack that names management's Memory unit, which isn't on offer: management is
-  // found as the provider of its own Skill unit, which is.
+  // Made from a stack that names management's Memory unit, as it is on offer.
   const { units } = await person.call<{ units: { id: string; provider: string }[] }>(
     "agents",
     "units",
   );
-  const management = units.find((one) => one.id === "skill")?.provider;
+  const management = units.find((one) => one.id === "memory")?.provider;
   assert.ok(management);
   const { creatables } = await person.call<{ creatables: { provider: string; id: string }[] }>(
     "agents",
