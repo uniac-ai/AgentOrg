@@ -9,13 +9,13 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { CHANNEL } from "../src/installed.ts";
 
 // dist/test/install.test.js → the repository's root, its install.sh and its pin of the Mac app.
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
@@ -24,12 +24,21 @@ const pinned = join(root, "mac-app.json");
 
 /**
  * install.sh on a machine its stand-ins describe: `uname`, `sysctl`, `sw_vers` and `id` answer as
- * `machine` says, first on the PATH. An account folder of its own is its HOME, so nothing of this one's is
- * touched. Each case here is refused before the script writes anything.
+ * `machine` says, first on the PATH; `curl` and `ditto` fail, so nothing is downloaded or unpacked.
+ * An account folder of its own is its HOME, made as `machine.account` says, with the Mac app's
+ * folder inside it, so nothing of this one's is touched. Each case here stops before the script
+ * installs anything.
  */
 async function install(
   t: test.TestContext,
-  machine: { system?: string; arm64?: string; macos?: string; uid?: string },
+  machine: {
+    system?: string;
+    arm64?: string;
+    macos?: string;
+    uid?: string;
+    env?: Record<string, string>;
+    account?: (account: string) => void;
+  },
   ...args: string[]
 ) {
   const root = mkdtempSync(join(tmpdir(), "agentorg-install-"));
@@ -38,6 +47,7 @@ async function install(
   const account = join(root, "account");
   mkdirSync(bin);
   mkdirSync(account);
+  machine.account?.(account);
   const standIn = (name: string, body: string) => {
     writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
     chmodSync(join(bin, name), 0o755);
@@ -47,16 +57,31 @@ async function install(
   standIn("sysctl", `echo ${machine.arm64 ?? "1"}`);
   standIn("sw_vers", `echo ${machine.macos ?? "15.4"}`);
   standIn("id", `echo ${machine.uid ?? "501"}`);
+  standIn("curl", "exit 7");
+  standIn("ditto", "exit 1");
   const result = await new Promise<{ code: number; stdout: string; stderr: string }>((done) =>
     execFile(
       "bash",
       [script, ...args],
-      { env: { HOME: account, PATH: `${bin}:/usr/bin:/bin` }, timeout: 30_000 },
+      {
+        env: {
+          HOME: account,
+          PATH: `${bin}:/usr/bin:/bin`,
+          AGENTORG_APP_DIR: join(account, "Applications"),
+          ...machine.env,
+        },
+        timeout: 30_000,
+      },
       (error, stdout, stderr) =>
         done({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }),
     ),
   );
-  return { ...result, wrote: existsSync(join(account, ".agentorg")) };
+  const recorded = join(account, ".agentorg", "channel");
+  return {
+    ...result,
+    wrote: existsSync(join(account, ".agentorg")),
+    channel: existsSync(recorded) ? readFileSync(recorded, "utf8") : undefined,
+  };
 }
 
 test("install.sh refuses anything but a Mac with Apple silicon and macOS 13 or later, run as the person, and writes nothing then", async (t) => {
@@ -96,6 +121,53 @@ test("install.sh says what it takes, and refuses an option it doesn't know or a 
     assert.equal(unpublished.code, 1);
     assert.match(unpublished.stderr, /^AgentOrg's Mac app for \d+\.\d+\.\d+ isn't published yet/);
     assert.equal(unpublished.wrote, false);
+  }
+});
+
+test("install.sh records the channel named, else the one recorded, else next for an install from before, else latest, and refuses another", async (t) => {
+  const app = join(mkdtempSync(join(tmpdir(), "agentorg-app-")), "AgentOrg.zip");
+  t.after(() => rmSync(dirname(app), { recursive: true, force: true }));
+  writeFileSync(app, "not a zip");
+  const recorded = (channel: string) => (account: string) => {
+    mkdirSync(join(account, ".agentorg"), { recursive: true });
+    writeFileSync(join(account, ".agentorg", "channel"), `${channel}\n`);
+  };
+  // An install the line made before channels were recorded: its core, and no record.
+  const before = (account: string) => {
+    mkdirSync(join(account, ".agentorg", "app"), { recursive: true });
+    symlinkSync("0.0.1", join(account, ".agentorg", "app", "current"));
+  };
+  for (const [machine, args, channel] of [
+    [{}, [], "latest"],
+    [{}, ["--channel", "next"], "next"],
+    [{ env: { AGENTORG_CHANNEL: "next" } }, [], "next"],
+    [{ env: { AGENTORG_CHANNEL: "next" } }, ["--channel", "latest"], "latest"],
+    [{ account: recorded("next") }, [], "next"],
+    [{ account: recorded("next") }, ["--channel", "latest"], "latest"],
+    [{ account: recorded("beta") }, [], "latest"],
+    [{ account: before }, [], "next"],
+    [{ account: before }, ["--update"], "next"],
+    [{ account: before }, ["--channel", "latest"], "latest"],
+  ] as const) {
+    // It stops at the Mac app, which the stand-ins can't unpack, or at Node, which they can't fetch.
+    const ran = await install(t, machine, ...args, "--app", app);
+    assert.equal(ran.code, 1, ran.stderr);
+    assert.equal(ran.channel, `${channel}\n`, JSON.stringify([machine.env, args]));
+  }
+  for (const [machine, args, says] of [
+    [{}, ["--channel", "beta", "--app", app], "AgentOrg's channels are latest and next, not beta."],
+    [
+      { env: { AGENTORG_CHANNEL: "beta" } },
+      ["--app", app],
+      "AgentOrg's channels are latest and next, not beta.",
+    ],
+    [{}, ["--app", app, "--channel"], "--channel takes latest or next."],
+    [{}, ["--app", app, "--update"], "AgentOrg isn't installed here by this script yet."],
+  ] as const) {
+    const refused = await install(t, machine, ...args);
+    assert.equal(refused.code, 1);
+    assert.equal(refused.stderr.replace(/ Run it without --update: .*/, "").trimEnd(), says);
+    assert.equal(refused.channel, undefined, "no channel is recorded");
   }
 });
 
@@ -284,11 +356,15 @@ cp "$file" "$out"
     tags[channel] = version;
     writeFileSync(join(served, "dist-tags"), JSON.stringify(tags));
   };
-  /** A release whose install.sh records its arguments' count and them in `ran`, and SHA256SUMS as `sums` writes it. */
+  const given = join(at, "given");
+  /**
+   * A release whose install.sh records its arguments' count and them in `ran`, and the channel it
+   * was given in `given`, and SHA256SUMS as `sums` writes it.
+   */
   const release = (version: string, sums = (sum: string) => `${sum}  install.sh\n`) => {
     const folder = join(served, "releases", `v${version}`);
     mkdirSync(folder, { recursive: true });
-    const script = `printf '%s\\n' "$#" "$@" > '${ran}'\nexit 3\n`;
+    const script = `printf '%s\\n' "$#" "$@" > '${ran}'\nprintf '%s' "\${AGENTORG_CHANNEL-none}" > '${given}'\nexit 3\n`;
     writeFileSync(join(folder, "install.sh"), script);
     const sum = createHash("sha256").update(script).digest("hex");
     writeFileSync(join(folder, "SHA256SUMS"), sums(sum));
@@ -296,7 +372,8 @@ cp "$file" "$out"
   };
   /** get.sh run with `args`, or, given `piped`, that text piped into `bash -s --` with `args`. */
   const run = (env: Record<string, string>, args: string[], piped?: string) => {
-    for (const record of ["asked", "options", "ran"]) rmSync(join(at, record), { force: true });
+    for (const record of ["asked", "options", "ran", "given"])
+      rmSync(join(at, record), { force: true });
     return new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
       const child = execFile(
         "bash",
@@ -329,6 +406,12 @@ cp "$file" "$out"
     asked: () => lines("asked"),
     options: () => lines("options"),
     ran: () => (existsSync(ran) ? readFileSync(ran, "utf8") : undefined),
+    given: () => (existsSync(given) ? readFileSync(given, "utf8") : undefined),
+    /** The channel install.sh recorded in the account, as it writes it. */
+    record: (channel: string) => {
+      mkdirSync(join(at, "account", ".agentorg"), { recursive: true });
+      writeFileSync(join(at, "account", ".agentorg", "channel"), `${channel}\n`);
+    },
     left: () => readdirSync(temp),
   };
 }
@@ -346,7 +429,8 @@ test("get.sh reads next's version, fetches that release's install.sh and SHA256S
   assert.equal(got.code, 3, got.stderr);
   assert.equal(got.stdout, "Installing AgentOrg 0.0.31, the next channel's release.\n");
   assert.equal(get.ran(), "2\n--update\n--no-open\n");
-  assert.equal(CHANNEL, "next");
+  // install.sh is told the channel, to record it, in a variable an older one ignores.
+  assert.equal(get.given(), "next");
   assert.deepEqual(get.asked(), [
     tagsAt,
     `${download}/v0.0.31/install.sh`,
@@ -377,6 +461,7 @@ test("get.sh reads latest's version with --channel latest or AGENTORG_CHANNEL=la
     assert.equal(got.code, 3, got.stderr);
     assert.equal(got.stdout, "Installing AgentOrg 0.0.30, the latest channel's release.\n");
     assert.equal(get.ran(), "1\n--no-open\n");
+    assert.equal(get.given(), "latest");
     assert.deepEqual(get.asked(), [
       tagsAt,
       `${download}/v0.0.30/install.sh`,
@@ -387,6 +472,27 @@ test("get.sh reads latest's version with --channel latest or AGENTORG_CHANNEL=la
   assert.equal(wrong.code, 1);
   assert.equal(wrong.stderr, "AgentOrg's channels are latest and next, not beta.\n");
   assert.deepEqual(get.asked(), []);
+});
+
+test("get.sh follows the channel install.sh recorded, unless one is named, and next where none or another is", async (t) => {
+  const get = getter(t);
+  get.tag("latest", "0.0.30");
+  get.tag("next", "0.0.31");
+  get.release("0.0.31");
+  get.release("0.0.30");
+  for (const [recorded, env, args, channel, version] of [
+    ["latest", {}, ["--update"], "latest", "0.0.30"],
+    ["next", {}, ["--update"], "next", "0.0.31"],
+    ["latest", {}, ["--channel", "next"], "next", "0.0.31"],
+    ["latest", { AGENTORG_CHANNEL: "next" }, [], "next", "0.0.31"],
+    ["beta", {}, [], "next", "0.0.31"],
+  ] as const) {
+    get.record(recorded);
+    const got = await get.run(env, [...args]);
+    assert.equal(got.code, 3, got.stderr);
+    assert.equal(got.stdout, `Installing AgentOrg ${version}, the ${channel} channel's release.\n`);
+    assert.equal(get.given(), channel, recorded);
+  }
 });
 
 test("get.sh runs nothing when install.sh's sum differs, SHA256SUMS has no line for it, the version isn't one, or a fetch fails", async (t) => {

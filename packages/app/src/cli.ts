@@ -20,7 +20,7 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
   stop                                      stop the service, until agentorg start
   status                                    whether it runs, where, and as a service
   update                                    update AgentOrg and its Mac app, as the one line
-                                            installed them on a Mac
+                                            installed them on a Mac, on the channel it installed
   uninstall [--delete-home]                 remove the service and what the line installed,
                                             its Mac app too; the home stays unless --delete-home
   hub [--port N]                            run a bare Hub, without the shell
@@ -342,7 +342,11 @@ async function serviceCommand(name: "start" | "stop" | "status" | "update" | "un
           say: (line) => write(process.stdout, line),
         });
       else if (process.platform !== "darwin") throw new service.ServiceError(installed.ELSEWHERE);
-      else process.exitCode = await installed.update(installed.RELEASE, home);
+      else {
+        const channel = installed.recordedChannel(homedir());
+        write(process.stdout, `Checking for updates on AgentOrg's ${channel} channel...`);
+        process.exitCode = await installed.update(installed.RELEASE, home, channel);
+      }
     } else if (name === "status") {
       const { lines, running: answers } = await service.status(system, home);
       for (const line of lines) write(process.stdout, line);

@@ -7,8 +7,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash -s -- --update
 #
-# The channel is next, or latest with `bash -s -- --channel latest`, or `AGENTORG_CHANNEL=latest
-# bash`. Every other argument goes to install.sh. The last line is in braces, so a download cut off
+# The channel is the one `bash -s -- --channel latest` or `AGENTORG_CHANNEL=latest bash` names; else
+# the one install.sh recorded in ~/.agentorg/channel; else next. install.sh is given it in
+# AGENTORG_CHANNEL, which a release's install.sh from before it recorded channels ignores, and records
+# it. Every other argument goes to install.sh. The last line is in braces, so a download cut off
 # anywhere is a syntax error or calls nothing. agentorg update (packages/app/src/installed.ts) reads
 # the same addresses: they change together.
 set -euo pipefail
@@ -31,7 +33,7 @@ fetch() {
 }
 
 main() {
-  local channel="${AGENTORG_CHANNEL:-next}" args=() version="" listed got
+  local channel="${AGENTORG_CHANNEL:-}" args=() version="" listed got
   while [ $# -gt 0 ]; do
     case "$1" in
     --channel)
@@ -43,6 +45,10 @@ main() {
     esac
     shift
   done
+  if [ -z "$channel" ]; then
+    channel="$(cat "$HOME/.agentorg/channel" 2>/dev/null || true)"
+    case "$channel" in latest | next) ;; *) channel=next ;; esac
+  fi
   case "$channel" in latest | next) ;; *) die "AgentOrg's channels are latest and next, not $channel." ;; esac
 
   # Global, not local: the EXIT trap runs after main has returned, and still needs it.
@@ -61,7 +67,7 @@ main() {
     die "install.sh of AgentOrg $version isn't the one its SHA256SUMS lists (its SHA-256 is $got), so nothing was installed."
 
   printf '%s\n' "Installing AgentOrg $version, the $channel channel's release."
-  bash "$work/install.sh" ${args[@]+"${args[@]}"}
+  AGENTORG_CHANNEL="$channel" bash "$work/install.sh" ${args[@]+"${args[@]}"}
 }
 
 { main "$@"; }

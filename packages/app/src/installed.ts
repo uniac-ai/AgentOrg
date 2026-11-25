@@ -5,8 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { plistPath, ServiceError, type ServiceSystem, stop } from "./service.js";
 
-/** The npm dist-tag of @agentorg/cli whose release `agentorg update` moves to: next, until decided. */
-export const CHANNEL = "next";
+/** AgentOrg's channels: npm's dist-tags of @agentorg/cli, each naming one release. */
+export const CHANNELS = ["latest", "next"] as const;
+export type Channel = (typeof CHANNELS)[number];
+/**
+ * The channel an install made before channels were recorded follows: every line until then
+ * installed `next`, as get.sh does by default.
+ */
+export const UNRECORDED: Channel = "next";
 /**
  * Where `agentorg update` reads npm's dist-tags, `{"latest": …, "next": …}`, and fetches the
  * channel's release's install.sh and SHA256SUMS, at `<releases>/v<version>/`. get.sh, the line's
@@ -28,8 +34,12 @@ export function layout(userHome: string) {
   const root = join(userHome, ".agentorg");
   return {
     root,
-    /** Node, the core, its bundle and what an update keeps: all of it the line's own. */
-    parts: ["app", "runtime", "AgentOrg Core.app", "update-backup"].map((name) => join(root, name)),
+    /** Node, the core, its bundle, what an update keeps and the channel: all of it the line's own. */
+    parts: ["app", "runtime", "AgentOrg Core.app", "update-backup", "channel"].map((name) =>
+      join(root, name),
+    ),
+    /** The channel the line installed from, as install.sh records it: `latest` or `next`. */
+    channel: join(root, "channel"),
     launcher: join(userHome, ".local", "bin", "agentorg"),
     /** Where the line puts the Mac app: the one folder AGENTORG_APP_DIR names, as for the script. */
     macApps: (process.env.AGENTORG_APP_DIR
@@ -38,6 +48,15 @@ export function layout(userHome: string) {
     ).map((at) => join(at, "AgentOrg.app")),
     agents: join(userHome, "Agents"),
   };
+}
+
+/** The channel `agentorg update` follows: the one the line recorded, else `UNRECORDED`. */
+export function recordedChannel(userHome: string): Channel {
+  let recorded: string | undefined;
+  try {
+    recorded = readFileSync(layout(userHome).channel, "utf8").trim();
+  } catch {}
+  return CHANNELS.find((channel) => channel === recorded) ?? UNRECORDED;
 }
 
 /**
@@ -63,12 +82,17 @@ async function body(url: string): Promise<Buffer | number> {
 }
 
 /**
- * `agentorg update`: read the version npm's `CHANNEL` names, fetch that release's install.sh and
- * SHA256SUMS from `from`, and run install.sh with `--update` on `home`, with the terminal's output,
- * once its SHA-256 is the one listed. It updates the core and the Mac app together, or puts both
- * back. Its exit code is the script's.
+ * `agentorg update`: read the version npm's `channel` names, the one the line recorded, fetch that
+ * release's install.sh and SHA256SUMS from `from`, and run install.sh with `--update` on `home`,
+ * with the terminal's output, once its SHA-256 is the one listed. install.sh is given the channel
+ * in AGENTORG_CHANNEL, so it keeps that record. It updates the core and the Mac app together, or
+ * puts both back. Its exit code is the script's.
  */
-export async function update(from: typeof RELEASE, home: string): Promise<number> {
+export async function update(
+  from: typeof RELEASE,
+  home: string,
+  channel: Channel,
+): Promise<number> {
   /** What `url` answers; a release's file that isn't there is its release not being up yet. */
   const fetched = async (what: string, url: string, release?: string) => {
     let got: Buffer | number;
@@ -90,11 +114,11 @@ export async function update(from: typeof RELEASE, home: string): Promise<number
   const tags = await fetched("npm's dist-tags", from.tags);
   let version: unknown;
   try {
-    version = JSON.parse(tags.toString())[CHANNEL];
+    version = JSON.parse(tags.toString())[channel];
   } catch {}
   if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
     throw new ServiceError(
-      `npm names no version for AgentOrg's ${CHANNEL} channel, so nothing was run.`,
+      `npm names no version for AgentOrg's ${channel} channel, so nothing was run.`,
     );
   const at = `${from.releases}/v${version}`;
   const script = await fetched(`AgentOrg ${version}'s install.sh`, `${at}/install.sh`, version);
@@ -118,7 +142,7 @@ export async function update(from: typeof RELEASE, home: string): Promise<number
     return await new Promise((done, failed) =>
       spawn("bash", [file, "--update"], {
         stdio: ["ignore", "inherit", "inherit"],
-        env: { ...process.env, AGENTORG_HUB_HOME: home },
+        env: { ...process.env, AGENTORG_HUB_HOME: home, AGENTORG_CHANNEL: channel },
       })
         .once("error", failed)
         .once("exit", (code) => done(code ?? 1)),

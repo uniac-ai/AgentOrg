@@ -13,6 +13,12 @@
 # get.sh fetches this script from the release npm's channel names, and runs it once its sum checks.
 # --app, --core and --node take files instead of downloading them, for a rehearsal of a build that
 # isn't published; Node's is still checked against the sum below.
+#
+# It records the channel it was installed from in ~/.agentorg/channel, which agentorg update and
+# get.sh follow: the one --channel or AGENTORG_CHANNEL names; else the one recorded; else next for
+# an install made before channels were recorded, all of which followed next; else latest, the
+# channel the install page's bare line serves. The page serves one release's script on both
+# channels, so its line for next names it: | AGENTORG_CHANNEL=next bash
 set -euo pipefail
 
 # What this script installs: one release of AgentOrg, its core and its Mac app, and one Node.
@@ -41,6 +47,7 @@ die() {
 
 update=false
 open=true
+channel="${AGENTORG_CHANNEL:-}"
 app_file=""
 core_file=""
 node_file=""
@@ -52,6 +59,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
   --update) update=true ;;
   --no-open) open=false ;;
+  --channel)
+    [ $# -ge 2 ] || die "--channel takes latest or next."
+    channel="$2"
+    shift
+    ;;
   --app | --core | --node)
     [ $# -ge 2 ] || die "$1 takes a file."
     case "$1" in
@@ -63,13 +75,14 @@ while [ $# -gt 0 ]; do
     ;;
   -h | --help)
     say "Installs AgentOrg $AGENTORG_VERSION on this Mac, or with --update moves to it."
-    say "Usage: bash install.sh [--update] [--no-open] [--app FILE.zip] [--core FILE.tgz] [--node FILE.tar.gz]"
+    say "Usage: bash install.sh [--update] [--no-open] [--channel latest|next] [--app FILE.zip] [--core FILE.tgz] [--node FILE.tar.gz]"
     exit 0
     ;;
   *) die "Unknown option $1. Run it with --help to see what it takes." ;;
   esac
   shift
 done
+case "$channel" in "" | latest | next) ;; *) die "AgentOrg's channels are latest and next, not $channel." ;; esac
 
 # This Mac: macOS 13 or later on Apple silicon (also under Rosetta), and the person's own account.
 [ "$(uname -s)" = Darwin ] || die "This installs AgentOrg on a Mac. On another system, run it from npm: npx @agentorg/cli@next"
@@ -428,12 +441,22 @@ update() {
   say "AgentOrg is updated to $AGENTORG_VERSION."
 }
 
+if [ "$update" = true ] && [ ! -L "$ROOT/app/current" ]; then
+  die "AgentOrg isn't installed here by this script yet. Run it without --update: $LINE"
+fi
 mkdir -p "$ROOT"
 chmod 700 "$ROOT"
+# The channel agentorg update and get.sh follow from now on.
+if [ -z "$channel" ]; then
+  channel="$(cat "$ROOT/channel" 2>/dev/null || true)"
+  case "$channel" in latest | next) ;; *) channel="" ;; esac
+fi
+if [ -z "$channel" ]; then
+  if [ -L "$ROOT/app/current" ]; then channel=next; else channel=latest; fi
+fi
+printf '%s\n' "$channel" >"$ROOT/channel.tmp" && mv "$ROOT/channel.tmp" "$ROOT/channel"
 if [ -L "$ROOT/app/current" ] && { [ "$update" = true ] || [ "$(readlink "$ROOT/app/current")" != "$AGENTORG_VERSION" ]; }; then
   update
-elif [ "$update" = true ]; then
-  die "AgentOrg isn't installed here by this script yet. Run it without --update: $LINE"
 else
   install
 fi
