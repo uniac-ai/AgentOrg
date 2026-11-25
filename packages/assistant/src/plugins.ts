@@ -243,7 +243,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
           key: JSON.stringify(args ?? {}),
           controller: new AbortController(),
         } as Entry;
-        entry.loading = at.use(asHeld(capability, entry), args);
+        entry.loading = within(at, capability).use(asHeld(capability, entry), args);
         failed.delete(capability.name);
         entries.set(capability.name, entry);
         return entry;
@@ -311,10 +311,31 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         });
       const NEEDS = "It needs a service none of the agent's capabilities provides.";
 
-      // What an agent's context keeps to itself: the primitives, the bundled capabilities, and
-      // every service a plugin it may come to hold provides, each isolated under a label of its own
-      // (Cordis keeps a service by its label), so its capabilities share them and no other agent
-      // sees them. A child a capability mounts provides only among these.
+      /**
+       * Each service name the agent's capabilities provide or use, under a label of the agent's
+       * own, one for each name. Cordis keeps a service by its label, so contexts that give a name
+       * the same label share its service: what one of this agent's capabilities provides, even
+       * one mounted after the agent opened, is seen by its other capabilities and by no other
+       * agent's.
+       */
+      const labels = new Map<string, symbol>();
+      const labelOf = (name: string) => {
+        let label = labels.get(name);
+        if (!label) {
+          label = Symbol(name);
+          labels.set(name, label);
+        }
+        return label;
+      };
+      /** A capability's context, with each name it provides or uses under the agent's label. */
+      const within = (at: Context, capability: Capability) => {
+        let ctx = at;
+        for (const name of new Set([...[capability.provide ?? []].flat(), ...capability.inject]))
+          ctx = ctx.isolate(name, labelOf(name));
+        return ctx;
+      };
+      // What an agent's context keeps from the start: the primitives, the bundled capabilities,
+      // and every service a plugin it may come to hold provides.
       const kept = new Set([
         "capabilities",
         "context",
@@ -324,7 +345,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         ...carried.flatMap((plugin) => [plugin.provide ?? []].flat()),
       ]);
       let own: Context = root;
-      for (const name of kept) own = own.isolate(name);
+      for (const name of kept) own = own.isolate(name, labelOf(name));
 
       const host: Host = {
         fibers,
@@ -336,9 +357,6 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         async mount(parent, ctx, capability, args) {
           const { name } = capability;
           if (entries.has(name)) throw new Error(`The agent holds ${name} already.`);
-          const alone = [capability.provide ?? []].flat().find((one) => !kept.has(one));
-          if (alone)
-            throw new Error(`${name} provides ${alone}, which its agent can't keep to itself.`);
           const entry = start(ctx, capability, args, "child", parent);
           while (entry.loading.inertia) await entry.loading.inertia.catch(() => {});
           const why = await fault(entry);
