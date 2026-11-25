@@ -5,7 +5,7 @@
 //
 //   node scripts/conversations/run.mjs sign-in --dir DIR
 //   node scripts/conversations/run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long]
-//                                      [--max-requests N] [--dry] [--open]
+//                                      [--max-requests N] [--dry] [--open] [--shots DIR]
 //
 // `--dir` is the runner's own folder: the app's home is DIR/home, the AgentComputer service's data
 // DIR/computer, and nothing of the person's AgentOrg is used. `sign-in` opens a browser on the app
@@ -19,16 +19,21 @@
 // that answers every message in one line, to check the runner itself: it makes no request to
 // OpenAI, and needs no sign-in. It works in a folder of its own, never one a real sign-in is in.
 //
-// `--long` plays one long conversation in place of the set: thirty turns with an Assistant that
-// holds nothing but its base, memory mounted on it through management before the sixteenth, and
-// for each turn what each of its requests sent and how much of that the provider read from its
-// cache, as `long` in the result.
+// `--long` plays one long conversation in place of the set (long.mjs): a day's work through half a
+// year of ticket files, on an agent made as the set's are, until its earlier steps have been
+// summarized three times, with three questions after each that check the thread held. For each
+// turn it keeps each request: what it sent, how much of that the provider read from its cache, and
+// whether it was a compaction's. It is `long` in the result.
 //
 // `--open` opens the app's page in the person's browser, signed in, once the app is up and before
 // the first conversation, so the person can watch it played; the address carries a one-time code
 // and is never printed. After the run it removes the computers but keeps the agents and their
 // conversations, and the app, up for the person to look over, until the runner is stopped or the
 // next run or sign-in in the folder ends it.
+//
+// `--shots DIR`, with `--long`, keeps what the person sees of the long conversation: a page of the
+// runner's own in a headless browser, signed in the same way, shot a few seconds into each turn
+// and at its end, as DIR/NN-kind-working.png and DIR/NN-kind-end.png.
 //
 // The app is started on any free port, never 7731, and everything the runner starts it ends by the
 // PID it recorded. It needs a build (`npm run build`) and Docker for the containers.
@@ -49,48 +54,11 @@ import { parseArgs } from "node:util";
 import { Computer } from "@agentorg/computer-sdk";
 import { OWN_FUNCTIONS } from "@agentorg/looper";
 import WebSocket from "ws";
+import * as long from "./long.mjs";
 import { CHECKS, CORE, FIXTURE, GROUPS } from "./set.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CAP = 150;
-/**
- * The long conversation's thirty messages, plain talk that needs nothing but the model: memory is
- * mounted before the sixteenth, which is the first to ask the agent to keep something.
- */
-const LONG = [
-  "Hi! I'm planning a small vegetable garden this spring.",
-  "It's about four metres by two, in a sunny corner.",
-  "What would you grow first in a space like that?",
-  "Tomatoes sound good. How far apart should they go?",
-  "And what goes well next to tomatoes?",
-  "I've heard marigolds help. Is that true?",
-  "How often should I water in the first weeks?",
-  "Is morning or evening watering better?",
-  "What about mulch: straw or wood chips?",
-  "Should I start seeds indoors or buy seedlings?",
-  "When is it safe to plant out where nights are still cool?",
-  "How do I harden seedlings off?",
-  "What's an easy herb to add?",
-  "Basil it is. Does it need much sun?",
-  "Can I grow lettuce in the shade of the tomatoes later?",
-  "Please remember that my garden gets sun only until about two in the afternoon.",
-  "Given that, which of what we discussed would you move?",
-  "What about peppers in that light?",
-  "Should I worry about slugs, and what's a gentle way to deal with them?",
-  "How do I know when tomatoes are ready to pick?",
-  "Can I save seeds from them for next year?",
-  "What should I do with the bed over winter?",
-  "Is a cover crop worth it for a bed this small?",
-  "Which cover crop would you pick?",
-  "When do I turn it in?",
-  "What do you remember about my garden's light?",
-  "Thanks. Could you sum up the plan in three lines?",
-  "One more: is compost from the shop good enough?",
-  "How much should I add each year?",
-  "Great, that's all for now. Thank you!",
-];
-/** Before which message, counted from 0, memory is mounted. */
-const MOUNT_BEFORE = 15;
 /**
  * The functions of the looper's own, the front desk's and each worker's: how the agent speaks and
  * keeps its work, never a tool it uses, so never counted as one. Named here rather than read from
@@ -104,6 +72,8 @@ const API = "https://api.openai.com/v1";
 /** The computer each agent gets: a new one, in a container, with commands and no browser. */
 const COMPUTER = { kind: "new", made: "container", access: "terminal", browser: false };
 const TURN_MS = 8 * 60_000;
+/** A long conversation's turn reads four files at the top of its context, and may compact. */
+const LONG_TURN_MS = 20 * 60_000;
 const READY_MS = 15 * 60_000;
 
 const { values: flags, positionals } = parseArgs({
@@ -116,6 +86,7 @@ const { values: flags, positionals } = parseArgs({
     "max-requests": { type: "string" },
     dry: { type: "boolean" },
     open: { type: "boolean" },
+    shots: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
   allowPositionals: true,
@@ -124,7 +95,7 @@ const [command] = positionals;
 const usage = (problem) => {
   if (problem) console.error(problem);
   console.error(
-    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long] [--max-requests N] [--dry] [--open]",
+    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long] [--max-requests N] [--dry] [--open] [--shots DIR]",
   );
   process.exit(2);
 };
@@ -366,6 +337,8 @@ const requests = [];
 const calledWaiters = new Set();
 /** How a request to hear a message apart, while the agent alone runs a call, begins. */
 const HEARING = "You are given the agent's work in a conversation";
+/** How a compaction's request, which summarizes a work's earlier steps, is told what it does. */
+const SUMMARIZING = "You are a context summarization assistant.";
 /** What conversation 12 says to stop: a request whose input holds it has read the stop. */
 const STOP = GROUPS.flatMap((group) => group.steps).find((step) => step.n === 12)?.say;
 /** A message's text, as a request's input holds it. */
@@ -459,6 +432,8 @@ async function counting(request, init) {
   const frontDesk =
     typeof body.instructions === "string" && body.instructions.startsWith("You are the front desk");
   const hearing = typeof body.instructions === "string" && body.instructions.startsWith(HEARING);
+  const compaction =
+    typeof body.instructions === "string" && body.instructions.startsWith(SUMMARIZING);
   spent.total++;
   if (frontDesk) spent.frontDesk++;
   if (hearing) spent.hearing++;
@@ -480,6 +455,7 @@ async function counting(request, init) {
     at: now(),
     frontDesk,
     hearing,
+    compaction,
     // The agent's own, having read the stop: what it calls then is after it read it.
     readStop: !hearing && input.some((item) => item.role === "user" && textOf(item).endsWith(STOP)),
     colleague: typeof body.instructions === "string" && body.instructions.includes(COLLEAGUE),
@@ -552,6 +528,8 @@ async function readUsage(stream, record) {
     spent.output += record.output;
     spent.reasoning += record.reasoning;
   }
+  // Read to its end, completed or not: a turn waits for this of each of its requests.
+  record.ended = now();
 }
 
 const json = (value, status = 200) =>
@@ -804,8 +782,10 @@ try {
     if (opened) console.log("Its page is open in the browser, signed in.");
   }
   holding = false;
-  if (flags.long) run.long = await playLong();
-  else
+  if (flags.long) {
+    run.long = {};
+    await playLong(run.long);
+  } else
     for (const [at, group] of groups.entries()) {
       if (stoppedWhy) break;
       run.conversations.push(...(await playGroup(group, at, service)));
@@ -836,6 +816,18 @@ for (const c of run.conversations)
   );
 if (run.error) console.error(run.error);
 if (stoppedWhy) console.error(stoppedWhy);
+if (run.long?.turns) {
+  const { turns, compactions, cache } = run.long;
+  const checked = compactions.map(
+    (one, i) =>
+      `after ${i + 1}: ${Object.entries(one.checks)
+        .map(([id, held]) => `${id} ${held ? "held" : "lost"}`)
+        .join(", ")}`,
+  );
+  console.log(
+    `Long: ${turns.length} turns, ${compactions.length} compactions${checked.length ? `; ${checked.join("; ")}` : ""}${cache ? `; ${cache.share}% of the agent's input cached` : ""}.`,
+  );
+}
 console.log(
   `Model requests: ${spent.total} (front desk ${spent.frontDesk}, hearing ${spent.hearing}, ${spent.hearingInput} input tokens); input tokens ${spent.input}, ${spent.cached} of them cached; output tokens ${spent.output}, ${spent.reasoning} of them reasoning.`,
 );
@@ -887,78 +879,168 @@ async function measuredAgent(name, stack) {
 }
 
 /**
- * The long conversation on an Assistant of its own: each turn's requests, each with what it sent
- * and what of it the provider read from its cache. Memory is mounted through management, as a
- * person would, partway through.
+ * With `--shots`, a page of the runner's own on `agent`'s conversation, in a headless browser the
+ * runner ends as it ends what else it started. Signed in by a one-time address, never printed.
  */
-async function playLong() {
-  const { bases } = await person.call("agents", "units");
-  const base = bases.find((one) => one.id === "assistant");
-  const { agent } = await person.call("agents", "create", {
-    stack: { base: { provider: base.provider, creatable: base.id }, units: [] },
-    name: "Runner long",
-  });
+async function openShots(agent) {
+  try {
+    const { chromium } = await import("@playwright/test");
+    const folder = resolve(flags.shots);
+    mkdirSync(folder, { recursive: true });
+    const server = await chromium.launchServer();
+    started.add(server.process());
+    const browser = await chromium.connect(server.wsEndpoint());
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    // The sign-in page takes its code and leaves for the app; then the agent's conversation.
+    await page.goto(app.signInUrl());
+    await page.waitForURL((url) => url.pathname !== "/signin", { timeout: 30_000 });
+    await page.goto(new URL(`/#/chat/${encodeURIComponent(agent)}`, page.url()).href);
+    return async (label) => {
+      await page
+        .screenshot({ path: join(folder, `${label}.png`) })
+        .catch((error) => note(`Shooting ${label}: ${error}`));
+    };
+  } catch (error) {
+    note(`No screenshots: the runner's page couldn't be opened: ${error}`);
+    console.error("No screenshots: the runner's page couldn't be opened; see the runner's log.");
+    return async () => {};
+  }
+}
+
+/**
+ * The long conversation (long.mjs) on an agent made as the set's are: the ticket files written to
+ * its computer, then the person's start, a line to remember, and a week at a time until the
+ * agent's earlier steps have been summarized three times, the weeks run out, or the run stops.
+ * After each turn that compacted, three questions check the thread held. Each turn keeps each of
+ * its requests with what it sent, what of that the provider read from its cache, and whether it
+ * was the compaction's. What it played is kept in `kept` as it goes, so a run cut off keeps it.
+ */
+async function playLong(kept) {
+  const name = "Runner long";
+  const agent = await measuredAgent(name);
   const turns = [];
+  const compactions = [];
+  Object.assign(kept, { turns, compactions });
   try {
     await until(
-      "the long conversation's agent running",
+      `${name} running`,
       async () =>
         (await person.call("agents", "list")).agents.find((one) => one.agent === agent)?.status
           ?.state === "running",
       READY_MS,
     );
     const slot = await until(
-      "the long conversation's chat",
+      `${name}'s chat`,
       async () =>
         (await person.call("bindings", "list", { actor: "person" })).bindings.find(
           (b) => b.provider === agent && b.export === "chat",
         )?.slot,
       60_000,
     );
-    for (const [at, text] of LONG.entries()) {
-      if (stoppedWhy) break;
-      if (at === MOUNT_BEFORE) {
-        const made = await person.call("agents", "mount", {
-          agent,
-          provider: base.provider,
-          capability: "memory",
-          arguments: {},
-        });
-        if (!made.mounted) throw new Error(`Memory wasn't mounted: ${JSON.stringify(made)}`);
-      }
+    const computer = await until(`${name}'s computer`, () => computerOf(agent, service), READY_MS);
+    const { files, weeks } = long.tickets();
+    const folders = [...new Set(Object.keys(files).map((path) => dirname(path)))];
+    await computer.commands.run(`mkdir -p ${folders.join(" ")} ${dirname(long.DIGEST)}`);
+    for (const [path, text] of Object.entries(files)) await computer.files.write(path, text);
+    const shoot = flags.shots ? await openShots(agent) : async () => {};
+    const replies = [];
+    person.subscribe(slot, "message", (payload) => {
+      if (payload.role === "assistant") replies.push({ at: now(), text: payload.text });
+    });
+
+    /** One turn: said, waited for to its end, and kept. */
+    const say = async (text, kept) => {
       const from = requests.length;
+      const at = now();
+      const label = `${String(turns.length + 1).padStart(2, "0")}-${kept.week ? `week-${kept.week}` : kept.check ? `check-${kept.check}` : kept.kind}`;
       await person.call(slot, "send", { text });
+      const working = sleep(4000).then(() => shoot(`${label}-working`));
+      // Its end: each of its requests read through, and the agent idle; a stopped run asks no more.
       await until(
-        `turn ${at + 1} to end`,
-        async () =>
-          requests.length > from &&
-          requests.slice(from).every((r) => r.input > 0) &&
-          (await person.call(slot, "state")).state === "idle",
-        TURN_MS,
+        `${name}'s turn ${turns.length + 1} to end`,
+        async () => {
+          const theirs = requests.slice(from);
+          if (!theirs.every((r) => r.ended !== undefined)) return false;
+          if (stoppedWhy) return true;
+          return theirs.length > 0 && (await person.call(slot, "state")).state === "idle";
+        },
+        LONG_TURN_MS,
       );
-      turns.push({
-        n: at + 1,
+      await working;
+      await shoot(`${label}-end`);
+      const theirs = requests.slice(from);
+      const turn = {
+        n: turns.length + 1,
+        ...kept,
         said: text,
-        memory: at >= MOUNT_BEFORE,
-        requests: requests.slice(from).map(({ input, cached }) => ({
+        seconds: round(now() - at),
+        requests: theirs.map(({ input, cached, compaction, tools }) => ({
           input,
           cached,
           share: input ? round((100 * cached) / input) : 0,
+          ...(compaction ? { compaction: true } : {}),
+          tools: tools.filter((one) => !OWN.has(one)),
         })),
-      });
+        replies: replies.filter((one) => one.at >= at).map((one) => one.text),
+        compacted: theirs.some((r) => r.compaction),
+      };
+      turns.push(turn);
       console.log(
-        `turn ${at + 1}${at >= MOUNT_BEFORE ? " (memory)" : ""}: ${turns
-          .at(-1)
-          .requests.map((r) => `${r.cached}/${r.input}`)
+        `turn ${turn.n} (${kept.week ? `week ${kept.week}` : kept.check ? `check ${kept.check}` : kept.kind}): ${turn.requests
+          .map((r) => `${r.compaction ? "summary " : ""}${r.cached}/${r.input}`)
           .join(", ")}`,
       );
+      return turn;
+    };
+
+    await say(long.SAY.start, { kind: "start" });
+    await say(long.SAY.memory, { kind: "memory" });
+    for (const week of weeks) {
+      if (stoppedWhy || compactions.length >= 3) break;
+      const turn = await say(long.SAY.week(week.week), { kind: "week", week: week.week });
+      if (!turn.compacted) continue;
+      compactions.push({ turn: turn.n, week: week.week, checks: {} });
+      const k = compactions.length;
+      // A week its compaction summarized: the second, or the first after the compaction before.
+      const covered = weeks[k === 1 ? 1 : compactions[k - 2].week];
+      for (const check of long.checks(k, covered)) {
+        if (stoppedWhy) break;
+        const asked = await say(check.say, { kind: "check", check: check.id, after: k });
+        const memory = memoryOf(agent);
+        asked.memory = memory;
+        asked.pass = check.pass(asked.replies.join("\n\n"), memory);
+        if (check.expected) asked.expected = check.expected;
+        compactions[k - 1].checks[check.id] = asked.pass;
+      }
     }
-    return turns;
+    const read = await computer.files.read(long.DIGEST).catch(() => undefined);
+    if (read !== undefined) kept.digest = long.digestHolds(String(read), weeks);
   } finally {
-    await person
-      .call("agents", "remove", { agent })
-      .catch((error) => note(`Removing the long conversation's agent: ${error}`));
+    // Kept with its page open, for the person to look over, but stopped and its computer gone.
+    if (opened) {
+      await person
+        .call("agents", "stop", { agent })
+        .catch((error) => note(`Stopping ${name}: ${error}`));
+      await killComputers(`of ${name}`);
+    } else
+      await person
+        .call("agents", "remove", { agent })
+        .catch((error) => note(`Removing ${name}: ${error}`));
   }
+  // The cache share of the agent's own requests, and of the first after each compaction.
+  const own = turns.flatMap((turn) => turn.requests.filter((r) => !r.compaction));
+  const share = (list) => {
+    const input = list.reduce((a, r) => a + r.input, 0);
+    return input ? round((100 * list.reduce((a, r) => a + r.cached, 0)) / input) : 0;
+  };
+  kept.cache = {
+    share: share(own),
+    afterCompaction: compactions.map(({ turn }) => {
+      const at = turns[turn - 1].requests;
+      const last = at.findLastIndex((r) => r.compaction);
+      return at.slice(last + 1).find((r) => !r.compaction)?.share;
+    }),
+  };
 }
 
 /** One group on an agent of its own: made, played, measured and removed. */
