@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Context } from "cordis";
+import { Context } from "cordis";
 import { type Capability, createPluginHost } from "../src/plugins.ts";
 
 /** A kv store in memory, as an agent's own store answers. */
@@ -40,6 +40,7 @@ declare module "cordis" {
   interface Context {
     lines: { read(): string[] };
     base: { round: number };
+    weather: { now(): string };
   }
 }
 
@@ -77,9 +78,6 @@ test("a capability offers a service and, in the same mount, mounts a child that 
       await ctx.capabilities.mount(tidy);
       // A capability is held once, by its name, wherever it was mounted.
       await assert.rejects(ctx.capabilities.mount(tidy), /holds tidy already/);
-      // A service the agent's context doesn't keep to itself would be every agent's.
-      const loose: Capability = { name: "loose", inject: [], provide: "loose", apply() {} };
-      await assert.rejects(ctx.capabilities.mount(loose), /can't keep to itself/);
     },
     unmount: () => void taken.push("lines"),
   };
@@ -283,5 +281,136 @@ test("a capability applied again, as a service it needs comes back, mounts its c
   assert.equal(signals.length, 2);
   assert.equal(signals[0]?.aborted, true);
   assert.equal(signals[1]?.aborted, false);
+  await plugins.close();
+});
+
+/**
+ * A service no capability provides when the agent opens: `weather`, provided once this is mounted.
+ * Each of `before` is mounted as its child before the service is there.
+ */
+const weather = (now: string, before: Capability[] = []): Capability => ({
+  name: "weather",
+  inject: ["capabilities"],
+  provide: "weather",
+  async apply(ctx: Context) {
+    for (const child of before) await ctx.capabilities.mount(child);
+    ctx.provide("weather", { now: () => now });
+  },
+});
+/** One that uses `weather`, and offers a function named by what it reads. */
+const reader = (name: string): Capability => ({
+  name,
+  inject: ["weather", "tools"],
+  apply(ctx: Context) {
+    ctx.tools.register(fn(`${name}-${ctx.weather.now()}`));
+  },
+});
+/** An agent, and a hand on its capabilities, as control mounts them while the agent runs. */
+async function agentWithHand(host: ReturnType<typeof createPluginHost>, agent: string) {
+  const plugins = await host.open(agent, { store: memory() });
+  let hand: Context | undefined;
+  await plugins.mount({
+    name: "hand",
+    inject: ["capabilities"],
+    apply(ctx: Context) {
+      hand = ctx;
+    },
+  });
+  return { plugins, capabilities: (hand as Context).capabilities };
+}
+const offered = (plugins: { tools(): { slot: string; name: string }[] }) =>
+  plugins
+    .tools()
+    .map(({ slot, name }) => `${slot}__${name}`)
+    .sort();
+
+test("a service a capability provides after the agent opened is its agent's: one mounted before it, as its child, and one mounted after both use it", async () => {
+  const { plugins, capabilities } = await agentWithHand(createPluginHost(quiet, []), "a");
+  await capabilities.mount(weather("sun", [reader("early")]));
+  await capabilities.mount(reader("late"));
+  assert.deepEqual(offered(plugins), ["early__early-sun", "late__late-sun"]);
+  assert.deepEqual(held(plugins.list()).slice(BUNDLED.length), [
+    { name: "hand", state: "mounted" },
+    { name: "weather", state: "mounted", parent: "hand" },
+    { name: "early", state: "mounted", parent: "weather" },
+    { name: "late", state: "mounted", parent: "hand" },
+  ]);
+  await plugins.close();
+});
+
+test("another agent doesn't see a service one agent's capability provided while it runs, and can have its own under the same name", async () => {
+  const host = createPluginHost(quiet, []);
+  const a = await agentWithHand(host, "a");
+  const b = await agentWithHand(host, "b");
+  await a.capabilities.mount(weather("sun"));
+  await assert.rejects(b.capabilities.mount(reader("late")), /needs a service/);
+  // Its own, with no clash: each agent keeps its own under its own label.
+  await b.capabilities.mount(weather("rain"));
+  await b.capabilities.mount(reader("late"));
+  await a.capabilities.mount(reader("late"));
+  assert.deepEqual(offered(a.plugins), ["late__late-sun"]);
+  assert.deepEqual(offered(b.plugins), ["late__late-rain"]);
+  // So is one mounted by the agent's own mount, as the executor mounts its own.
+  await a.plugins.mount({
+    name: "fog",
+    inject: [],
+    provide: "fog",
+    apply(ctx: Context) {
+      ctx.provide("fog" as never, {} as never);
+    },
+  });
+  await assert.rejects(
+    b.plugins.mount({ name: "fog-reader", inject: ["fog"], apply() {} }),
+    /needs a service/,
+  );
+  // What the agent kept from the start is its own as before: each agent's functions are its own.
+  await a.plugins.close();
+  assert.deepEqual(offered(b.plugins), ["late__late-rain"]);
+  await b.plugins.close();
+});
+
+test("a service provided while the agent runs goes when its provider is taken off: what used it goes too, and nothing new finds it", async () => {
+  const { plugins, capabilities } = await agentWithHand(createPluginHost(quiet, []), "a");
+  await capabilities.mount(weather("sun"));
+  await capabilities.mount(reader("late"));
+  assert.deepEqual(offered(plugins), ["late__late-sun"]);
+  await capabilities.unmount("weather");
+  assert.deepEqual(offered(plugins), []);
+  assert.ok(!plugins.list().some((one) => one.name === "weather" && one.state === "mounted"));
+  await assert.rejects(capabilities.mount(reader("later")), /needs a service/);
+  // Provided again, a reader mounted now uses the new one.
+  await capabilities.mount(weather("snow"));
+  await capabilities.mount(reader("again"));
+  assert.ok(offered(plugins).includes("again__again-snow"));
+  await plugins.close();
+});
+
+test("no service is provided at the root, for all agents: each a capability may inject is its agent's, where its labels find it", async () => {
+  // Cordis's own root provides none: its reflect, registry, events and logger are properties,
+  // which no capability injects.
+  assert.deepEqual(Reflect.ownKeys(new Context().reflect.store), []);
+  // Nor does the executor's host, once an agent has opened and its capabilities are up.
+  const plugins = await createPluginHost(quiet, []).open("a", { store: memory() });
+  let seen: Context | undefined;
+  await plugins.mount({
+    name: "probe",
+    inject: [],
+    apply(ctx: Context) {
+      seen = ctx;
+    },
+  });
+  const root = (seen as Context)[Context.root];
+  const { store } = root.reflect;
+  const atRoot = Reflect.ownKeys(store).flatMap((label) => {
+    const impl = store[label as symbol];
+    return impl && root[Context.isolate][impl.name] === label ? [impl.name] : [];
+  });
+  assert.deepEqual(
+    atRoot,
+    [],
+    "A service provided at the root is every agent's, and a capability injecting it looks under its agent's label: keep its name out of the agent's labels.",
+  );
+  // Each the agent's capabilities provide is there, under the agent's own label.
+  assert.ok(Reflect.ownKeys(store).length > 0);
   await plugins.close();
 });
