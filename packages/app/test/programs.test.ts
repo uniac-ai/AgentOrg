@@ -1005,14 +1005,21 @@ test("a fresh home's first start makes the Assistant once AgentOrg Mac comes, wi
     screen: true,
     browser: false,
   });
-  // This computer, with commands, the screen when it can be had, the web, and its own agents.
+  // This computer, with commands, the screen when it can be had, the web, its own agents, and
+  // memory.
   const read = await person.call<{
     units: { unit: string; values: Record<string, unknown> }[];
     skills: { name: string }[];
+    capabilities: { id: string; plugins?: { name: string }[] }[];
   }>("agents", "get", { agent: first.agent });
   assert.deepEqual(
     read.units.map((one) => one.unit),
-    ["computer", "web", "control"],
+    ["computer", "web", "control", "memory"],
+  );
+  // It holds memory: the capability, with its part inside the agent to load.
+  assert.deepEqual(
+    read.capabilities.find((one) => one.id === "memory")?.plugins?.map((one) => one.name),
+    ["memory"],
   );
   const [computer, web, control] = read.units;
   // Which computer isn't asked, and the person's browser, which can't be had here, isn't either.
