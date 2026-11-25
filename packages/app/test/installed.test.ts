@@ -213,7 +213,11 @@ async function releases(t: test.TestContext, files: Record<string, string>) {
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   t.after(() => server.close());
   const at = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { at, asked, from: { tags: `${at}/dist-tags`, releases: `${at}/releases` } };
+  return {
+    at,
+    asked,
+    from: { tags: `${at}/dist-tags`, releases: `${at}/releases`, notes: `${at}/notes` },
+  };
 }
 
 test("update runs the install.sh of the release npm's channel names, with --update on the home and the channel, once its sum is listed, and answers its exit code", async (t) => {
@@ -279,7 +283,9 @@ test("update refuses an install.sh whose sum differs or isn't listed, a version 
     await refused("npm names no version for AgentOrg's next channel, so nothing was run.");
   }
   delete files["/dist-tags"];
-  await refused(`Couldn't fetch npm's dist-tags from ${at}/dist-tags: it answered 404.`);
+  await refused(
+    `Couldn't fetch npm's dist-tags from ${at}/dist-tags: it answered 404, so nothing was run.`,
+  );
   assert.equal(existsSync(said), false);
 });
 

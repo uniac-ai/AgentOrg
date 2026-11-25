@@ -21,6 +21,8 @@ export const UNRECORDED: Channel = "next";
 export const RELEASE = {
   tags: "https://registry.npmjs.org/-/package/@agentorg/cli/dist-tags",
   releases: "https://github.com/uniac-ai/AgentOrg/releases/download",
+  /** A release's notes, at `<notes>/v<version>`. */
+  notes: "https://github.com/uniac-ai/AgentOrg/releases/tag",
 };
 /** The line its launcher carries, so only a launcher the script wrote is removed. */
 export const LAUNCHER_MARK = "# AgentOrg's launcher, written by its install script.";
@@ -34,9 +36,12 @@ export function layout(userHome: string) {
   const root = join(userHome, ".agentorg");
   return {
     root,
-    /** Node, the core, its bundle, what an update keeps and the channel: all of it the line's own. */
-    parts: ["app", "runtime", "AgentOrg Core.app", "update-backup", "channel"].map((name) =>
-      join(root, name),
+    /**
+     * Node, the core, its bundle, what an update keeps, the channel and the update last read for
+     * it: all of it the line's own.
+     */
+    parts: ["app", "runtime", "AgentOrg Core.app", "update-backup", "channel", "update.json"].map(
+      (name) => join(root, name),
     ),
     /** The channel the line installed from, as install.sh records it: `latest` or `next`. */
     channel: join(root, "channel"),
@@ -60,13 +65,31 @@ export function recordedChannel(userHome: string): Channel {
 }
 
 /**
- * The body at `url`, or its status when that isn't 2xx. A redirect is followed only to the
- * address's own protocol, https for AgentOrg's, and five at most.
+ * What every request of AgentOrg's own says of who asks: a plain client name and this core's
+ * version, and nothing of the person, the home or the install.
  */
-async function body(url: string): Promise<Buffer | number> {
+export const CLIENT = `agentorg/${
+  (
+    JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+      version: string;
+    }
+  ).version
+}`;
+
+/**
+ * The body at `url`, or its status when that isn't 2xx, within `ms`. A redirect is followed only
+ * to the address's own protocol, https for AgentOrg's, and five at most. It sends no header but
+ * `CLIENT`, beside what fetch itself sends.
+ */
+async function body(url: string, ms = 30_000): Promise<Buffer | number> {
   let at = new URL(url);
+  const signal = AbortSignal.timeout(ms);
   for (let hop = 0; hop <= 5; hop++) {
-    const answer = await fetch(at, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+    const answer = await fetch(at, {
+      redirect: "manual",
+      signal,
+      headers: { "user-agent": CLIENT },
+    });
     const to = answer.headers.get("location");
     if (answer.status >= 300 && answer.status < 400 && to !== null) {
       await answer.body?.cancel();
@@ -79,6 +102,47 @@ async function body(url: string): Promise<Buffer | number> {
     return answer.status;
   }
   throw new Error("it redirected more than five times");
+}
+
+/** A refusal's words with "so nothing was run" at its end, before its full stop. */
+const nothingRun = (said: string) => `${said.replace(/\.$/, "")}, so nothing was run.`;
+
+/** A channel's release: its version, and the page of its notes. */
+export interface ChannelRelease {
+  version: string;
+  notes: string;
+}
+
+/**
+ * The release npm's `channel` names, read from `from` within `ms`: what `agentorg update` moves to
+ * and what `agentorg status` tells of, so the two never disagree. It is one GET of npm's dist-tags,
+ * which says nothing of the person but `CLIENT`. Its source moves to the install page's channel
+ * files once the page serves them for releases that passed their check.
+ */
+export async function channelRelease(
+  from: typeof RELEASE,
+  channel: Channel,
+  ms?: number,
+): Promise<ChannelRelease> {
+  let tags: Buffer | number;
+  try {
+    tags = await body(from.tags, ms);
+  } catch (error) {
+    throw new ServiceError(
+      `Couldn't fetch npm's dist-tags from ${from.tags}: ${error instanceof Error ? error.message : String(error)}.`,
+    );
+  }
+  if (typeof tags === "number")
+    throw new ServiceError(
+      `Couldn't fetch npm's dist-tags from ${from.tags}: it answered ${tags}.`,
+    );
+  let version: unknown;
+  try {
+    version = JSON.parse(tags.toString())[channel];
+  } catch {}
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
+    throw new ServiceError(`npm names no version for AgentOrg's ${channel} channel.`);
+  return { version, notes: `${from.notes}/v${version}` };
 }
 
 /**
@@ -111,15 +175,13 @@ export async function update(
       throw new ServiceError(`Couldn't fetch ${what} from ${url}: it answered ${got}.`);
     return got;
   };
-  const tags = await fetched("npm's dist-tags", from.tags);
-  let version: unknown;
+  let version: string;
   try {
-    version = JSON.parse(tags.toString())[channel];
-  } catch {}
-  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
-    throw new ServiceError(
-      `npm names no version for AgentOrg's ${channel} channel, so nothing was run.`,
-    );
+    ({ version } = await channelRelease(from, channel));
+  } catch (error) {
+    if (error instanceof ServiceError) throw new ServiceError(nothingRun(error.message));
+    throw error;
+  }
   const at = `${from.releases}/v${version}`;
   const script = await fetched(`AgentOrg ${version}'s install.sh`, `${at}/install.sh`, version);
   const sums = (
