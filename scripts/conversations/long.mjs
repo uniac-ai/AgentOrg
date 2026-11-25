@@ -7,7 +7,9 @@
 //
 // The tickets are made here from a fixed seed, so every run reads the same files and the checks
 // know the answers: each week has at least one refund over €500, and some tickets mention a
-// chargeback, which the person asks to have listed from week 3 on.
+// chargeback, which the person asks to have listed from week 3 on. Each week's message ends with an
+// aside the work never needs, who was on call that week, which only the conversation holds: a
+// question about it after a compaction can be answered only from the summary.
 
 export const REGIONS = [
   {
@@ -242,23 +244,78 @@ export function tickets() {
   return { files, weeks };
 }
 
+/** Each week's on-call, a name no ticket has, with a detail the work never needs. */
+const ON_CALL = [
+  ["Greta", "she's on leave next week"],
+  ["Björn", "he took the night shift too"],
+  ["Lotta", "she covered from the Bergen office"],
+  ["Pekka", "he swapped with a colleague for it"],
+  ["Viggo", "it was his first week on the rota"],
+  ["Runa", "she handed over on Friday at noon"],
+  ["Tove", "she's moving to the billing team soon"],
+  ["Aksel", "he worked it from home"],
+  ["Dagny", "she said it was a quiet week"],
+  ["Halvor", "he's back from paternity leave"],
+  ["Inka", "she trained a new starter alongside"],
+  ["Jarl", "he had the spare phone that week"],
+  ["Kaisa", "she's running the next workshop"],
+  ["Leif", "he asked for Mondays off"],
+  ["Malin", "she covered two regions' calls"],
+  ["Nanna", "she's off to a conference after"],
+  ["Otso", "he rejoined after a long break"],
+  ["Pia", "she kept the old pager"],
+  ["Rolf", "he's retiring in the spring"],
+  ["Saga", "she did it from the Turku office"],
+  ["Teemu", "he shared it with a new hire"],
+  ["Ulla", "she's switching to mornings"],
+  ["Vidar", "he swapped his week for a holiday"],
+  ["Wilma", "she ran it from a train"],
+  ["Ylva", "she's on leave the week after"],
+  ["Arvid", "he took the late calls"],
+  ["Birgit", "she's mentoring two new starters"],
+  ["Calle", "he picked it up at short notice"],
+  ["Dorte", "she worked it from Aarhus"],
+  ["Eskil", "he's moving to Stockholm"],
+  ["Frida", "she had a cold most of it"],
+  ["Gunnar", "he'll be on call again in May"],
+];
+/** Who was on call in `week`. */
+export const onCall = (week) => ON_CALL[(week - 1) % ON_CALL.length][0];
+
 /** What the person says. */
 export const SAY = {
   start: `Hi! I'm Dana, and I run customer support for the Nordics. Today I'd like your help going through our ticket exports. They're in ${TICKETS}/, one folder a week and one file a region. For this job, call the regions by their codes, NO, SE, DK and FI, and keep the digest in ${DIGEST}. Nothing to do yet: I'll give you the weeks one at a time.`,
   memory:
     "Please remember this for good, beyond today's job: any refund over €500 needs my sign-off before it is paid.",
   week: (week) =>
-    `${week === CHARGEBACKS_FROM ? "From this week on, also list every ticket that mentions a chargeback. " : ""}Week ${week}: read the four region files in ${weekFolder(week)} in full, and add week ${week} to the digest: for each region, its two most common issues, and every refund over €500 with its ticket number.`,
+    `${week === CHARGEBACKS_FROM ? "From this week on, also list every ticket that mentions a chargeback. " : ""}Week ${week}: read the four region files in ${weekFolder(week)} in full, and add week ${week} to the digest: for each region, its two most common issues, and every refund over €500 with its ticket number. (Week ${week}'s on-call was ${ON_CALL[(week - 1) % ON_CALL.length].join("; ")}.)`,
 };
+
+/**
+ * The question only the summary can answer: who was on call in `week`, said once as an aside in
+ * that week's message. `id` tells a week of the compaction's own from one the first compaction
+ * summarized. Whether the name is in the agent's memory or its digest is the runner's to say.
+ */
+function aside({ week, id }) {
+  const name = onCall(week);
+  return {
+    id,
+    name,
+    say: `Quick one: who was on call in week ${week}?`,
+    expected: { week, name },
+    pass: (reply) => new RegExp(`(^|[^\\p{L}])${name}($|[^\\p{L}])`, "u").test(reply),
+  };
+}
 
 /** Amounts written with a thousands separator read as plain digits. */
 const digits = (text) => text.replace(/(\d)[\s,.  ](?=\d{3}\b)/g, "$1");
 
 /**
- * The three questions after compaction `k`, each with its check of the reply and of the agent's
- * memory lines. `week` is a week the compaction covered, with its refunds.
+ * The questions after compaction `k`, each with its check of the reply and of the agent's memory
+ * lines. `week` is a week the compaction covered, with its refunds. The asides' questions, each
+ * `{ week, id }`, come first: before any question the agent might open the digest for.
  */
-export function checks(k, week) {
+export function checks(k, week, asides = []) {
   const largest = week.refunds.reduce((a, b) => (b.amount > a.amount ? b : a));
   const asked = [
     { region: "DK", amount: 640, what: "a damaged blender" },
@@ -266,6 +323,7 @@ export function checks(k, week) {
     { region: "FI", amount: 980, what: "a double charge" },
   ][(k - 1) % 3];
   return [
+    ...asides.map(aside),
     {
       id: "start",
       say: "Quick check before we go on: where are you keeping the digest, and which codes did I ask you to use for the regions?",
