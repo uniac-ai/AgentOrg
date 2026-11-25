@@ -1,7 +1,7 @@
 // AgentOrg as a background service on macOS: a LaunchAgent of the person's own, which starts the
 // app at each login and again whenever it ends, on one home. There is one per account. Only
-// `launchctl` changes launchd, and it is reached through `ServiceSystem`, so a test gives a
-// stand-in and never the real one.
+// `launchctl` changes launchd, and it is reached through `ServiceSystem`, as is the Mac app's own
+// uninstall, so a test gives a stand-in and never the real one.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -30,6 +30,11 @@ export interface ServiceSystem {
   userHome: string;
   /** `launchctl` with these arguments, and how it ended. */
   launchctl(args: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
+  /** A program, the Mac app's own, with these arguments, and how it ended. */
+  command(
+    program: string,
+    args: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
   /** The app on `home`, if its process lives and its address answers. */
   running(home: string): Promise<RunningApp | undefined>;
   /** Whether a process lives. */

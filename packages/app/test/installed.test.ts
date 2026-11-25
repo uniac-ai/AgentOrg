@@ -32,33 +32,104 @@ function installedIn(t: test.TestContext, userHome: string) {
   return { ...where, home, macApp: join(userHome, "Applications", "AgentOrg.app") };
 }
 
-test("uninstall stops and removes the service and what the line installed, and keeps the home, the agents' folder and the Mac app", async (t) => {
+test("uninstall stops and removes the service, the Mac app and what the line installed, and keeps the home and the agents' folder", async (t) => {
   const userHome = folder(t, "agentorg-account-");
   const where = installedIn(t, userHome);
   setUpOn(userHome, where.home);
+  const program = `${where.macApp}/Contents/MacOS/AgentOrg`;
+  const heard: string[] = [];
   const { system, log, isLoaded } = machine(userHome, {
     loaded: true,
     apps: { [where.home]: { url: "http://127.0.0.1:7731", pid: 7 } },
+    app(args) {
+      // The app goes first, with what the line installed still there for another try.
+      heard.push(
+        `(the app's ${args.join(" ")}, the core's parts there: ${where.parts.every((part) => existsSync(part))})`,
+      );
+      rmSync(where.macApp, { recursive: true });
+      return {
+        code: 0,
+        stdout: `the background item is unregistered; the driver's default removed\nmacOS's privacy entries for ai.uniac.agentorg reset\n${where.macApp} removed\n`,
+        stderr: "",
+      };
+    },
   });
-  assert.deepEqual(await uninstall(system, where.home), [
+  const said = [
     "Removed the service.",
+    "Removing the AgentOrg app. It waits up to 45 s for what it runs to stop.",
+    "  the background item is unregistered; the driver's default removed",
+    "  macOS's privacy entries for ai.uniac.agentorg reset",
+    `  ${where.macApp} removed`,
     `Removed AgentOrg from ${where.root}.`,
     `Removed its launcher, ${where.launcher}.`,
     `Its home stays at ${where.home}, with your agents, their chats and sign-ins. agentorg uninstall --delete-home removes it too.`,
     `${where.agents}, where your agents work, stays as it is.`,
-    `The AgentOrg app stays, still lending this Mac. To remove it too: "${where.macApp}/Contents/MacOS/AgentOrg" uninstall`,
+    'macOS still lists "AgentOrg" in Login Items, switched off. No app can remove that entry, and it starts nothing.',
+  ];
+  assert.deepEqual(await uninstall(system, where.home, { say: (line) => heard.push(line) }), said);
+  // Each line is said as it happens: the app's wait comes after its first line.
+  assert.deepEqual(heard, [
+    ...said.slice(0, 2),
+    "(the app's uninstall --reset-privacy, the core's parts there: true)",
+    ...said.slice(2),
   ]);
   assert.deepEqual(log.slice(0, 3), [
     `print gui/501/${LABEL}`,
     `disable gui/501/${LABEL}`,
     `bootout gui/501/${LABEL}`,
   ]);
+  // The app is asked once the service has stopped, and its privacy grants go with it.
+  assert.equal(log.at(-1), `${program} uninstall --reset-privacy`);
+  assert.ok(log.indexOf(`(${where.home} ended)`) < log.length - 1);
   assert.equal(isLoaded(), false);
   assert.equal(existsSync(plistPath(userHome)), false);
   for (const part of where.parts) assert.equal(existsSync(part), false, part);
   assert.equal(existsSync(where.launcher), false);
+  assert.equal(existsSync(where.macApp), false);
   assert.ok(existsSync(join(where.home, "hub.db")));
   assert.ok(existsSync(join(where.agents, "Assistant")));
+});
+
+test("uninstall takes the Mac app only where the line installed AgentOrg, and where the app can't go, the rest stays for another try", async (t) => {
+  const userHome = folder(t, "agentorg-account-");
+  const where = installedIn(t, userHome);
+  const program = `${where.macApp}/Contents/MacOS/AgentOrg`;
+  // The app refuses: it removed nothing, and neither does uninstall, past the service.
+  const refused = machine(userHome, {
+    app: () => ({
+      code: 1,
+      stdout: "",
+      stderr:
+        "the background item couldn't be unregistered: Operation not permitted; nothing removed\n",
+    }),
+  });
+  await assert.rejects(uninstall(refused.system, where.home), (error: Error) => {
+    assert.ok(error instanceof ServiceError);
+    assert.equal(
+      error.message,
+      "The AgentOrg app couldn't be removed: the background item couldn't be unregistered: Operation not permitted; nothing removed. The rest of AgentOrg stays, so agentorg uninstall can try again.",
+    );
+    return true;
+  });
+  assert.deepEqual(refused.log.at(-1), `${program} uninstall --reset-privacy`);
+  assert.ok(where.parts.every((part) => existsSync(part)));
+  assert.ok(existsSync(where.launcher));
+  assert.ok(existsSync(where.macApp));
+  // Run again, it all goes.
+  const again = machine(userHome);
+  const said = await uninstall(again.system, where.home);
+  assert.ok(said.includes(`  ${where.macApp} removed`));
+  assert.ok(said.includes(`Removed AgentOrg from ${where.root}.`));
+  assert.equal(existsSync(where.macApp), false);
+  // AgentOrg from npm, with the app put here another way: the app isn't the line's, and stays.
+  mkdirSync(where.macApp, { recursive: true });
+  const npm = machine(userHome);
+  assert.deepEqual(await uninstall(npm.system, where.home), [
+    `Its home stays at ${where.home}, with your agents, their chats and sign-ins. agentorg uninstall --delete-home removes it too.`,
+    `${where.agents}, where your agents work, stays as it is.`,
+    `The AgentOrg app stays, still lending this Mac. To remove it too: "${program}" uninstall`,
+  ]);
+  assert.ok(!npm.log.some((call) => call.startsWith(program)));
   assert.ok(existsSync(where.macApp));
 });
 

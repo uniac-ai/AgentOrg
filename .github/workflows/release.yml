@@ -147,7 +147,7 @@ jobs:
       - name: A fresh install from this run's files
         if: needs.mac-app.outputs.carried == 'true'
         run: scripts/mac-release-check.sh fresh "${GITHUB_REF_NAME#v}" downloaded
-      # agentorg uninstall, then the Mac app's own, so the update below starts clean.
+      # agentorg uninstall, which takes the Mac app too, so the update below starts clean.
       - name: Uninstall it
         if: needs.mac-app.outputs.carried == 'true'
         run: scripts/mac-release-check.sh uninstall

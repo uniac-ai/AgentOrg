@@ -4,7 +4,7 @@
 #
 #   scripts/mac-release-check.sh apple VERSION FROM   Apple's checks on the Mac app's zip
 #   scripts/mac-release-check.sh fresh VERSION FROM   a fresh install from FROM's files
-#   scripts/mac-release-check.sh uninstall            agentorg uninstall, then the Mac app's own
+#   scripts/mac-release-check.sh uninstall            agentorg uninstall, the Mac app with it
 #   scripts/mac-release-check.sh update VERSION FROM  the release before installed, then updated
 #
 # FROM holds the run's files: the Mac app, AgentOrg-<version>-mac-arm64.zip, and the core,
@@ -186,35 +186,29 @@ fresh() {
 }
 
 # agentorg uninstall, then what it removes is gone: the service and its file, what install.sh put
-# in ~/.agentorg, and the launcher. The home stays, as it says. So does the Mac app, as it says too,
-# with how to remove it: by its own uninstall, which is run here as well, and then it is gone, with
-# its background item and its record, so the next install starts clean.
+# in ~/.agentorg, the launcher, and the Mac app, by the app's own uninstall, with its background
+# item and its record, so the next install starts clean. The home stays, as it says.
 uninstall() {
   on_runner uninstall
   [ -f "$LAUNCHER" ] || die "AgentOrg isn't installed in this account: there is no $LAUNCHER."
   local home part app
   # shellcheck disable=SC2016 # The launcher's own line, matched as written: nothing in it expands.
   home="$(sed -n 's/^export AGENTORG_HUB_HOME="\${AGENTORG_HUB_HOME:-\(.*\)}"$/\1/p' "$LAUNCHER")"
+  app="$(mac_app)" || die "There is no Mac app for agentorg uninstall to remove: install.sh put none in place."
   say "\$ agentorg uninstall"
   "$LAUNCHER" uninstall || die "agentorg uninstall failed."
   for part in "$HOME/Library/LaunchAgents/$SERVICE.plist" "$ROOT/app" "$ROOT/runtime" \
-    "$ROOT/AgentOrg Core.app" "$ROOT/update-backup" "$LAUNCHER"; do
+    "$ROOT/AgentOrg Core.app" "$ROOT/update-backup" "$LAUNCHER" "$app" "$RECORD"; do
     [ ! -e "$part" ] || die "agentorg uninstall left $part."
   done
   if launchctl print "gui/$(id -u)/$SERVICE" >/dev/null 2>&1; then
     die "agentorg uninstall left the service, $SERVICE, with launchd."
   fi
-  [ -f "$home/hub.db" ] || die "agentorg uninstall took the home at $home, which it keeps."
-  say "agentorg uninstall removed the service, what install.sh put in $ROOT and the launcher, and kept the home at $home."
-  app="$(mac_app)" || die "There is no Mac app for agentorg uninstall to leave: install.sh put none in place."
-  say "\$ \"$app/Contents/MacOS/AgentOrg\" uninstall"
-  "$app/Contents/MacOS/AgentOrg" uninstall || die "The Mac app's own uninstall failed."
-  [ ! -e "$app" ] || die "The Mac app's own uninstall left $app."
-  [ ! -e "$RECORD" ] || die "The Mac app's own uninstall left its record, $RECORD."
   if launchctl print "gui/$(id -u)/$BACKGROUND" >/dev/null 2>&1; then
-    die "The Mac app's own uninstall left its background item, $BACKGROUND, with launchd."
+    die "agentorg uninstall left the Mac app's background item, $BACKGROUND, with launchd."
   fi
-  say "The Mac app's own uninstall removed it, its background item and its record."
+  [ -f "$home/hub.db" ] || die "agentorg uninstall took the home at $home, which it keeps."
+  say "agentorg uninstall removed the service, what install.sh put in $ROOT, the launcher and the Mac app with its background item and record, and kept the home at $home."
 }
 
 # The newest release before this one, by version, among the repository's published releases.
