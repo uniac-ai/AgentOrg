@@ -1081,24 +1081,36 @@ async function playLong(kept) {
       const k = compactions.length;
       const covered = weeks[(summarized[0] ?? week.week - 1) - 1] ?? weeks[0];
       compactions[k - 1].asked = covered.week;
-      // For the question only the summary can answer: a week the first compaction summarized,
-      // its kth, so a later one asks what came through the summaries that updated it; or, past
-      // those, the kth week this one summarized.
-      const first = compactions[0].summarized;
-      const of = first[k - 1] ?? summarized[k - 1] ?? summarized[0];
-      const remembered = of === undefined ? undefined : weeks[of - 1];
-      if (remembered) compactions[k - 1].remembered = remembered.week;
-      for (const check of long.checks(k, covered, remembered)) {
+      // The asides asked about, each a week not asked before where there is one: one this
+      // compaction's summary read, its last for the first compaction, which leaves its earlier
+      // weeks for later; and after a later compaction, one the first summarized too, which came
+      // through the summaries that updated it.
+      const before = new Set(compactions.flatMap((one) => (one.asides ?? []).map((a) => a.week)));
+      const unasked = (span) => span.filter((one) => !before.has(one));
+      const asides = [];
+      const own = k === 1 ? unasked(summarized).at(-1) : unasked(summarized)[0];
+      if (own !== undefined) asides.push({ week: own, id: "aside" });
+      if (k > 1) {
+        const first = compactions[0].summarized.filter((one) => one !== own);
+        const fresh = unasked(first)[0];
+        if (fresh !== undefined) asides.push({ week: fresh, id: "aside-first" });
+        else if (first.length > 0) asides.push({ week: first[0], id: "aside-first", again: true });
+      }
+      compactions[k - 1].asides = asides;
+      for (const check of long.checks(k, covered, asides)) {
         if (stoppedWhy) break;
         const asked = await say(check.say, { kind: "check", check: check.id, after: k });
         const memory = memoryOf(agent);
         asked.memory = memory;
-        asked.pass = check.pass(
-          asked.replies.join("\n\n"),
-          memory,
-          asked.requests.flatMap((r) => r.tools),
-        );
-        if (check.inMemory) asked.inMemory = check.inMemory(memory);
+        asked.pass = check.pass(asked.replies.join("\n\n"), memory);
+        // An aside's: whether its name was in the memory lines or the digest as it was answered,
+        // so the summary wasn't all that held it.
+        if (check.name) {
+          const digest = String((await computer.files.read(long.DIGEST).catch(() => "")) ?? "");
+          asked.inMemory = memory.some((line) => line.includes(check.name));
+          asked.inDigest = digest.includes(check.name);
+          asked.isolates = !asked.inMemory && !asked.inDigest;
+        }
         if (check.expected) asked.expected = check.expected;
         compactions[k - 1].checks[check.id] = asked.pass;
       }
