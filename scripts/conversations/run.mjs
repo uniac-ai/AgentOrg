@@ -23,8 +23,8 @@
 // `--long` plays one long conversation in place of the set (long.mjs): a day's work through half a
 // year of ticket files, on an agent made as the set's are, until its earlier steps have been
 // summarized three times, with three questions after each that check the thread held. For each
-// turn it keeps each request: what it sent, how much of that the provider read from its cache, and
-// whether it was a compaction's. It is `long` in the result.
+// turn it keeps each request: what it sent, how much of that the provider read from its cache, how
+// long it took, and whether it was a compaction's. It is `long` in the result.
 //
 // `--open` opens the app's page in the person's browser, signed in, once the app is up and before
 // the first conversation, so the person can watch it played; the address carries a one-time code
@@ -988,12 +988,15 @@ async function playLong(kept) {
         ...kept,
         said: text,
         seconds: round(now() - at),
-        requests: theirs.map(({ input, cached, compaction, tools }) => ({
+        requests: theirs.map(({ input, cached, compaction, tools, ...times }) => ({
           input,
           cached,
           share: input ? round((100 * cached) / input) : 0,
           ...(compaction ? { compaction: true } : {}),
           tools: tools.filter((one) => !OWN.has(one)),
+          // Seconds from its start to its first output, and to its end, completed or not.
+          ...(times.first !== undefined ? { first: round(times.first - times.at) } : {}),
+          ...(times.ended !== undefined ? { seconds: round(times.ended - times.at) } : {}),
         })),
         replies: replies.filter((one) => one.at >= at).map((one) => one.text),
         compacted: theirs.some((r) => r.compaction),
