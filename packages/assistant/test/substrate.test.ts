@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Context } from "cordis";
+import { Context } from "cordis";
 import { type Capability, createPluginHost } from "../src/plugins.ts";
 
 /** A kv store in memory, as an agent's own store answers. */
@@ -382,5 +382,35 @@ test("a service provided while the agent runs goes when its provider is taken of
   await capabilities.mount(weather("snow"));
   await capabilities.mount(reader("again"));
   assert.ok(offered(plugins).includes("again__again-snow"));
+  await plugins.close();
+});
+
+test("no service is provided at the root, for all agents: each a capability may inject is its agent's, where its labels find it", async () => {
+  // Cordis's own root provides none: its reflect, registry, events and logger are properties,
+  // which no capability injects.
+  assert.deepEqual(Reflect.ownKeys(new Context().reflect.store), []);
+  // Nor does the executor's host, once an agent has opened and its capabilities are up.
+  const plugins = await createPluginHost(quiet, []).open("a", { store: memory() });
+  let seen: Context | undefined;
+  await plugins.mount({
+    name: "probe",
+    inject: [],
+    apply(ctx: Context) {
+      seen = ctx;
+    },
+  });
+  const root = (seen as Context)[Context.root];
+  const { store } = root.reflect;
+  const atRoot = Reflect.ownKeys(store).flatMap((label) => {
+    const impl = store[label as symbol];
+    return impl && root[Context.isolate][impl.name] === label ? [impl.name] : [];
+  });
+  assert.deepEqual(
+    atRoot,
+    [],
+    "A service provided at the root is every agent's, and a capability injecting it looks under its agent's label: keep its name out of the agent's labels.",
+  );
+  // Each the agent's capabilities provide is there, under the agent's own label.
+  assert.ok(Reflect.ownKeys(store).length > 0);
   await plugins.close();
 });
