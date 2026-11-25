@@ -21,8 +21,8 @@ const USAGE = `Usage: agentorg [command] [--home DIR]
   status                                    whether it runs, where, and as a service
   update                                    update AgentOrg and its Mac app, as the one line
                                             installed them on a Mac
-  uninstall [--delete-home]                 remove the service and what the line installed;
-                                            the home stays unless --delete-home
+  uninstall [--delete-home]                 remove the service and what the line installed,
+                                            its Mac app too; the home stays unless --delete-home
   hub [--port N]                            run a bare Hub, without the shell
   actors | bindings | exports | audit       each one's list
   bind <consumer.slot> <provider.export>    hub.grants.bind
@@ -318,6 +318,17 @@ async function serviceCommand(name: "start" | "stop" | "status" | "update" | "un
           }),
         ),
       ),
+    // The Mac app's uninstall waits up to 45 s for its provider to end.
+    command: (program, args) =>
+      new Promise((done) =>
+        execFile(program, args, { timeout: 120_000 }, (error, stdout, stderr) =>
+          done({
+            code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
+            stdout: String(stdout),
+            stderr: error && !stderr ? error.message : String(stderr),
+          }),
+        ),
+      ),
     running: runningOn,
     alive,
     sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
@@ -326,10 +337,10 @@ async function serviceCommand(name: "start" | "stop" | "status" | "update" | "un
     if (name === "update" || name === "uninstall") {
       const installed = await import("./installed.js");
       if (name === "uninstall")
-        for (const line of await installed.uninstall(system, home, {
+        await installed.uninstall(system, home, {
           deleteHome: values["delete-home"] === true,
-        }))
-          write(process.stdout, line);
+          say: (line) => write(process.stdout, line),
+        });
       else if (process.platform !== "darwin") throw new service.ServiceError(installed.ELSEWHERE);
       else process.exitCode = await installed.update(installed.RELEASE, home);
     } else if (name === "status") {

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type test from "node:test";
 import {
   homeOf,
@@ -27,11 +27,11 @@ export const run = (
 });
 
 /**
- * A stand-in for launchd and the apps on one account: `launchctl` is recorded and acted out, never
- * run, and each home has its own app. What launchd does takes time: a service handed over starts
- * its home's app `answersAfter` waits later; one taken out is let go `unloadsAfter` waits later,
- * and its app ends `endsAfter` waits later. `log` records the calls and, in brackets, those events,
- * in the order they happen.
+ * A stand-in for launchd and the apps on one account: `launchctl` and the Mac app's own command
+ * are recorded and acted out, never run, and each home has its own app. What launchd does takes
+ * time: a service handed over starts its home's app `answersAfter` waits later; one taken out is
+ * let go `unloadsAfter` waits later, and its app ends `endsAfter` waits later. `log` records the
+ * calls and, in brackets, those events, in the order they happen.
  */
 export function machine(
   userHome: string,
@@ -44,6 +44,11 @@ export function machine(
     endsAfter?: number;
     /** A verb launchctl refuses, `times` times (every time with none). */
     refuses?: { verb: string; times?: number };
+    /**
+     * How the Mac app's own command ends. With none, its uninstall is acted out: the app at
+     * `<app>/Contents/MacOS/AgentOrg` is removed, and that is said.
+     */
+    app?: (args: string[]) => { code: number; stdout: string; stderr: string };
   } = {},
 ) {
   const log: string[] = [];
@@ -90,6 +95,17 @@ export function machine(
           later(options.endsAfter ?? 1, `${home} ended`, () => apps.delete(home));
       }
       return { code: 0, stdout: "", stderr: "" };
+    },
+    async command(program, args) {
+      log.push(`${program} ${args.join(" ")}`);
+      if (options.app) return options.app(args);
+      const app = dirname(dirname(dirname(program)));
+      rmSync(app, { recursive: true, force: true });
+      return {
+        code: 0,
+        stdout: `the background item is unregistered; the driver's default removed\n${app} removed\n`,
+        stderr: "",
+      };
     },
     running: async (home) => apps.get(home),
     alive: (pid) => [...apps.values()].some((app) => app.pid === pid),

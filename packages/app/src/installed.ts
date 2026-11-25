@@ -128,16 +128,25 @@ export async function update(from: typeof RELEASE, home: string): Promise<number
   }
 }
 
+/** The Mac app's own uninstall, as `agentorg uninstall` runs it: its privacy grants go with it. */
+export const APP_UNINSTALL = ["uninstall", "--reset-privacy"];
+
 /**
- * `agentorg uninstall`: stop the service and delete its file, then delete what the line
- * installed. The home is kept unless `deleteHome`, and only a folder that is an AgentOrg home is
- * deleted. `~/Agents`, where agents work, and the Mac app are left as they are. It answers what
- * the person is told, line by line.
+ * `agentorg uninstall`: stop the service and delete its file; where the line installed AgentOrg
+ * here, run the Mac app's own uninstall, which takes the app, its privacy grants and what it keeps;
+ * then delete what the line installed. The line treats the app where it puts it as its own, as an
+ * update replaces it, so the app goes when the line's core or launcher is here. The home is kept
+ * unless `deleteHome`, and only a folder that is an AgentOrg home is deleted. `~/Agents`, where
+ * agents work, is left as it is. Each line for the person is given to `say` as it happens, before
+ * the app's wait for what it runs to end, and all of them are answered.
  */
 export async function uninstall(
   system: ServiceSystem,
   home: string,
-  { deleteHome = false } = {},
+  {
+    deleteHome = false,
+    say = () => {},
+  }: { deleteHome?: boolean; say?: (line: string) => void } = {},
 ): Promise<string[]> {
   if (system.platform !== "darwin") throw new ServiceError(ELSEWHERE);
   const { root, parts, launcher, macApps, agents } = layout(system.userHome);
@@ -156,31 +165,54 @@ export async function uninstall(
       `AgentOrg is running on ${home}, but not as the service. Stop it where it was started, then run agentorg uninstall again.`,
     );
   const said: string[] = [];
-  rmSync(plistPath(system.userHome), { force: true });
-  if (was !== "none") said.push("Removed the service.");
+  const tell = (line: string) => {
+    said.push(line);
+    say(line);
+  };
   const installed = parts.filter((part) => existsSync(part));
+  const ours = existsSync(launcher) && readFileSync(launcher, "utf8").includes(LAUNCHER_MARK);
+  const macApp = macApps.find((app) => existsSync(app));
+  const appToo = macApp !== undefined && (installed.length > 0 || ours);
+  rmSync(plistPath(system.userHome), { force: true });
+  if (was !== "none") tell("Removed the service.");
+  // The app first: where it can't be removed, what the line installed stays for another try.
+  if (appToo) {
+    tell("Removing the AgentOrg app. It waits up to 45 s for what it runs to stop.");
+    const program = join(macApp, "Contents", "MacOS", "AgentOrg");
+    const ended = await system.command(program, APP_UNINSTALL);
+    if (ended.code !== 0) {
+      const why = (ended.stderr.trim() || ended.stdout.trim()).split("\n").at(-1);
+      throw new ServiceError(
+        `The AgentOrg app couldn't be removed${why ? `: ${why}` : ""}. The rest of AgentOrg stays, so agentorg uninstall can try again.`,
+      );
+    }
+    for (const line of ended.stdout.split("\n")) if (line.trim()) tell(`  ${line.trim()}`);
+  }
   for (const part of installed) rmSync(part, { recursive: true, force: true });
-  if (installed.length > 0) said.push(`Removed AgentOrg from ${root}.`);
-  if (existsSync(launcher) && readFileSync(launcher, "utf8").includes(LAUNCHER_MARK)) {
+  if (installed.length > 0) tell(`Removed AgentOrg from ${root}.`);
+  if (ours) {
     rmSync(launcher, { force: true });
-    said.push(`Removed its launcher, ${launcher}.`);
+    tell(`Removed its launcher, ${launcher}.`);
   }
   if (deleteHome && existsSync(home)) {
     rmSync(home, { recursive: true, force: true });
-    said.push(`Removed its home, ${home}.`);
+    tell(`Removed its home, ${home}.`);
   } else if (existsSync(home))
-    said.push(
+    tell(
       `Its home stays at ${home}, with your agents, their chats and sign-ins. agentorg uninstall --delete-home removes it too.`,
     );
   try {
     if (readdirSync(root).length === 0) rmSync(root, { recursive: true });
   } catch {}
-  if (existsSync(agents)) said.push(`${agents}, where your agents work, stays as it is.`);
-  const macApp = macApps.find((app) => existsSync(app));
-  if (macApp)
-    said.push(
+  if (existsSync(agents)) tell(`${agents}, where your agents work, stays as it is.`);
+  if (macApp && !appToo)
+    tell(
       `The AgentOrg app stays, still lending this Mac. To remove it too: "${macApp}/Contents/MacOS/AgentOrg" uninstall`,
     );
-  if (said.length === 0) said.push("AgentOrg isn't installed here.");
+  else if (macApp && !existsSync(macApp))
+    tell(
+      'macOS still lists "AgentOrg" in Login Items, switched off. No app can remove that entry, and it starts nothing.',
+    );
+  if (said.length === 0) tell("AgentOrg isn't installed here.");
   return said;
 }
