@@ -77,9 +77,14 @@ if (command !== "hub") {
       usage(`--${name} takes ${what}.`);
   }
 }
+/** This core's version. */
+const VERSION = (
+  JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
 if (values.version && command === undefined) {
-  const own = new URL("../../package.json", import.meta.url);
-  write(process.stdout, (JSON.parse(readFileSync(own, "utf8")) as { version: string }).version);
+  write(process.stdout, VERSION);
   process.exit(0);
 }
 if (values.help && command === undefined) {
@@ -349,7 +354,14 @@ async function serviceCommand(name: "start" | "stop" | "status" | "update" | "un
       }
     } else if (name === "status") {
       const { lines, running: answers } = await service.status(system, home);
-      for (const line of lines) write(process.stdout, line);
+      // Whether a newer release is out on the line's channel: asked at most once a day, here only.
+      const [{ checkForUpdate, updateLine }, { RELEASE }] = await Promise.all([
+        import("./updates.js"),
+        import("./installed.js"),
+      ]);
+      await checkForUpdate(homedir(), RELEASE);
+      const update = updateLine(homedir(), VERSION);
+      for (const line of update ? [...lines, update] : lines) write(process.stdout, line);
       process.exitCode = answers ? 0 : 3;
     } else if (name === "stop") {
       const { was, on } = await service.stop(system, home);
