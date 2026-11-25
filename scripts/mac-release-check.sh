@@ -183,6 +183,9 @@ fresh() {
   answers "$version"
   app_placed
   app_answers
+  # The page's bare line names no channel: what it installs follows latest.
+  [ "$(cat "$ROOT/channel" 2>/dev/null)" = latest ] ||
+    die "install.sh recorded \"$(cat "$ROOT/channel" 2>/dev/null)\" as its channel, where a fresh install with none named follows latest."
 }
 
 # agentorg uninstall, then what it removes is gone: the service and its file, what install.sh put
@@ -198,7 +201,7 @@ uninstall() {
   say "\$ agentorg uninstall"
   "$LAUNCHER" uninstall || die "agentorg uninstall failed."
   for part in "$HOME/Library/LaunchAgents/$SERVICE.plist" "$ROOT/app" "$ROOT/runtime" \
-    "$ROOT/AgentOrg Core.app" "$ROOT/update-backup" "$LAUNCHER" "$app" "$RECORD"; do
+    "$ROOT/AgentOrg Core.app" "$ROOT/update-backup" "$ROOT/channel" "$LAUNCHER" "$app" "$RECORD"; do
     [ ! -e "$part" ] || die "agentorg uninstall left $part."
   done
   if launchctl print "gui/$(id -u)/$SERVICE" >/dev/null 2>&1; then

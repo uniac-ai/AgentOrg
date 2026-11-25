@@ -3,9 +3,16 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
-import { CHANNEL, ELSEWHERE, LAUNCHER_MARK, layout, uninstall, update } from "../src/installed.ts";
+import {
+  ELSEWHERE,
+  LAUNCHER_MARK,
+  layout,
+  recordedChannel,
+  uninstall,
+  update,
+} from "../src/installed.ts";
 import { LABEL, plistPath, ServiceError } from "../src/service.ts";
 import { folder, machine, setUpOn } from "./machine.ts";
 
@@ -18,10 +25,11 @@ function installedIn(t: test.TestContext, userHome: string) {
     else process.env.AGENTORG_APP_DIR = before;
   });
   const where = layout(userHome);
-  for (const part of where.parts) {
+  for (const part of where.parts.filter((part) => part !== where.channel)) {
     mkdirSync(part, { recursive: true });
     writeFileSync(join(part, "file"), "");
   }
+  writeFileSync(where.channel, "latest\n");
   mkdirSync(join(userHome, ".local", "bin"), { recursive: true });
   writeFileSync(where.launcher, `#!/bin/sh\n${LAUNCHER_MARK}\nexec true\n`);
   const home = join(where.root, "home");
@@ -208,10 +216,10 @@ async function releases(t: test.TestContext, files: Record<string, string>) {
   return { at, asked, from: { tags: `${at}/dist-tags`, releases: `${at}/releases` } };
 }
 
-test("update runs the install.sh of the release npm's next names, with --update on the home, once its sum is listed, and answers its exit code", async (t) => {
+test("update runs the install.sh of the release npm's channel names, with --update on the home and the channel, once its sum is listed, and answers its exit code", async (t) => {
   const scratch = folder(t, "agentorg-update-");
   const said = join(scratch, "said");
-  const script = `printf '%s\\n' "$@" "$AGENTORG_HUB_HOME" > '${said}'\nexit 3\n`;
+  const script = `printf '%s\\n' "$@" "$AGENTORG_HUB_HOME" "$AGENTORG_CHANNEL" > '${said}'\nexit 3\n`;
   const other = sha256("the core's archive");
   const files: Record<string, string> = {
     "/dist-tags": '{"latest":"0.0.30","next":"0.0.31"}',
@@ -219,9 +227,9 @@ test("update runs the install.sh of the release npm's next names, with --update 
     "/releases/v0.0.31/SHA256SUMS": `${other}  agentorg-core-0.0.31.tgz\n${sha256(script)}  install.sh\n`,
   };
   const { asked, from } = await releases(t, files);
-  assert.equal(CHANNEL, "next");
-  assert.equal(await update(from, "/the/home"), 3);
-  assert.equal(readFileSync(said, "utf8"), "--update\n/the/home\n");
+  assert.equal(await update(from, "/the/home", "next"), 3);
+  // install.sh is told the channel, so it keeps the record as it is.
+  assert.equal(readFileSync(said, "utf8"), "--update\n/the/home\nnext\n");
   assert.deepEqual(asked, [
     "/dist-tags",
     "/releases/v0.0.31/install.sh",
@@ -230,7 +238,7 @@ test("update runs the install.sh of the release npm's next names, with --update 
   // The form shasum writes for a file read as binary is taken too.
   files["/releases/v0.0.31/install.sh"] = "exit 0\n";
   files["/releases/v0.0.31/SHA256SUMS"] = `${sha256("exit 0\n")} *install.sh\n`;
-  assert.equal(await update(from, "/the/home"), 0);
+  assert.equal(await update(from, "/the/home", "next"), 0);
 });
 
 test("update refuses an install.sh whose sum differs or isn't listed, a version that isn't one, and a fetch that fails or leaves https, and runs nothing", async (t) => {
@@ -243,7 +251,7 @@ test("update refuses an install.sh whose sum differs or isn't listed, a version 
   };
   const { at, from } = await releases(t, files);
   const refused = async (message: string, release = from) =>
-    assert.rejects(update(release, "/the/home"), (error: Error) => {
+    assert.rejects(update(release, "/the/home", "next"), (error: Error) => {
       assert.ok(error instanceof ServiceError);
       assert.equal(error.message, message);
       return true;
@@ -273,4 +281,34 @@ test("update refuses an install.sh whose sum differs or isn't listed, a version 
   delete files["/dist-tags"];
   await refused(`Couldn't fetch npm's dist-tags from ${at}/dist-tags: it answered 404.`);
   assert.equal(existsSync(said), false);
+});
+
+test("update follows the channel the line recorded, and next for an install from before channels were recorded", async (t) => {
+  const scratch = folder(t, "agentorg-update-");
+  const said = join(scratch, "said");
+  const script = (version: string) =>
+    `printf '%s\\n' ${version} "$AGENTORG_CHANNEL" > '${said}'\nexit 0\n`;
+  const files: Record<string, string> = { "/dist-tags": '{"latest":"0.0.30","next":"0.0.31"}' };
+  for (const version of ["0.0.30", "0.0.31"]) {
+    files[`/releases/v${version}/install.sh`] = script(version);
+    files[`/releases/v${version}/SHA256SUMS`] = `${sha256(script(version))}  install.sh\n`;
+  }
+  const { from } = await releases(t, files);
+  const userHome = folder(t, "agentorg-account-");
+  const { channel } = layout(userHome);
+  for (const [recorded, follows, version] of [
+    [undefined, "next", "0.0.31"],
+    ["latest\n", "latest", "0.0.30"],
+    ["next\n", "next", "0.0.31"],
+    ["beta\n", "next", "0.0.31"],
+  ] as const) {
+    rmSync(channel, { force: true });
+    if (recorded !== undefined) {
+      mkdirSync(dirname(channel), { recursive: true });
+      writeFileSync(channel, recorded);
+    }
+    assert.equal(recordedChannel(userHome), follows, recorded);
+    assert.equal(await update(from, "/the/home", recordedChannel(userHome)), 0);
+    assert.equal(readFileSync(said, "utf8"), `${version}\n${follows}\n`);
+  }
 });
