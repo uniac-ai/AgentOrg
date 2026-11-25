@@ -6,6 +6,7 @@
 //   node scripts/conversations/run.mjs sign-in --dir DIR
 //   node scripts/conversations/run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long]
 //                                      [--max-requests N] [--dry] [--open] [--shots DIR]
+//                                      [--stop-on-lost]
 //
 // `--dir` is the runner's own folder: the app's home is DIR/home, the AgentComputer service's data
 // DIR/computer, and nothing of the person's AgentOrg is used. `sign-in` opens a browser on the app
@@ -33,7 +34,8 @@
 //
 // `--shots DIR`, with `--long`, keeps what the person sees of the long conversation: a page of the
 // runner's own in a headless browser, signed in the same way, shot a few seconds into each turn
-// and at its end, as DIR/NN-kind-working.png and DIR/NN-kind-end.png.
+// and at its end, as DIR/NN-kind-working.png and DIR/NN-kind-end.png. `--stop-on-lost`, with
+// `--long`, stops the run after a compaction whose three checks didn't all hold, and says which.
 //
 // The app is started on any free port, never 7731, and everything the runner starts it ends by the
 // PID it recorded. It needs a build (`npm run build`) and Docker for the containers.
@@ -87,6 +89,7 @@ const { values: flags, positionals } = parseArgs({
     dry: { type: "boolean" },
     open: { type: "boolean" },
     shots: { type: "string" },
+    "stop-on-lost": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
   allowPositionals: true,
@@ -95,7 +98,7 @@ const [command] = positionals;
 const usage = (problem) => {
   if (problem) console.error(problem);
   console.error(
-    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long] [--max-requests N] [--dry] [--open] [--shots DIR]",
+    "Usage: run.mjs sign-in --dir DIR\n       run.mjs run --dir DIR --out FILE [--core | --only 1,4,9 | --long] [--max-requests N] [--dry] [--open] [--shots DIR] [--stop-on-lost]",
   );
   process.exit(2);
 };
@@ -549,9 +552,13 @@ function standInResponse(body) {
       ? item.content
       : (item.content ?? []).map((part) => part.text ?? "").join("");
   let call;
+  /** A compaction's request is answered with a summary, so a run against small budgets compacts. */
+  const summary = String(body.instructions ?? "").startsWith(SUMMARIZING)
+    ? "## Goal\nThe stand-in's summary of the earlier steps."
+    : undefined;
   if (String(body.instructions ?? "").startsWith("You are the front desk"))
     call = { name: "route", arguments: { title: "Stand-in work" } };
-  else {
+  else if (!summary) {
     const asked = items
       .filter((item) => item.role === "user")
       .flatMap((item) => /^\[(\d+)\]/.exec(textOf(item))?.[1] ?? [])
@@ -577,6 +584,13 @@ function standInResponse(body) {
     events.push({ type: "response.function_call_arguments.delta", item_id: item.id, delta: args });
     output.push({ ...item, arguments: args });
   }
+  if (summary)
+    output.push({
+      type: "message",
+      id: `msg_${requests.length}`,
+      role: "assistant",
+      content: [{ type: "output_text", text: summary }],
+    });
   events.push({
     type: "response.completed",
     response: {
@@ -1001,8 +1015,9 @@ async function playLong(kept) {
       if (!turn.compacted) continue;
       compactions.push({ turn: turn.n, week: week.week, checks: {} });
       const k = compactions.length;
-      // A week its compaction summarized: the second, or the first after the compaction before.
-      const covered = weeks[k === 1 ? 1 : compactions[k - 2].week];
+      // A week its compaction summarized: the one before the week it came in, whose reads the
+      // compaction before, if any, still kept word for word.
+      const covered = weeks[Math.max(0, week.week - 2)];
       for (const check of long.checks(k, covered)) {
         if (stoppedWhy) break;
         const asked = await say(check.say, { kind: "check", check: check.id, after: k });
@@ -1011,6 +1026,13 @@ async function playLong(kept) {
         asked.pass = check.pass(asked.replies.join("\n\n"), memory);
         if (check.expected) asked.expected = check.expected;
         compactions[k - 1].checks[check.id] = asked.pass;
+      }
+      const lost = Object.entries(compactions[k - 1].checks).flatMap(([id, held]) =>
+        held ? [] : [id],
+      );
+      if (flags["stop-on-lost"] && lost.length > 0) {
+        stoppedWhy ??= `Stopped after compaction ${k}, at week ${week.week}: ${lost.join(", ")} didn't hold.`;
+        break;
       }
     }
     const read = await computer.files.read(long.DIGEST).catch(() => undefined);
