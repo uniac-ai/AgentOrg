@@ -5,7 +5,8 @@
 #   scripts/mac-release-check.sh apple VERSION FROM   Apple's checks on the Mac app's zip
 #   scripts/mac-release-check.sh fresh VERSION FROM   a fresh install from FROM's files
 #   scripts/mac-release-check.sh uninstall            agentorg uninstall, the Mac app with it
-#   scripts/mac-release-check.sh update VERSION FROM  the release before installed, then updated
+#   scripts/mac-release-check.sh update VERSION FROM  the release before installed, then updated,
+#                                                     back, and updated again
 #
 # FROM holds the run's files: the Mac app, AgentOrg-<version>-mac-arm64.zip, and the core,
 # agentorg-core-<version>.tgz. install.sh is the checkout's own. `update` runs `gh`, which needs
@@ -201,7 +202,8 @@ uninstall() {
   say "\$ agentorg uninstall"
   "$LAUNCHER" uninstall || die "agentorg uninstall failed."
   for part in "$HOME/Library/LaunchAgents/$SERVICE.plist" "$ROOT/app" "$ROOT/runtime" \
-    "$ROOT/AgentOrg Core.app" "$ROOT/update-backup" "$ROOT/channel" "$LAUNCHER" "$app" "$RECORD"; do
+    "$ROOT/AgentOrg Core.app" "$ROOT/update-backup" "$ROOT/previous" "$ROOT/channel" "$LAUNCHER" \
+    "$app" "$RECORD"; do
     [ ! -e "$part" ] || die "agentorg uninstall left $part."
   done
   if launchctl print "gui/$(id -u)/$SERVICE" >/dev/null 2>&1; then
@@ -278,6 +280,23 @@ update() {
   app_answers "$before"
   say "AgentOrg moved from $prev to $version."
   output updated=true
+  # Then back, as agentorg update --back runs this release's script: v$prev again, with the home as
+  # it was just before the update, so what changed since is gone.
+  touch "$AGENTORG_HUB_HOME/changed-after-the-update"
+  before="$(app_pid || true)"
+  install_sh "$root/install.sh" --back --no-open
+  answers "$prev"
+  [ "$(readlink "$ROOT/app/current")" = "$prev" ] || die "Going back left the core at $(readlink "$ROOT/app/current"), not $prev."
+  [ ! -e "$AGENTORG_HUB_HOME/changed-after-the-update" ] || die "Going back kept what changed in the home after the update."
+  [ ! -e "$ROOT/previous" ] && [ ! -e "$ROOT/app/$version" ] || die "Going back left the step it took, or $version's core."
+  app_answers "$before"
+  say "AgentOrg went back from $version to $prev, with its home as it was before the update."
+  # And forward again, so the uninstall after this checks this release's own.
+  before="$(app_pid || true)"
+  install_sh "$root/install.sh" --update --app "$zip" --core "$core" --no-open
+  answers "$version"
+  app_answers "$before"
+  say "AgentOrg moved from $prev to $version again."
 }
 
 [ $# -ge 1 ] || die "$usage"

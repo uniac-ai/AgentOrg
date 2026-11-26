@@ -106,7 +106,7 @@ test("install.sh says what it takes, and refuses an option it doesn't know or a 
   assert.equal(help.code, 0);
   assert.match(
     help.stdout,
-    /^Installs AgentOrg \d+\.\d+\.\d+ on this Mac, or with --update moves to it\.\nUsage: bash install\.sh \[--update\]/,
+    /^Installs AgentOrg \d+\.\d+\.\d+ on this Mac, or with --update moves to it, or with --back puts back the release before it\.\nUsage: bash install\.sh \[--update \| --back\]/,
   );
   const unknown = await install(t, {}, "--nope");
   assert.equal(unknown.code, 1);
@@ -168,6 +168,58 @@ test("install.sh records the channel named, else the one recorded, else next for
     assert.equal(refused.code, 1);
     assert.equal(refused.stderr.replace(/ Run it without --update: .*/, "").trimEnd(), says);
     assert.equal(refused.channel, undefined, "no channel is recorded");
+  }
+});
+
+test("install.sh --back refuses where it didn't install AgentOrg, no update kept a step, the step's home isn't whole, or with --update", async (t) => {
+  const installed =
+    (step?: { version: string; whole: boolean; core?: false }) => (account: string) => {
+      const root = join(account, ".agentorg");
+      mkdirSync(join(root, "app", "0.0.41"), { recursive: true });
+      symlinkSync("0.0.41", join(root, "app", "current"));
+      if (!step) return;
+      const cli = join(
+        root,
+        "app",
+        step.version,
+        "node_modules",
+        "@agentorg",
+        "cli",
+        "dist",
+        "src",
+      );
+      mkdirSync(cli, { recursive: true });
+      if (step.core !== false) writeFileSync(join(cli, "cli.js"), "");
+      mkdirSync(join(root, "previous", "home"), { recursive: true });
+      writeFileSync(join(root, "previous", "version"), `${step.version}\n`);
+      if (step.whole) writeFileSync(join(root, "previous", "home", "hub.db"), "");
+    };
+  const none =
+    "There is no release to go back to: AgentOrg keeps the one before its last update, and has none.";
+  for (const [account, args, says] of [
+    [
+      undefined,
+      ["--back"],
+      "AgentOrg isn't installed here by this script, so there is no release to go back to.",
+    ],
+    [installed(), ["--back"], none],
+    // A step whose core is gone is none.
+    [installed({ version: "0.0.40", whole: true, core: false }), ["--back"], none],
+    [
+      installed({ version: "0.0.40", whole: false }),
+      ["--back"],
+      "The home kept before the update to 0.0.41 isn't a whole AgentOrg home, so AgentOrg stays at 0.0.41.",
+    ],
+    [
+      installed({ version: "0.0.40", whole: true }),
+      ["--back", "--update"],
+      "Give --update or --back, not both.",
+    ],
+  ] as const) {
+    const refused = await install(t, account ? { account } : {}, ...args);
+    assert.equal(refused.code, 1, refused.stdout);
+    assert.equal(refused.stderr, `${says}\n`);
+    assert.equal(refused.stdout, "", "nothing is said to be done");
   }
 });
 

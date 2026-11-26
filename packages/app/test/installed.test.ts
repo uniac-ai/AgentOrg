@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import {
+  back,
+  backStep,
+  backWarning,
   ELSEWHERE,
   LAUNCHER_MARK,
   layout,
@@ -185,6 +188,18 @@ test("uninstall leaves a launcher it didn't write, refuses while the app runs ou
     new RegExp(`left AgentOrg's home at ${left}\\. Move it back to`),
   );
   assert.ok(existsSync(join(left, "hub.db")));
+  // And going back a release, cut off the same way.
+  const ahead = join(where.root, "back-ahead", "home");
+  mkdirSync(ahead, { recursive: true });
+  writeFileSync(join(ahead, "hub.db"), "");
+  rmSync(join(where.root, "update-backup"), { recursive: true });
+  await assert.rejects(
+    uninstall(system, where.home),
+    new RegExp(
+      `Going back a release that didn't finish left AgentOrg's home at ${ahead}\\. Move it back to`,
+    ),
+  );
+  assert.ok(existsSync(join(ahead, "hub.db")));
   const elsewhere = machine(userHome, { platform: "linux" });
   await assert.rejects(uninstall(elsewhere.system, where.home), { message: ELSEWHERE });
   assert.deepEqual(elsewhere.log, []);
@@ -270,7 +285,7 @@ test("update refuses an install.sh whose sum differs or isn't listed, a version 
     "The SHA256SUMS of AgentOrg 0.0.31 has no line for install.sh, so nothing was run.",
   );
   await refused(
-    `Couldn't fetch AgentOrg 0.0.31's install.sh from ${at}/away/v0.0.31/install.sh: it redirected to https://127.0.0.1:1.`,
+    `Couldn't fetch AgentOrg 0.0.31's install.sh from ${at}/away/v0.0.31/install.sh: it redirected to https://127.0.0.1:1, so nothing was run.`,
     { ...from, releases: `${at}/away` },
   );
   // npm has a version whose release isn't up: none before this change carries install.sh.
@@ -317,4 +332,41 @@ test("update follows the channel the line recorded, and next for an install from
     assert.equal(await update(from, "/the/home", recordedChannel(userHome)), 0);
     assert.equal(readFileSync(said, "utf8"), `${version}\n${follows}\n`);
   }
+});
+
+test("update --back runs the running release's own install.sh with --back, once its sum is listed, where an update kept a step", async (t) => {
+  const userHome = folder(t, "agentorg-account-");
+  const { root, previous } = layout(userHome);
+  mkdirSync(join(root, "app"), { recursive: true });
+  symlinkSync("0.0.41", join(root, "app", "current"));
+  // No update kept a step, or it names the release running, or no version.
+  assert.equal(backStep(userHome), undefined);
+  mkdirSync(previous);
+  for (const kept of ["0.0.41\n", "../0.0.40\n"]) {
+    writeFileSync(join(previous, "version"), kept);
+    assert.equal(backStep(userHome), undefined, kept);
+  }
+  writeFileSync(join(previous, "version"), "0.0.40\n");
+  const step = backStep(userHome);
+  assert.deepEqual(step, { now: "0.0.41", to: "0.0.40" });
+  if (!step) return;
+  assert.equal(
+    backWarning(step),
+    "This puts back AgentOrg 0.0.40 (current: 0.0.41), with its home as it was just before the update to 0.0.41. Everything since that update is lost: chats, agents and settings made or changed after it. It goes one step back only.",
+  );
+  const scratch = folder(t, "agentorg-update-");
+  const said = join(scratch, "said");
+  const script = `printf '%s\\n' "$@" "$AGENTORG_HUB_HOME" > '${said}'\nexit 4\n`;
+  const files: Record<string, string> = {
+    "/releases/v0.0.41/install.sh": script,
+    "/releases/v0.0.41/SHA256SUMS": `${sha256("another")}  install.sh\n`,
+  };
+  const { asked, from } = await releases(t, files);
+  // The running release's script, which made the step, and no other: refused unless its sum is listed.
+  await assert.rejects(back(from, "/the/home", step), /isn't the one its SHA256SUMS lists/);
+  assert.equal(existsSync(said), false);
+  files["/releases/v0.0.41/SHA256SUMS"] = `${sha256(script)}  install.sh\n`;
+  assert.equal(await back(from, "/the/home", step), 4);
+  assert.equal(readFileSync(said, "utf8"), "--back\n/the/home\n");
+  assert.ok(!asked.includes("/dist-tags"), "npm isn't asked");
 });
