@@ -10,6 +10,8 @@ import {
   type OutputItem,
   type Picture,
   Refusal,
+  type Summarize,
+  summarize,
   type Tool,
   textOf,
 } from "../src/index.ts";
@@ -77,6 +79,8 @@ export function looperWith(
     summarizing?: (text: string) => OutputItem[] | Promise<OutputItem[]>;
     /** The files a call read and changed. */
     files?: FilesOf;
+    /** What summarizes a work's earlier steps: by default, the looper's own. */
+    summarizer?: () => Summarize | undefined;
     /**
      * What the host tells each request's model, before the looper's own words: as words, as parts,
      * or as what a function gives each time the host is asked.
@@ -374,6 +378,7 @@ export function looperWith(
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
     ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
     ...(options.files === undefined ? {} : { files: options.files }),
+    summarizer: options.summarizer ?? (() => summarize),
     ...(options.conversations === undefined ? {} : { conversations: options.conversations }),
     ...(options.pass === undefined ? {} : { pass: options.pass }),
     log: { info() {}, warn: (message) => void warnings.push(message), error() {} },

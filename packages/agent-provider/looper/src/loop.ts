@@ -12,14 +12,15 @@
  * with nothing said. What it writes without sending, and what its calls did,
  * are kept for the work and said in no thread. When what a request would send is
  * over its budget once its turn has done something of its own, or the model refuses it for its
- * length, the work's earlier steps are first summarized by its own model (see compaction.ts).
+ * length, the work's earlier steps are first summarized by its own model, with the summarizer its
+ * host gives (see compaction.ts); with none, what is over the budget is cut instead.
  */
 import {
   COMPACTION_LINE,
   CONTEXT_LENGTH,
   type FilesOf,
   SUMMARY_BEGINS,
-  summarize,
+  type Summarize,
 } from "./compaction.js";
 import {
   CLOSED,
@@ -556,6 +557,11 @@ export function createLoop(options: {
   /** The files a call read and changed, by its name and arguments, for a compaction to list. */
   files?: FilesOf;
   /**
+   * What summarizes the work's earlier steps, read each time a summary is due: with none, nothing
+   * is summarized, and what is over the budget is cut.
+   */
+  summarizer?: () => Summarize | undefined;
+  /**
    * A conversation's own loop, in place of a piece of work's (see conversation.ts): told `first`
    * before its host's words and `after` them, in place of a worker's, and `works()`, read for each
    * request, as the last of its input; offered `send`, `no_reply_needed` and `route` in place of a
@@ -967,9 +973,9 @@ export function createLoop(options: {
   /**
    * Summarize the work's earlier steps with the model `chosen`, and keep the summary in its
    * record, in `thread`, after what a request that read up to `read` would keep, with one line
-   * for its Activity. It says whether it did: not when there is nothing to summarize, when the
-   * turn is stopped, or when summarizing fails, after which the turn cuts what is over the budget
-   * instead. `tooLong` says the model refused a request for its length.
+   * for its Activity. It says whether it did: not when it has no summarizer, when there is nothing
+   * to summarize, when the turn is stopped, or when summarizing fails, after which the turn cuts
+   * what is over the budget instead. `tooLong` says the model refused a request for its length.
    */
   const compact = async (
     current: Turn,
@@ -977,7 +983,8 @@ export function createLoop(options: {
     at: { thread: string; read: number },
     tooLong: boolean,
   ) => {
-    if (current.summaryFailed) return false;
+    const summarizer = options.summarizer?.();
+    if (!summarizer || current.summaryFailed) return false;
     try {
       const compacting = await record.toCompact(tooLong);
       if (!compacting || current.cancelled) return false;
@@ -993,7 +1000,7 @@ export function createLoop(options: {
           }),
         );
       };
-      const compacted = await summarize(ask, compacting, options.files);
+      const compacted = await summarizer(ask, compacting, options.files);
       if (current.cancelled) return false;
       // The steps go with the summary: the calls that kept them may be among what it covers.
       const steps = options.steps();

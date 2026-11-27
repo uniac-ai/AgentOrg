@@ -238,6 +238,16 @@ function filesOf(compacting: ToCompact, files?: FilesOf) {
 }
 
 /**
+ * What writes a work's summary, as `summarize` does: given what to summarize, a way to ask the
+ * work's model, and what the host says of the files its calls read and changed.
+ */
+export type Summarize = (
+  ask: (instructions: string, text: string) => Promise<string>,
+  compacting: ToCompact,
+  files?: FilesOf,
+) => Promise<Compacted>;
+
+/**
  * Summarize what `compacting` names, asking the work's model with `ask` (its instructions and one
  * user message, no tools): the history a piece at a time, with the first prompt and then the
  * update prompt, so nothing of it goes unread; and the newest piece of an exchange cut inside

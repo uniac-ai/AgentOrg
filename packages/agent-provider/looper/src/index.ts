@@ -1,4 +1,4 @@
-export type { FilesOf } from "./compaction.js";
+export { type FilesOf, type Summarize, summarize } from "./compaction.js";
 export { ALONE, FRAME, FRAME_ALONE, OWN_FUNCTIONS } from "./loop.js";
 export {
   createLooper,

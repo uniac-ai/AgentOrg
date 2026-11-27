@@ -49,7 +49,7 @@
  */
 
 import { z } from "zod";
-import type { FilesOf } from "./compaction.js";
+import type { FilesOf, Summarize } from "./compaction.js";
 import {
   CONVERSATION_AFTER,
   CONVERSATION_INSTRUCTIONS,
@@ -261,6 +261,12 @@ export function createLooper(options: {
    * a work's earlier steps lists them, carried from one summary to the next.
    */
   files?: FilesOf;
+  /**
+   * What summarizes a work's earlier steps once they are past the budget, read each time a summary
+   * is due (this package's own is `summarize`): with none, nothing is summarized, and what is over
+   * the budget is cut.
+   */
+  summarizer?: () => Summarize | undefined;
   /**
    * Whether each thread has a loop of its own, which every message said there reaches first (see
    * conversation.ts), in place of the main loop and of a message given to work in code. It is the
@@ -581,6 +587,7 @@ export function createLooper(options: {
         keepSteps: (steps) => keepSteps(id, steps),
         ...(options.stopGroup ? { stopGroup: options.stopGroup } : {}),
         ...(options.files ? { files: options.files } : {}),
+        ...(options.summarizer ? { summarizer: options.summarizer } : {}),
         // Marked before anything of the turn is kept, so a looper that goes in between leaves
         // it for the next to go on with.
         async starting(after) {
