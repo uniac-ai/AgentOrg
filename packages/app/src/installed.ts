@@ -23,8 +23,7 @@ export type Channel = (typeof CHANNELS)[number];
 export const UNRECORDED: Channel = "next";
 /**
  * Where `agentorg update` reads npm's dist-tags, `{"latest": …, "next": …}`, and fetches the
- * channel's release's install.sh and SHA256SUMS, at `<releases>/v<version>/`. get.sh, the line's
- * script, reads the same addresses: they change together.
+ * channel's release's install.sh and SHA256SUMS, at `<releases>/v<version>/`.
  */
 export const RELEASE = {
   tags: "https://registry.npmjs.org/-/package/@agentorg/cli/dist-tags",

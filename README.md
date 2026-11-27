@@ -36,12 +36,12 @@ AgentOrg creates and manages agents. Each part is a program that joins a Hub as 
 One line in Terminal sets AgentOrg up for the account that runs it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash
+curl -fsSL https://agentorg.app/install.sh | bash
 ```
 
-[`get.sh`](get.sh), the one file the line takes from `main`, reads the version npm's channel names, fetches that release's `install.sh` and `SHA256SUMS`, and runs `install.sh` with its other arguments once its SHA-256 is the one listed. Nothing else that installs comes from `main`. The channel is the one named (`… | bash -s -- --channel latest`, or `AGENTORG_CHANNEL=latest`), else the one recorded by an earlier install, else `next`. `install.sh` is given it in `AGENTORG_CHANNEL`.
+The install page, agentorg.app, serves a channel's `install.sh` once its release has passed its release check, which verifies the script's SHA-256. [`get.sh`](get.sh) hands on to the page: it fetches the page's `install.sh` for its channel and runs it with its other arguments. The channel is the one named (`… | bash -s -- --channel latest`, or `AGENTORG_CHANNEL=latest`), else the one recorded by an earlier install, else `next`. `install.sh` is given it in `AGENTORG_CHANNEL`.
 
-`install.sh` records the channel in `~/.agentorg/channel`, which `agentorg update` and `get.sh` then follow. The channel is the one named with `--channel` or `AGENTORG_CHANNEL`; else the one already recorded; else `next` for an install made before channels were recorded; else `latest`, the channel the install page's bare line serves. The page serves one release's script on both channels, so its line for `next` names it: `curl -fsSL https://<the page>/next/install.sh | AGENTORG_CHANNEL=next bash`.
+`install.sh` records the channel in `~/.agentorg/channel`, which `agentorg update` and `get.sh` then follow. The channel is the one named with `--channel` or `AGENTORG_CHANNEL`; else the one already recorded; else `next` for an install made before channels were recorded; else `latest`, the channel the install page's bare line serves. The page serves one release's script on both channels, so its line for `next` names it: `curl -fsSL https://agentorg.app/next/install.sh | AGENTORG_CHANNEL=next bash`.
 
 [`install.sh`](install.sh) needs macOS 13 or later on Apple silicon, and is refused as root. Everything but the Mac app goes in the account's own folders; the Mac app goes in `/Applications` when the account can write there, else `~/Applications`. In order, it:
 
