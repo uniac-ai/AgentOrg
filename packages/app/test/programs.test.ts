@@ -1386,7 +1386,10 @@ test("an Assistant made empty with the assistant template mounted is told and of
 const MCP_SERVER = {
   command: process.execPath,
   args: [
-    join(dirname(fileURLToPath(import.meta.url)), "../../../mcp/dist/test/fixtures/server.js"),
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../../coordinator/mcp/dist/test/fixtures/server.js",
+    ),
   ],
 };
 

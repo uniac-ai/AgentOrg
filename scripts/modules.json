@@ -5,12 +5,12 @@
       "packages/shell",
       "packages/sdk/src/cli.ts",
       "packages/sdk/src/person-commands.ts",
-      "packages/hub/test/cli.test.ts"
+      "packages/coordinator/hub/test/cli.test.ts"
     ],
     "coordinator": [
-      "packages/hub",
-      "packages/manager",
-      "packages/mcp",
+      "packages/coordinator/hub",
+      "packages/coordinator/manager",
+      "packages/coordinator/mcp",
       "packages/app/src/gateway.ts",
       "packages/app/src/api.ts",
       "packages/app/src/live.ts",

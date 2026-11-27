@@ -133,7 +133,7 @@ fixture_connection() {
       provider: one.provider, kind: "command", name: "Fixture",
       params: { command: process.execPath, args: [process.argv[2]] },
     }));
-  ' "$work/mcp.json" "$root/packages/mcp/dist/test/fixtures/server.js")" --home "$2" |
+  ' "$work/mcp.json" "$root/packages/coordinator/mcp/dist/test/fixtures/server.js")" --home "$2" |
     node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).connection)'
 }
 

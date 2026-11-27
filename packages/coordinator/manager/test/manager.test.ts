@@ -4510,7 +4510,7 @@ test("the delegating skill's text is among the texts it says it shipped", () => 
     .digest("hex");
   assert.ok(
     SKILL_SHIPPED.includes(now),
-    `append ${now} to SKILL_SHIPPED in packages/manager/src/control.ts, and keep the others`,
+    `append ${now} to SKILL_SHIPPED in packages/coordinator/manager/src/control.ts, and keep the others`,
   );
 });
 

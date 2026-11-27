@@ -9,7 +9,7 @@ import { defineInterface, method } from "@agentorg/sdk";
 import { connect, openChannel } from "@agentorg/sdk/client";
 import { z } from "zod";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
 const cli = join(root, "packages", "sdk", "dist", "src", "cli.js");
 const notes = defineInterface({
   name: "notes",
