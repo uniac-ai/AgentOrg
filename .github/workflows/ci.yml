@@ -26,6 +26,8 @@ jobs:
         run: npx playwright install --only-shell chromium
       - name: Lint and format
         run: npm run check
+      - name: Imports stay in their module
+        run: node scripts/check-imports.mjs && node --test scripts/check-imports.test.mjs
       # The runner carries shellcheck. get.sh is the line a person pastes on a Mac; install.sh is
       # what it runs from a release.
       - name: Check get.sh and install.sh
