@@ -1,0 +1,43 @@
+{
+  "name": "@agentorg/sdk",
+  "version": "0.0.1",
+  "description": "AgentOrg's contracts, and the code a provider uses to join a coordinator and answer them.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uniac-ai/AgentOrg.git",
+    "directory": "scripts/sdk"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./interfaces": {
+      "types": "./dist/interfaces.d.ts",
+      "default": "./dist/interfaces.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}
