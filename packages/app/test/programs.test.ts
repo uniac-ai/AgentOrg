@@ -1382,6 +1382,70 @@ test("an Assistant made empty with the assistant template mounted is told and of
   for (const agent of [units, mounts]) await person.call("agents", "remove", { agent });
 });
 
+test("an agent holding control, with memory mounted beside it, is told the saved words and offered the saved functions: what it can mount, with what it holds said as mounted", async (t) => {
+  // The model, scripted: no reply. What each request is told and offered is kept.
+  const fake = await fakeOpenAI();
+  const asked: { instructions: string; tools: unknown[] }[] = [];
+  const s = await open(t, undefined, async (request) => {
+    if (!request.url.endsWith("/responses")) return fake.handle(request);
+    const body = (await request.clone().json()) as { instructions: string; tools?: unknown[] };
+    asked.push({ instructions: body.instructions, tools: body.tools ?? [] });
+    fake.script({ events: [completed([])] });
+    return fake.handle(request);
+  });
+  const { person, ran } = await s.start();
+  const { agents: executor } = ran as NonNullable<typeof ran>;
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  // The agents' executor offers what it will: the agent is told all of it.
+  await until(async () => {
+    const { capabilities } = await person.call<{
+      capabilities: { provider: string; id: string }[];
+    }>("agents", "capabilities");
+    return ["memory", "control"].every((id) =>
+      capabilities.some((one) => one.provider === executor && one.id === id),
+    );
+  }, "the agents' executor to offer memory and control");
+  const agent = await createAssistant(person, "Holder", "Checks what it is told it can mount.");
+  // Control takes its unit's answers: at least a template its agents can be made from.
+  for (const capability of ["control", "memory"]) {
+    const made = await person.call<{ mounted?: string }>("agents", "mount", {
+      agent,
+      provider: executor,
+      capability,
+      arguments: capability === "control" ? { templates: ["assistant"] } : {},
+    });
+    assert.ok(made.mounted, capability);
+  }
+  const slot = await chatSlot(person, agent);
+  await until(
+    () =>
+      person.call(slot, "list").then(
+        () => true,
+        () => false,
+      ),
+    "the chat to be exposed",
+  );
+  await person.call(slot, "send", { text: "Hi!" });
+  await until(() => asked.length >= 1, "the agent to be asked");
+  await until(
+    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  const [first] = asked;
+  // What it can mount, with control and memory said as mounted, and the functions that mount.
+  assert.match(first?.instructions ?? "", /^- control \(Control, mounted\): /m);
+  assert.match(first?.instructions ?? "", /^- memory \(Memory, mounted\): /m);
+  matchesSaved("assistant-control.txt", (first?.instructions ?? "").replaceAll(s.home, "<home>"));
+  matchesSaved(
+    "assistant-control-tools.txt",
+    `${JSON.stringify(first?.tools ?? [], null, 2).replaceAll(s.home, "<home>")}\n`,
+  );
+  await person.call("agents", "remove", { agent });
+});
+
 /** The MCP provider's test server: a local MCP server with an `echo` and an `env` tool. */
 const MCP_SERVER = {
   command: process.execPath,

@@ -1,0 +1,456 @@
+[
+  {
+    "type": "function",
+    "name": "settings__skill",
+    "description": "Read a skill: its SKILL.md, or with path a file in its folder.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The skill's name, as your instructions list it."
+        },
+        "path": {
+          "type": "string",
+          "description": "A file in the skill's folder, relative to it."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__capability_list",
+    "description": "List the capabilities you can mount, each with its provider, id, title, description and the arguments it takes, and what is mounted now on you, or on an agent you made.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of an agent you made; leave it out for yourself."
+        }
+      },
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__capability_mount",
+    "description": "Mount a capability capability_list gives on yourself, or on an agent you made, with the arguments it takes. It takes effect from your next message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of an agent you made; leave it out for yourself."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Its provider, as capability_list gives it."
+        },
+        "capability": {
+          "type": "string",
+          "description": "Its id, as capability_list gives it."
+        },
+        "arguments": {
+          "type": "object",
+          "description": "The arguments it takes."
+        }
+      },
+      "required": [
+        "provider",
+        "capability"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__capability_unmount",
+    "description": "Take a capability off yourself, or off an agent you made, by the id capability_list gives it under mounted.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of an agent you made; leave it out for yourself."
+        },
+        "mounted": {
+          "type": "string",
+          "description": "Its id under mounted."
+        }
+      },
+      "required": [
+        "mounted"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "memory__edit",
+    "description": "Add a line to your memory, or replace or remove one by its id.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "add",
+            "replace",
+            "remove"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "The line's id, to replace or remove it."
+        },
+        "text": {
+          "type": "string",
+          "description": "The line's words, to add it or replace it."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_list",
+    "description": "The agents you can reach, each with what it's for and how it stands.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_get",
+    "description": "What an agent is made of and how it stands.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An agent's id, from agent_list."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_stop",
+    "description": "Stop an agent, keeping it.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An agent's id, from agent_list."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_start",
+    "description": "Start an agent again.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An agent's id, from agent_list."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_remove",
+    "description": "Remove an agent you made, or one they made, for good. Agents it made stay, as the person's.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An agent's id, from agent_list."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_add_unit",
+    "description": "Add a unit to one of your agents, from unit_list. Only fields you may set can be given.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An agent's id, from agent_list."
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "values": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "agent",
+        "provider",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__agent_remove_unit",
+    "description": "Remove a unit from one of your agents, by its instance, from agent_get.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An agent's id, from agent_list."
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "agent",
+        "instance"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__template_list",
+    "description": "The templates there are. One with `shipped` came with the app: it can't be removed.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__unit_list",
+    "description": "The units there are, each with its form.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "send",
+    "description": "Says something to whoever said a message, in reply to it, in the conversation it was said in: the only way anything reaches them. It answers that message. You may send more than once, and go on working after.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "number",
+          "description": "The number the message starts with."
+        },
+        "text": {
+          "type": "string",
+          "description": "What to say, as they will read it."
+        },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "detail": {
+                    "type": "string",
+                    "description": "A line under it, under 120 characters."
+                  }
+                },
+                "required": [
+                  "label"
+                ]
+              }
+            ]
+          },
+          "description": "Only when your last message of a turn leaves them a decision: one to four short choices, each under 48 characters, shown as a card they answer with a tap. Their pick comes back as their next message. The card is the offer, so don't also write \"want me to…?\"."
+        },
+        "confirm": {
+          "type": "boolean",
+          "description": "They pick, then confirm: for what can't be undone."
+        },
+        "many": {
+          "type": "boolean",
+          "description": "They may pick several."
+        }
+      },
+      "required": [
+        "message",
+        "text"
+      ]
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "status",
+    "description": "Keeps this work's steps, a short checklist. Set the list with `steps`, then move through it with `advance`, or with `done` and `start` by number. It answers with the list as it now stands. The steps are kept when the conversation is shortened; the person doesn't see them, so progress they should know of still goes in a message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "description": "The whole list, in place of any before: at most eight, at most one in progress.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "What the step is, like \"Compare prices\"."
+              },
+              "active": {
+                "type": "string",
+                "description": "Its words while in progress, like \"Comparing prices\"."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ],
+                "description": "Pending unless given."
+              }
+            },
+            "required": [
+              "text"
+            ]
+          }
+        },
+        "advance": {
+          "type": "boolean",
+          "description": "Completes the step in progress and starts the next pending one."
+        },
+        "done": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Steps to mark completed, by number from 1."
+        },
+        "start": {
+          "type": "number",
+          "description": "The step to start, by number, after any `done`."
+        }
+      }
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "no_reply_needed",
+    "description": "Says a message needs no reply: it is closed with nothing said to anyone. For a message that asks for nothing, such as thanks or an acknowledgement. Give a reaction with it, so they see it was read.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "number",
+          "description": "The number the message starts with."
+        },
+        "reaction": {
+          "type": "string",
+          "description": "One emoji, such as 👍 to a thanks: it shows on their message and notifies no one."
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "strict": false
+  }
+]
