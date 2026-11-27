@@ -47,7 +47,7 @@ const BUNDLED = [
   "agent-provider/looper",
   "agent-provider/assistant",
   "agent-provider/memory",
-  "computer",
+  "capability/computer",
 ];
 /** The names of the workspace's own packages: shipped inside the cli, never fetched. */
 const OWN = new Set(

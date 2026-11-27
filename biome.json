@@ -8,7 +8,7 @@
       "!**/agentorg-build",
       "!**/.test-fixtures",
       "!packages/shell/src/ui",
-      "!packages/computer/skills",
+      "!packages/capability/computer/skills",
       "!package-lock.json"
     ]
   },

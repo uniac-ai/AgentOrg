@@ -2697,7 +2697,7 @@ test("each skill's files are those its unit gives, and each text is among those 
         .digest("hex");
       assert.ok(
         shipped[`${name}/${file}`]?.includes(now),
-        `append ${now} to "${name}/${file}" in packages/computer/skills/shipped.json, and keep the others`,
+        `append ${now} to "${name}/${file}" in packages/capability/computer/skills/shipped.json, and keep the others`,
       );
     }
   }
