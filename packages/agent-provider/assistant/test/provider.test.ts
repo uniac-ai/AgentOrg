@@ -1,7 +1,14 @@
 // The bundled agent provider against a real Hub, with a stand-in model. The provider holds only
 // `hub.actors` and its own binding to the model, as a real one does.
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -786,6 +793,7 @@ test("it offers the capabilities it carries, mounts one its agent's list names, 
     "connector",
     "model",
     "connections",
+    "summary",
     "instructions",
     "skills",
   ].map((name) => ({ name, state: "mounted" }));
@@ -814,6 +822,85 @@ test("it offers the capabilities it carries, mounts one its agent's list names, 
     s.capabilities.mount({ agent: "act_none", capability: "notes", arguments: {} }),
     refused("unknown"),
   );
+});
+
+test("every agent it opens holds its summary, mounted, though no list names it: each agent it makes, and again as one joins after a restart", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.create();
+  const { agent: other } = await s.agents.create({
+    creatable: "assistant",
+    name: "Other",
+    answers: {},
+  });
+  const summaryOf = async (one: string) => {
+    const found = (await s.agents.status({ agent: one })).mounted?.find(
+      ({ name }) => name === "summary",
+    );
+    if (!found) return undefined;
+    const { name, title, state, detail, parent } = found;
+    return { name, title, state, ...(detail ? { detail } : {}), ...(parent ? { parent } : {}) };
+  };
+  const held = { name: "summary", title: "Summary", state: "mounted" };
+  assert.deepEqual(await summaryOf(agent), held);
+  assert.deepEqual(await summaryOf(other), held);
+  await s.restart();
+  await until(
+    async () => (await summaryOf(agent).catch(() => undefined))?.state === "mounted",
+    "the agent to be back, holding its summary",
+  );
+  assert.deepEqual(await summaryOf(agent), held);
+});
+
+test("an agent made by an earlier release, whose stored state has nothing of a summary, holds one at its first start and summarizes with it", async (t) => {
+  const s = await setup(t);
+  // Made as an earlier release made it, with nothing of a summary: its Actor, which the provider
+  // creates bound to the model, and its entry in the provider's file. This build opens it first
+  // as the provider starts.
+  const { actorId: agent, credential } = s.hub.state.createActor(s.made.actorId, {
+    name: "Earlier",
+    bindings: [{ slot: "model", provider: s.modelActor.actorId, export: "session" }],
+  });
+  const file = join(s.dir, "agents.json");
+  const stored = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  writeFileSync(file, JSON.stringify({ ...stored, [agent]: { credential, stopped: false } }));
+  await s.restart();
+  await s.give(agent);
+  s.hub.state.bind(PERSON, {
+    consumer: s.callerId,
+    slot: "chat",
+    provider: agent,
+    export: "chat",
+  });
+  await until(() => s.caller.slots.chat.bound, "the chat binding");
+  const held = (await s.agents.status({ agent })).mounted?.find(({ name }) => name === "summary");
+  assert.equal(held?.state, "mounted");
+  // Three long messages, then a request the model refuses for its length: a summary is due, and
+  // the model is asked to write it.
+  for (const i of [1, 2, 3]) await s.turn(`${i}${"x".repeat(60_000)}`);
+  const refusal = Promise.reject(
+    new Refused("context_length", "The request is longer than the model takes."),
+  );
+  refusal.catch(() => {});
+  s.gates.push(refusal);
+  s.replies.push([{ type: "message", role: "assistant", content: "## Goal\n- Earlier summary." }]);
+  const from = s.requests.length;
+  await s.talk.send({ text: "Sum it up." });
+  await until(
+    async () => s.requests.length >= from + 3 && (await s.talk.state({})).state === "idle",
+    "the turn to end",
+  );
+  const [, summary, after] = s.requests.slice(from);
+  assert.match(String(summary?.instructions), /^You are a context summarization assistant\./);
+  assert.ok(
+    after?.input.some(
+      ({ content }) =>
+        typeof content === "string" &&
+        content.startsWith(
+          "The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\n- Earlier summary.",
+        ),
+    ),
+  );
+  assert.equal((await s.texts()).at(-1), "assistant: ok");
 });
 
 test("a capability asks the agent's model with its own words, under the agent's model choice, and its question ends when it goes or the agent stops", async (t) => {

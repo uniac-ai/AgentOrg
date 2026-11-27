@@ -23,7 +23,7 @@ import {
   type Part,
   Refusal,
   type Retry,
-  summarize,
+  type Summarize,
   type Tool,
   textOf,
 } from "@agentorg/looper";
@@ -183,6 +183,11 @@ export function createChats(options: {
   stopped: boolean;
   /** A stopped turn: end what its calls left running (see the looper's `stopGroup`). */
   stopGroup?(group: string): Promise<unknown>;
+  /**
+   * What summarizes a work's earlier steps once they are past the budget, read each time a summary
+   * is due: with none, nothing is summarized, and what is over the budget is cut.
+   */
+  summarizer?(): Summarize | undefined;
   /** Each event of a conversation goes to its party, `to`, and to the person; a status to all. */
   emit: {
     message(message: Emitted<"message">, to: string): void;
@@ -292,8 +297,7 @@ export function createChats(options: {
         return party === PERSON ? undefined : (party ?? "a party it doesn't know");
       },
       files: filesOf,
-      // A work's earlier steps, past the budget, are summarized by the looper's own summarizer.
-      summarizer: () => summarize,
+      ...(options.summarizer ? { summarizer: options.summarizer } : {}),
       // Each conversation has the agent's own loop, which every message there reaches first: the
       // agent alone, doing the work itself.
       conversations: "alone",

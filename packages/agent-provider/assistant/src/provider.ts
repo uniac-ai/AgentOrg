@@ -35,6 +35,7 @@ import { control } from "./capabilities/control.js";
 import { instructions } from "./capabilities/instructions.js";
 import { offered } from "./capabilities/offered.js";
 import { skills } from "./capabilities/skills.js";
+import { summary } from "./capabilities/summary.js";
 import { type AgentHub, type Channel, connector, model } from "./connector.js";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";
@@ -245,7 +246,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     const store = createLocalStore(folderOf(agent));
     try {
       // Its context: it holds the plugins its list names once its engine reads it.
-      const context = await host.open(agent, { store, provides: ["hub", "model"] });
+      const context = await host.open(agent, { store, provides: ["hub", "model", "summary"] });
       plugins = context;
       /**
        * A plugin its settings name that it can't hold, it runs without: its status says which, and
@@ -308,12 +309,14 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
         throw refused ?? error;
       });
       if (!channel || !engine) throw new Error("Its channel opened with no engine.");
-      // Its model, for its capabilities' own questions, with the model chosen for it; and its
-      // connections, which offer the model what is exposed to it.
+      // Its model, for its capabilities' own questions, with the model chosen for it; its
+      // connections, which offer the model what is exposed to it; and its summary, which writes a
+      // work's summary once its earlier steps are past the budget.
       const running = engine;
       try {
         await context.mount(model(() => running.chosen()));
         await context.mount(connections());
+        await context.mount(summary());
       } finally {
         isMounted();
       }

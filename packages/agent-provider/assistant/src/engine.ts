@@ -1,15 +1,16 @@
 /**
  * The engine: the looper bound to one agent. Its conversations are the looper's threads, its model
- * is the agent's `model` slot, and what a request says and offers is what the agent's capabilities
- * give: those every agent has, and those the tree of what is mounted on it names, as its host was
- * last given it. Its host says where the records are kept and what the agent is told when it
- * gives no tree.
+ * is the agent's `model` slot, a work's summary is written by what its `summary` capability
+ * offers, and what a request says and offers is what the agent's capabilities give: those every
+ * agent has, and those the tree of what is mounted on it names, as its host was last given it. Its
+ * host says where the records are kept and what the agent is told when it gives no tree.
  */
 import type { capability, chat, kv, llmSession, SettingsRoot, tools } from "@agentorg/interfaces";
 import { type Conversed, type Model, type Part, Refusal } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import { WORDS } from "./capabilities/instructions.js";
+import type { Summarizer } from "./capabilities/summary.js";
 import { createChats } from "./chats.js";
 import type { Model as AgentModel } from "./connector.js";
 import { type AgentPlugins, NO_PLUGINS } from "./plugins.js";
@@ -190,6 +191,14 @@ export function startEngine(
     store,
     stopped: options.stopped ?? false,
     model,
+    // Read at each summary due, as its model is at each request: with no summary capability, none
+    // is written, and what is over the budget is cut. It is asked with the looper's own way to ask,
+    // so its requests are the turn's, which a stop cancels.
+    summarizer: () => {
+      const service = plugins.service?.("summary") as Summarizer | undefined;
+      if (!service) return undefined;
+      return (ask, compacting, files) => service.summarize(ask, compacting, files);
+    },
     // A turn asked for before its host gave a tree waits for it.
     request: (conversation) => relayed(request(conversation, true)),
     // Each request its loops make, passed through every capability's passes: what they change of

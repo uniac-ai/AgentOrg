@@ -1,6 +1,6 @@
 // The engine as the tests host it: an Actor with a store slot in place of a provider's own files,
-// holding what an executor gives every agent: its connections, and its instructions and skills
-// from the tree it is given.
+// holding what an executor gives every agent: its connections and its summary, and its
+// instructions and skills from the tree it is given.
 import { capability, chat, kv, llmSession, type SettingsRoot, tools } from "@agentorg/interfaces";
 import { defineActor } from "@agentorg/sdk";
 import type { Context } from "cordis";
@@ -9,6 +9,7 @@ import type { KvStore } from "../src/bundled.ts";
 import { connections } from "../src/capabilities/connections.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
 import { skills } from "../src/capabilities/skills.ts";
+import { summary } from "../src/capabilities/summary.ts";
 import { type AgentHub, model } from "../src/connector.ts";
 import { startEngine } from "../src/engine.ts";
 import { type AgentContext, type AgentPlugins, createPluginHost } from "../src/plugins.ts";
@@ -37,7 +38,7 @@ const quiet = { info() {}, warn() {}, error() {} };
 
 /**
  * What an executor gives every agent, on the Actor's own channel, in `opened`, or in a context of
- * its own: ready once its connections are mounted.
+ * its own: ready once its connections and its summary are mounted.
  */
 function everyAgent(
   hub: AgentHub,
@@ -52,7 +53,7 @@ function everyAgent(
       (await createPluginHost(quiet, [
         instructions({ now: () => INSTRUCTIONS, earlier: EARLIER }),
         skills(),
-      ]).open("agent", { store, provides: ["hub", "model"] }));
+      ]).open("agent", { store, provides: ["hub", "model", "summary"] }));
     await one.mount({
       name: "connector",
       title: "Hub connector",
@@ -62,6 +63,7 @@ function everyAgent(
     });
     await one.mount(model(() => chosen()));
     await one.mount(connections());
+    await one.mount(summary());
     context = one;
     return one;
   })();
