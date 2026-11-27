@@ -43,10 +43,10 @@ const BUNDLED = [
   "shell",
   "coordinator/mcp",
   "coordinator/manager",
-  "chatgpt",
-  "looper",
-  "assistant",
-  "memory",
+  "agent-provider/chatgpt",
+  "agent-provider/looper",
+  "agent-provider/assistant",
+  "agent-provider/memory",
   "computer",
 ];
 /** The names of the workspace's own packages: shipped inside the cli, never fetched. */
