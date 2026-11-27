@@ -66,9 +66,11 @@ jobs:
       # other workflow runs can write.
       - name: Install
         run: npm ci
-      # Every workspace, as CI builds them: the pack takes wire, interfaces and sdk as built.
+      # Only wire, sdk and interfaces: the pack takes them as built and checks each is built from
+      # its source, and its test reads nothing else built. In this order, since sdk takes wire's
+      # types and interfaces takes sdk's.
       - name: Build
-        run: npm run build
+        run: npm run build -w packages/wire -w packages/sdk -w packages/interfaces
       # The tarball, in a folder of its own, under the name the release and npm take: the pack
       # prints its path last.
       - name: Pack
