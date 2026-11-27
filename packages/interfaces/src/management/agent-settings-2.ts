@@ -1,9 +1,9 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
-import { Arguments } from "./capability-provider.js";
-import { Id } from "./hub.js";
-import { CapabilityId } from "./units.js";
+import { Id } from "../base/names.js";
+import { CapabilityId } from "../exposure/views.js";
+import { Arguments } from "../provider/capability-provider.js";
+import { SKILL_FILE_MAX, SkillName, SkillPath } from "../provider/skills.js";
 
 /**
  * A capability mounted on an agent, as the program that runs the agent holds it. `mounted` is the

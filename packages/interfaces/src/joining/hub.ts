@@ -1,5 +1,6 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { Id, Name, SlotName } from "../base/names.js";
 
 /**
  * The built-in `hub` Actor's exports: management as ordinary interfaces. They are bound and
@@ -12,12 +13,6 @@ export const HUB = "hub";
 export const PERSON = "person";
 
 const Hash = z.string().regex(/^sha256-[0-9a-f]{64}$/);
-export const Id = z.string().min(1).max(128);
-/** A slot or export: `name`, or `module.name`. */
-export const Name = z
-  .string()
-  .regex(/^[a-z][A-Za-z0-9_]*(\.[a-z][A-Za-z0-9_]*)?$/)
-  .max(129);
 const Empty = z.object({});
 
 export const ActorState = z.enum(["created", "running", "stopped", "closed"]);
@@ -72,11 +67,6 @@ export const hubActors = defineInterface({
 });
 
 const Wiring = { consumer: Id, slot: Name, provider: Id, export: Name };
-/** A slot made at run time: one segment, at most 48 characters, so tools named from it fit. */
-export const SlotName = z
-  .string()
-  .regex(/^[a-z][A-Za-z0-9_]*$/)
-  .max(48);
 export const Binding = z.object({
   ...Wiring,
   interface: z.string(),

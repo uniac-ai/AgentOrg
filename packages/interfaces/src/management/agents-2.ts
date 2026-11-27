@@ -1,8 +1,9 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { AgentStatus, HELD_MAX, HeldCapability } from "./agent-provider.js";
-import { Arguments, CapabilityDefinition, Mounting } from "./capability-provider.js";
-import { Id } from "./hub.js";
+import { Id } from "../base/names.js";
+import { CapabilityId } from "../exposure/views.js";
+import { AgentStatus, HELD_MAX, HeldCapability } from "../provider/agent-provider.js";
+import { Arguments, CapabilityDefinition, Mounting } from "../provider/capability-provider.js";
 import {
   ActorName,
   Avatar,
@@ -12,7 +13,6 @@ import {
   Purpose,
   TemplateId,
 } from "./manager.js";
-import { CapabilityId } from "./units.js";
 
 const OnAgent = z.object({ agent: Id });
 

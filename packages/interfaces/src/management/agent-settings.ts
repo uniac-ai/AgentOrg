@@ -1,39 +1,8 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { CapabilityPlugin, Slug } from "../provider/plugins.js";
+import { SKILL_FILE_MAX, SkillName, SkillPath } from "../provider/skills.js";
 
-/** A skill's name, as the Agent Skills convention writes it. */
-export const SkillName = z
-  .string()
-  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/)
-  .max(64);
-/**
- * A file of a skill: a relative path inside its folder, of plain segments, never `.` or `..`, with
- * no backslash or control character.
- */
-export const SkillPath = z
-  .string()
-  .regex(
-    /^(?!\.\.?(\/|$))(?!.*\/\.\.?(\/|$))([^/\\\p{Cc}\p{Zl}\p{Zp}]+\/)*[^/\\\p{Cc}\p{Zl}\p{Zp}]+$/u,
-  )
-  .max(1024);
-/** A slug, as a capability's id is (`CapabilityId` in `units.ts`, which imports this file). */
-const Slug = z
-  .string()
-  .regex(/^[a-z][a-z0-9-]*$/)
-  .max(64);
-/** A plugin's name: the executor loads the plugin it carries of that name. */
-export const PluginName = Slug;
-/**
- * A plugin a capability is made of, loaded inside the agent that holds the capability: by its name,
- * with the settings it is loaded with. The settings are the plugin's own to read, any JSON, not
- * only what a unit's form gives.
- */
-export const CapabilityPlugin = z.strictObject({
-  name: PluginName,
-  settings: z.record(z.string().max(64), z.json()).optional(),
-});
-/** The most one file of a skill holds, as text. */
-export const SKILL_FILE_MAX = 256 * 1024;
 /** What a list says of a skill, from its `SKILL.md` front matter. */
 export const SkillEntry = z.object({
   name: SkillName,

@@ -1,10 +1,10 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { Id, SlotName } from "../base/names.js";
+import { CapabilityId, FactRow, Surface, View } from "../exposure/views.js";
 import { HeldCapability } from "./agent-provider.js";
-import { SKILL_FILE_MAX, SkillName, SkillPath } from "./agent-settings.js";
 import { ConnectionTarget } from "./connection.js";
-import { Id, SlotName } from "./hub.js";
-import { CapabilityId, FactRow, Surface, View } from "./units.js";
+import { SKILL_FILE_MAX, SkillName, SkillPath } from "./skills.js";
 
 /**
  * What a capability is made with, as the JSON Schema of an object: a page draws a field from each

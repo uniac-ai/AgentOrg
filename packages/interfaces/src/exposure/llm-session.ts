@@ -1,7 +1,7 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
 import { Pictures } from "./picture.js";
-import { Retrying } from "./units.js";
+import { Retrying } from "./views.js";
 
 const RequestId = z.string().min(1).max(128);
 /** A model's id, as whoever offers the model names it. */

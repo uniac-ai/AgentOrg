@@ -1,38 +1,6 @@
-export { Account, accountLogin, LoginState } from "./account-login.js";
-export {
-  Added,
-  AgentStatus,
-  Answers,
-  agentProvider,
-  Creatable,
-  CreatableId,
-  HELD_MAX,
-  HeldCapability,
-  OwnCapability,
-  ProvidedStatus,
-} from "./agent-provider.js";
-export {
-  agentSettings,
-  CapabilityPlugin,
-  PluginName,
-  SKILL_FILE_MAX,
-  SkillEntry,
-  SkillName,
-  SkillPath,
-} from "./agent-settings.js";
-export { agentSettings2, ROOTS_MAX, SettingsRoot } from "./agent-settings-2.js";
-export { agents2, ListedTemplate2, MountedCapability2, Template2 } from "./agents-2.js";
-export { capability, WayForward } from "./capability.js";
-export {
-  ArgumentProblem,
-  Arguments,
-  ArgumentsSchema,
-  CapabilityDefinition,
-  capabilityProvider,
-  Made,
-  Mounting,
-  ProviderMounting,
-} from "./capability-provider.js";
+export { SlotName } from "./base/names.js";
+export { Account, accountLogin, LoginState } from "./exposure/account-login.js";
+export { capability, WayForward } from "./exposure/capability.js";
 export {
   Answer,
   ASK_MAX,
@@ -47,16 +15,29 @@ export {
   MessageProgress,
   REACTION_MAX,
   STEP_MAX,
-} from "./chat.js";
+} from "./exposure/chat.js";
+export { Item, llmSession, OutputItem, Tool } from "./exposure/llm-session.js";
+export { PICTURE_MAX, PICTURES_MAX, Picture, Pictures } from "./exposure/picture.js";
+export { ToolEntry, tools } from "./exposure/tools.js";
 export {
-  ConnectionKind,
-  ConnectionParams,
-  ConnectionSecrets,
-  ConnectionState,
-  ConnectionStatus,
-  ConnectionTarget,
-  ConnectionTool,
-} from "./connection.js";
+  Activity,
+  ActivityPage,
+  CapabilityId,
+  FactRow,
+  Facts,
+  FieldId,
+  FieldValue,
+  FieldValues,
+  LiveMode,
+  LiveSurface,
+  LiveTicket,
+  Retrying,
+  Step,
+  Surface,
+  UnitId,
+  View,
+  WorkEntry,
+} from "./exposure/views.js";
 export {
   Actor,
   ActorState,
@@ -70,10 +51,11 @@ export {
   hubExports,
   hubGrants,
   PERSON,
-  SlotName,
-} from "./hub.js";
-export { kv } from "./kv.js";
-export { Item, llmSession, OutputItem, Tool } from "./llm-session.js";
+} from "./joining/hub.js";
+export { agentSettings, SkillEntry } from "./management/agent-settings.js";
+export { agentSettings2, ROOTS_MAX, SettingsRoot } from "./management/agent-settings-2.js";
+export { agents2, ListedTemplate2, MountedCapability2, Template2 } from "./management/agents-2.js";
+export { ConnectionKind, ConnectionParams } from "./management/connection.js";
 export {
   AgentCapability,
   Avatar,
@@ -88,32 +70,45 @@ export {
   skills,
   Template,
   TemplateId,
-} from "./manager.js";
-export { PICTURE_MAX, PICTURES_MAX, Picture, Pictures } from "./picture.js";
-export { ToolEntry, tools } from "./tools.js";
+} from "./management/manager.js";
+export { kv } from "./page/kv.js";
 export {
-  Activity,
-  ActivityPage,
-  CapabilityId,
-  FactRow,
-  Facts,
+  Added,
+  AgentStatus,
+  Answers,
+  agentProvider,
+  Creatable,
+  CreatableId,
+  HELD_MAX,
+  HeldCapability,
+  OwnCapability,
+  ProvidedStatus,
+} from "./provider/agent-provider.js";
+export {
+  ArgumentProblem,
+  Arguments,
+  ArgumentsSchema,
+  CapabilityDefinition,
+  capabilityProvider,
+  Made,
+  Mounting,
+  ProviderMounting,
+} from "./provider/capability-provider.js";
+export {
+  ConnectionSecrets,
+  ConnectionState,
+  ConnectionStatus,
+  ConnectionTarget,
+  ConnectionTool,
+} from "./provider/connection.js";
+export { CapabilityPlugin, PluginName } from "./provider/plugins.js";
+export { SKILL_FILE_MAX, SkillName, SkillPath } from "./provider/skills.js";
+export {
   Field,
-  FieldId,
-  FieldValue,
-  FieldValues,
   Form,
-  LiveMode,
-  LiveSurface,
-  LiveTicket,
   Problem,
   ResultKind,
-  Retrying,
-  Step,
-  Surface,
   Unit,
-  UnitId,
   UnitResult,
   unitProvider,
-  View,
-  WorkEntry,
-} from "./units.js";
+} from "./provider/unit-provider.js";

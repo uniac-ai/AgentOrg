@@ -1,6 +1,6 @@
 import { defineInterface, event, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { FieldValues, LiveMode, LiveSurface, LiveTicket, UnitId } from "./units.js";
+import { FieldValues, LiveMode, LiveSurface, LiveTicket, UnitId } from "./views.js";
 
 /**
  * A way to go on with a capability that can't be reached, when building it another way would mend
