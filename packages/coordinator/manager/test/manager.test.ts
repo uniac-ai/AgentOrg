@@ -550,6 +550,8 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     unmounted: { agent: string; mounted: string }[];
     /** Each list of what is mounted on an agent the agent provider was given, in order. */
     lists: { agent: string; mounted: unknown[] }[];
+    /** For each list given, what was exposed to its agent as it came: each slot and export. */
+    exposedAtList: { agent: string; exposed: string[] }[];
   } = {
     secrets: [],
     removed: [],
@@ -558,6 +560,7 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     mounted: [],
     unmounted: [],
     lists: [],
+    exposedAtList: [],
   };
   /** What the capability provider holds on each agent, by its id for each. */
   const mountedOn = new Map<string, Map<string, string>>();
@@ -707,6 +710,14 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
         mounted(input) {
           failing("mounted");
           given.lists.push(input);
+          given.exposedAtList.push({
+            agent: input.agent,
+            exposed: hub.state
+              .bindings(input.agent)
+              .filter((one) => one.consumer === input.agent && one.exposed)
+              .map((one) => `${one.slot} ${one.export}`)
+              .sort(),
+          });
           return {};
         },
         status: ({ agent }) => {
@@ -5239,6 +5250,79 @@ test("an agent made before skills were tools, its settings slot bound to managem
   const reads = await s.exposedTo<ToolsCalls>(agent, "settings");
   assert.match((await readSkill(reads, { name: "notes" })).output, /Use it well/);
   assert.deepEqual(warnedOfIt(), []);
+});
+
+test("an agent of a release before, away as management starts with its own settings slot still declared, is owed its list until it is back, and is given it then only once management's skill tools and its control's tools are exposed to it", async (t) => {
+  const s = await delegating(t);
+  const { agent } = await s.parent({ templates: ["helper"] });
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
+  await s.calls.agents.expose({ agent, skill: "notes" });
+  const { state } = s.hub;
+  const self = s.management.actorId;
+  // As a release before left it, and away: its executor declared the slot, and management the
+  // export of the same name, the one bound to the other.
+  await s.rejoin(agent, chat, {}, { settings: agentSettings2 });
+  s.leave(agent);
+  await until(() => !s.hub.connected(agent));
+  const before = s.listed(agent);
+  await s.restart(async () => {
+    const declared = (side: "slot" | "export", name: string) => {
+      const iface = state.declaration(self, side, name)?.iface;
+      assert.ok(iface, `management declares its ${side} ${name}`);
+      return iface;
+    };
+    state.declareExternal(self, {
+      slots: Object.fromEntries(
+        ["actors", "grants", "bindings"].map((name) => [name, declared("slot", name)]),
+      ),
+      exports: {
+        ...Object.fromEntries(
+          state.exports(self).map((one) => [one.export, declared("export", one.export)]),
+        ),
+        settings: describeInterface(agentSettings2),
+      },
+    });
+    state.bind(PERSON, { consumer: agent, slot: "settings", provider: self, export: "settings" });
+  });
+  // Management of this release has started: the slot is still the agent's own, and its list is
+  // owed, not given.
+  await new Promise((later) => setTimeout(later, 200));
+  assert.equal(state.declaration(agent, "slot", "settings")?.dynamic, false);
+  assert.equal(s.listed(agent), before, "no list while its own settings slot is declared");
+  // Back as this release's executor, with no such slot: its tools are exposed, then its list given.
+  await s.rejoin(agent, chat);
+  await until(() => s.listed(agent) > before);
+  const asListed = s.given.exposedAtList.filter((one) => one.agent === agent).slice(before);
+  for (const { exposed } of asListed) {
+    assert.ok(exposed.includes("settings skillTools"), exposed.join(", "));
+    assert.ok(exposed.includes("control tools"), exposed.join(", "));
+  }
+});
+
+test("an agent whose settings slot another connection holds is given its list all the same, without management's skill tools, and management says why", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([], "Busy");
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
+  await s.calls.agents.expose({ agent, skill: "notes" });
+  const { state } = s.hub;
+  const self = s.management.actorId;
+  // Another of management's exports holds the slot: nothing of management's start clears it.
+  const [before, lists] = [s.warned.length, s.listed(agent)];
+  await s.restart(() => {
+    state.unexpose(PERSON, agent, "settings");
+    state.expose(PERSON, { provider: self, export: "tools", to: agent, as: "settings" });
+  });
+  await until(() => s.listed(agent) > lists);
+  assert.ok(
+    s.warned
+      .slice(before)
+      .some(({ line }) =>
+        line.startsWith("Giving an agent its list without management's skill tools"),
+      ),
+  );
+  const last = s.given.exposedAtList.findLast((one) => one.agent === agent);
+  assert.ok(last?.exposed.includes("settings tools"), last?.exposed.join(", "));
+  assert.ok(!last?.exposed.includes("settings skillTools"));
 });
 
 test("control mounted on an agent reaches management's tools at control for as long as it is there, and never agents@1, and an agent holds one control", async (t) => {

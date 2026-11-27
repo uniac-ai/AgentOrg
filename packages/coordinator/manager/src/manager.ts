@@ -384,6 +384,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           if (!record) return void owed.delete(agent);
           const provider = agentProviders().find((one) => one.actor === record.provider);
           if (!provider) return void owed.add(agent);
+          // Its tools first, so the turn its list lets run lists them: one that can't have them
+          // yet is owed its list.
+          if (!(await stacks.reachTools(agent, record))) return void owed.add(agent);
           try {
             await provider.call.mounted({ agent, mounted: listOf(agent) });
           } catch (error) {
