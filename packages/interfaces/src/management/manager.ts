@@ -238,10 +238,9 @@ const AgentEntry = z.object({
  * offers. What each agent is doing is read from the agent's own `chat@1`.
  *
  * `get`, `capabilities`, `mount` and `unmount` answer whoever is bound to this export: the person,
- * an agent, or any other program on the Hub, on any agent. Being bound is the grant. Which agents a caller may
- * change, and what it may mount, are decided by the capability that offers an agent these calls,
- * never by management. The other methods answer the person; an agent reaches them through its
- * control unit.
+ * or any other program on the Hub, on any agent. Being bound is the grant. An agent is refused
+ * them: it lists, mounts and unmounts through its control's tools, on itself and on the agents it
+ * made. The other methods answer the person; an agent reaches them through its control unit.
  */
 export const agents = defineInterface({
   name: "agents",

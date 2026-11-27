@@ -33,6 +33,7 @@ import { z } from "zod";
 import { connections } from "./capabilities/connections.js";
 import { control } from "./capabilities/control.js";
 import { instructions } from "./capabilities/instructions.js";
+import { offered } from "./capabilities/offered.js";
 import { skills } from "./capabilities/skills.js";
 import { type AgentHub, type Channel, connector, model } from "./connector.js";
 import { startEngine } from "./engine.js";
@@ -162,6 +163,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
   const plugins = [
     instructions({ now: () => ASSISTANT_INSTRUCTIONS, earlier: EARLIER_INSTRUCTIONS }),
     skills(),
+    offered(),
     control(),
     ...(options.plugins ?? []),
   ];

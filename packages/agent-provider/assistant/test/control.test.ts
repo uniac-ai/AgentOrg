@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agents } from "@agentorg/interfaces";
+import { tools } from "@agentorg/interfaces";
 import { describeInterface, Refused } from "@agentorg/sdk";
 import type { Context } from "cordis";
 import { control } from "../src/capabilities/control.ts";
+import { OFFERED_MAX, offered } from "../src/capabilities/offered.ts";
 import { type AgentHub, type Model, model } from "../src/connector.ts";
 import { type Capability, createPluginHost } from "../src/plugins.ts";
 import type { Candidate } from "../src/tools.ts";
@@ -27,206 +28,126 @@ function memory() {
 }
 const quiet = { info() {}, warn() {}, error() {} };
 const SELF = "act_self";
-const EXECUTOR = "act_executor";
-const MEMORY = {
-  provider: EXECUTOR,
-  id: "memory",
-  title: "Memory",
-  description: "It remembers what you tell it to.",
-  arguments: { type: "object" as const, properties: {} },
-};
-const GITHUB = {
-  provider: EXECUTOR,
-  id: "github",
-  title: "GitHub",
-  description: "Its repositories.",
-  arguments: {
-    type: "object" as const,
-    properties: { owner: { type: "string" }, token: { type: "string", secret: true } },
-    required: ["owner", "token"],
-  },
-};
-const NOTES = {
-  provider: EXECUTOR,
-  id: "notes",
-  title: "Notes",
-  description: "Notes, with a key if you have one.",
-  arguments: {
-    type: "object" as const,
-    properties: { token: { type: "string", secret: true } },
-  },
-};
+const WORDS = `## Capabilities
+A capability gives you more to do and know, from your next message.
+- memory (Memory, mounted): It remembers what you tell it to.`;
 
-/** Management's agents@1 as a stand-in: what it was asked, and agents by whose they are. */
+/** Management's tools at `control`, as a stand-in: what it was asked, and how it answers each. */
 function management() {
-  const asked: { method: string; input: unknown }[] = [];
-  const parents: Record<string, string> = { act_kid: SELF, act_other: "act_someone" };
+  const asked: unknown[] = [];
   const call = {
-    capabilities: async () => ({ capabilities: [MEMORY, GITHUB, NOTES] }),
-    get: async ({ agent }: { agent: string }) => {
-      if (agent !== SELF && !parents[agent]) throw new Refused("unknown", `No agent ${agent}.`);
-      return {
-        agent,
-        ...(parents[agent] ? { parent: { agent: parents[agent], name: "Maker" } } : {}),
-        mounted: [
-          {
-            mounted: `mnt_${agent}`,
-            provider: EXECUTOR,
-            capability: "memory",
-            title: "Memory",
-            arguments: {},
-            by: agent,
-            state: "mounted",
-            children: [],
-          },
-        ],
-      };
+    list: async () => ({ tools: [] }),
+    call: async (input: { name: string }) => {
+      asked.push(input);
+      if (input.name === "capability_mount")
+        throw new Refused("needs_key", "GitHub needs a key, which you don't hold.");
+      if (input.name === "capability_unmount")
+        return { output: "It ran and failed.", failed: true };
+      return { output: JSON.stringify({ capabilities: [] }) };
     },
-    mount: async (input: unknown) => {
-      asked.push({ method: "mount", input });
-      return { mounted: "mnt_new" };
-    },
-    unmount: async (input: unknown) => {
-      asked.push({ method: "unmount", input });
-      return {};
-    },
+    stop: async () => ({}),
   };
   return { asked, call };
 }
 
-/** An agent holding control, reaching `reached` as management's agents@1 if it is given. */
-async function holding(reached?: object) {
+/**
+ * An agent holding control, with what else it holds, and `reached` as management's tools at
+ * `control` if it is given: what each request is told of what it can mount, and its functions.
+ */
+async function holding(reached?: object, others: Capability[] = []) {
   const exposed = reached
     ? [
         {
-          slot: "agents",
-          described: describeInterface(agents),
-          provider: { actor: "act_management", export: "agents" },
+          slot: "control",
+          described: describeInterface(tools),
+          provider: { actor: "act_management", export: "tools" },
           call: reached,
           on: () => () => {},
         },
       ]
     : [];
   const hub = { exposed: () => exposed, onExposed: () => () => {} } as unknown as AgentHub;
-  const connector: Capability = {
+  const plugins = await createPluginHost(quiet, [control(), ...others]).open(SELF, {
+    store: memory(),
+    provides: ["hub"],
+  });
+  await plugins.mount({
     name: "connector",
     inject: [],
     provide: "hub",
     apply: (ctx: Context) => void ctx.provide("hub", hub),
-  };
-  const plugins = await createPluginHost(quiet, [control()]).open(SELF, {
-    store: memory(),
-    provides: ["hub"],
   });
-  await plugins.mount(connector);
-  await plugins.hold([{ name: "control" }]);
-  const functions = new Map<string, Candidate>(
-    plugins.tools().map((one) => [`${one.slot}__${one.name}`, one]),
-  );
-  const run = async (name: string, input: object) => {
-    const fn = functions.get(`control__${name}`);
-    assert.ok(fn, name);
-    return fn.run(input, "group");
-  };
-  return { plugins, functions, run };
+  const told = () =>
+    plugins
+      .pass({ instructions: [], functions: [], input: [], leftOut: [] })
+      .instructions.filter(({ owner }) => owner.endsWith("/capabilities"))
+      .map(({ text }) => text);
+  const functions = () =>
+    new Map<string, Candidate>(plugins.tools().map((one) => [`${one.slot}__${one.name}`, one]));
+  return { plugins, told, functions };
 }
 
-test("control lists what may be mounted and what is mounted, and mounts and unmounts on the agent itself and on an agent it made, and on no other", async () => {
+test("control offers its three functions and runs each through management's tools at control: what each answers, fails or is refused is told as before; with none there, management can't be reached", async () => {
   const { asked, call } = management();
-  const { plugins, functions, run } = await holding(call);
+  const { plugins, functions } = await holding(call);
+  await plugins.hold([{ name: "control" }]);
+  const held = functions();
   assert.deepEqual(
-    [...functions.keys()],
+    [...held.keys()],
     ["control__capability_list", "control__capability_mount", "control__capability_unmount"],
   );
-  const listed = await run("capability_list", {});
-  assert.equal(listed.ok, true);
-  const { capabilities, mounted } = JSON.parse(listed.output);
-  assert.deepEqual(
-    capabilities.map((one: { id: string }) => one.id),
-    ["memory", "github", "notes"],
-  );
-  assert.deepEqual(
-    mounted.map((one: { mounted: string }) => one.mounted),
-    [`mnt_${SELF}`],
-  );
-  // On itself, and on the agent it made.
-  for (const agent of [undefined, "act_kid"]) {
-    const on = agent ?? SELF;
-    const made = await run("capability_mount", {
-      ...(agent ? { agent } : {}),
-      provider: EXECUTOR,
-      capability: "memory",
-    });
-    assert.deepEqual(made, { output: JSON.stringify({ mounted: "mnt_new" }), ok: true });
-    assert.deepEqual(asked.at(-1), {
-      method: "mount",
-      input: { agent: on, provider: EXECUTOR, capability: "memory", arguments: {} },
-    });
-    assert.equal(
-      (await run("capability_unmount", { ...(agent ? { agent } : {}), mounted: "mnt_new" })).ok,
-      true,
-    );
-    assert.deepEqual(asked.at(-1), { method: "unmount", input: { agent: on, mounted: "mnt_new" } });
-  }
-  // Another's agent, or one there isn't: refused, and management is asked nothing more.
-  const before = asked.length;
-  for (const name of ["capability_list", "capability_mount", "capability_unmount"]) {
-    const refused = await run(name, {
-      agent: "act_other",
-      provider: EXECUTOR,
-      capability: "memory",
-      mounted: "mnt_act_other",
-    });
-    assert.equal(refused.ok, false, name);
-    assert.equal(refused.code, "forbidden", name);
-    assert.equal(
-      refused.output,
-      "You can mount and unmount only on yourself and on agents you made, and you didn't make act_other.",
-    );
-  }
-  assert.equal((await run("capability_list", { agent: "act_none" })).code, "unknown");
-  assert.equal(asked.length, before);
+  assert.deepEqual(held.get("control__capability_mount")?.parameters.required, [
+    "provider",
+    "capability",
+  ]);
+  const run = (name: string, input: object) =>
+    (held.get(`control__${name}`) as Candidate).run(input, "group");
+  assert.deepEqual(await run("capability_list", { agent: "act_kid" }), {
+    output: JSON.stringify({ capabilities: [] }),
+    ok: true,
+  });
+  assert.deepEqual(asked, [
+    { name: "capability_list", arguments: { agent: "act_kid" }, group: "group" },
+  ]);
+  // What management refuses is told with its code; what ran and failed, as failed.
+  assert.deepEqual(await run("capability_mount", { provider: "p", capability: "github" }), {
+    output: "GitHub needs a key, which you don't hold.",
+    ok: false,
+    code: "needs_key",
+  });
+  assert.deepEqual(await run("capability_unmount", { mounted: "mnt_one" }), {
+    output: "It ran and failed.",
+    ok: false,
+    code: "failed",
+  });
   await plugins.close();
-});
 
-test("a capability that needs a key isn't mounted: the agent is told to tell the person it needs theirs, given in Setup", async () => {
-  const { asked, call } = management();
-  const { plugins, run } = await holding(call);
-  const words = (title: string) =>
-    `${title} needs a key, which you don't hold and can't be given here: only the person gives it, in Setup. Nothing was mounted. Tell them, in your own words, that you need their key for ${title}, given in Setup.`;
-  // One whose key is required, with or without a key given.
-  for (const given of [{ owner: "o" }, { owner: "o", token: "tok" }])
-    assert.deepEqual(
-      await run("capability_mount", { provider: EXECUTOR, capability: "github", arguments: given }),
-      { output: words("GitHub"), ok: false, code: "needs_key" },
-    );
-  // One whose key is optional is mounted without one, and refused with one.
-  assert.equal(
-    (await run("capability_mount", { provider: EXECUTOR, capability: "notes", arguments: {} })).ok,
-    true,
-  );
-  assert.deepEqual(
-    await run("capability_mount", {
-      provider: EXECUTOR,
-      capability: "notes",
-      arguments: { token: "tok" },
-    }),
-    { output: words("Notes"), ok: false, code: "needs_key" },
-  );
-  assert.deepEqual(
-    asked.map(({ method, input }) => [method, (input as { capability: string }).capability]),
-    [["mount", "notes"]],
-  );
-  await plugins.close();
-});
-
-test("with management's agents@1 not exposed to it, control says it can't be reached", async () => {
-  const { plugins, run } = await holding();
-  assert.deepEqual(await run("capability_list", {}), {
+  const away = await holding();
+  await away.plugins.hold([{ name: "control" }]);
+  assert.deepEqual(await away.functions().get("control__capability_list")?.run({}, "group"), {
     output: "Management can't be reached now.",
     ok: false,
     code: "not_connected",
   });
+  await away.plugins.close();
+});
+
+test("offered tells what management says the agent can mount as its own section, where control told it, and nothing when none is on offer; control tells nothing itself", async () => {
+  const { call } = management();
+  const { plugins, told } = await holding(call, [offered()]);
+  const tellers = () =>
+    plugins
+      .pass({ instructions: [], functions: [], input: [], leftOut: [] })
+      .instructions.filter(({ owner }) => owner.endsWith("/capabilities"))
+      .map(({ owner, max }) => [owner, max]);
+  await plugins.hold([{ name: "offered", settings: { text: WORDS } }, { name: "control" }]);
+  assert.deepEqual(told(), [WORDS]);
+  assert.deepEqual(tellers(), [["plugin:offered/capabilities", OFFERED_MAX]]);
+  // None on offer: nothing is told.
+  await plugins.hold([{ name: "offered", settings: {} }, { name: "control" }]);
+  assert.deepEqual(told(), []);
+  await plugins.hold([{ name: "control" }]);
+  assert.deepEqual(told(), []);
   await plugins.close();
 });
 
@@ -283,125 +204,5 @@ test("the agent's loops ask through its model capability: a loop's request goes 
   bound = false;
   assert.deepEqual(await service.cancel({ requestId: "loop-2" }), {});
   assert.equal(asked.length, 2);
-  await plugins.close();
-});
-
-test("control tells the agent, once a turn, what it can mount and what it holds, by id and description, reading what is on offer before any turn and asking management nothing of the agent; with management away, nothing", async () => {
-  const { call } = management();
-  // Each call management is asked, by its name.
-  const asked: string[] = [];
-  const counted = Object.fromEntries(
-    Object.entries(call).map(([name, fn]) => [
-      name,
-      (input: never) => {
-        asked.push(name);
-        return (fn as (input: never) => unknown)(input);
-      },
-    ]),
-  );
-  // Management's slot comes after control is mounted, as on an agent that has just been given it.
-  let reached: object | undefined;
-  const exposed = () =>
-    reached
-      ? [
-          {
-            slot: "agents",
-            described: describeInterface(agents),
-            provider: { actor: "act_management", export: "agents" },
-            call: reached,
-            on: () => () => {},
-          },
-        ]
-      : [];
-  const heard: (() => void)[] = [];
-  const hub = {
-    exposed,
-    onExposed: (fn: () => void) => {
-      heard.push(fn);
-      return () => heard.splice(heard.indexOf(fn), 1);
-    },
-  } as unknown as AgentHub;
-  // What it holds is its own: here, memory beside control.
-  const held: Capability = { name: "memory", inject: [], apply() {} };
-  const plugins = await createPluginHost(quiet, [control(), held]).open(SELF, {
-    store: memory(),
-    provides: ["hub"],
-  });
-  await plugins.mount({
-    name: "connector",
-    inject: [],
-    provide: "hub",
-    apply: (ctx: Context) => void ctx.provide("hub", hub),
-  });
-  await plugins.hold([{ name: "control" }, { name: "memory" }]);
-  // With no slot yet, nothing is read; once it comes, what is on offer is, before any turn.
-  assert.deepEqual(asked, []);
-  reached = counted;
-  for (const fn of heard) fn();
-  await new Promise((done) => setTimeout(done, 10));
-  assert.deepEqual(asked, ["capabilities"]);
-  const told = () =>
-    plugins
-      .pass({ instructions: [], functions: [], input: [], leftOut: [] })
-      .instructions.filter(({ owner }) => owner === "plugin:control/capabilities")
-      .map(({ text }) => text);
-  const list = `## Capabilities
-A capability gives you more to do and know, from your next message. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.
-- memory (Memory, mounted): It remembers what you tell it to.
-- github (GitHub): Its repositories.
-- notes (Notes): Notes, with a key if you have one.`;
-  // Each turn has it already, and reads it again behind itself. No turn asks management of the
-  // agent.
-  await plugins.turn();
-  assert.deepEqual(told(), [list]);
-  await plugins.turn();
-  assert.deepEqual(told(), [list]);
-  await new Promise((done) => setTimeout(done, 10));
-  assert.deepEqual(asked, ["capabilities", "capabilities", "capabilities"]);
-  reached = undefined;
-  await plugins.turn();
-  assert.deepEqual(told(), []);
-  await plugins.close();
-});
-
-test("control marks as mounted every capability the agent's settings name, whoever provides it, and asks no one for it", async () => {
-  const { call } = management();
-  const hub = {
-    exposed: () => [
-      {
-        slot: "agents",
-        described: describeInterface(agents),
-        provider: { actor: "act_management", export: "agents" },
-        call,
-        on: () => () => {},
-      },
-    ],
-    onExposed: () => () => {},
-  } as unknown as AgentHub;
-  const plugins = await createPluginHost(quiet, [control()]).open(SELF, {
-    store: memory(),
-    provides: ["hub"],
-  });
-  await plugins.mount({
-    name: "connector",
-    inject: [],
-    provide: "hub",
-    apply: (ctx: Context) => void ctx.provide("hub", hub),
-  });
-  const told = () =>
-    plugins
-      .pass({ instructions: [], functions: [], input: [], leftOut: [] })
-      .instructions.filter(({ owner }) => owner === "plugin:control/capabilities")
-      .map(({ text }) => text)
-      .join("");
-  // GitHub, which a provider outside the agent made, is named in its settings beside control.
-  await plugins.hold([{ name: "control" }], ["control", "github"]);
-  await plugins.turn();
-  assert.match(told(), /^- github \(GitHub, mounted\): Its repositories\.$/m);
-  assert.match(told(), /^- notes \(Notes\): /m);
-  // Once its settings no longer name it, it isn't marked.
-  await plugins.hold([{ name: "control" }], ["control"]);
-  await plugins.turn();
-  assert.match(told(), /^- github \(GitHub\): /m);
   await plugins.close();
 });

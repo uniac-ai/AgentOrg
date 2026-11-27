@@ -1550,7 +1550,7 @@ test("two MCP servers mounted on a running agent are both offered their function
   await person.call("agents", "remove", { agent });
 });
 
-test("the person, the agent itself and another program each mount memory on a running agent through management and take it off; the agent mounts it through its control, which reaches management once mounted, and the lines outlast each and a restart", async (t) => {
+test("the person, the agent itself and another program each mount memory on a running agent through management and take it off; the agent mounts it through its control, which reaches management's tools once mounted, and the lines outlast each and a restart", async (t) => {
   // The model, scripted: each of the agent's requests answered in turn, nothing once those run out.
   // What each request is told, and its input, are kept.
   const fake = await fakeOpenAI();
@@ -1605,17 +1605,15 @@ test("the person, the agent itself and another program each mount memory on a ru
     (await person.call<Mounted>("agents", "get", { agent })).mounted?.find(
       (one) => one.capability === capability,
     )?.mounted as string;
-  /** Whether management's agents@1 is exposed to the agent. */
-  const reaches = async () =>
-    (
-      await person.call<{ bindings: { consumer: string; slot: string; provider: string }[] }>(
-        "bindings",
-        "list",
-        { actor: agent },
-      )
-    ).bindings.some(
-      (b) => b.consumer === agent && b.slot === "agents" && b.provider === management,
-    );
+  /** Whether management's tools are exposed to the agent at control, and never its agents@1. */
+  const reaches = async () => {
+    const { bindings } = await person.call<{
+      bindings: { consumer: string; slot: string; provider: string; export: string }[];
+    }>("bindings", "list", { actor: agent });
+    const theirs = bindings.filter((b) => b.consumer === agent && b.provider === management);
+    assert.ok(!theirs.some((b) => b.slot === "agents"), "agents@1 is exposed to the agent");
+    return theirs.some((b) => b.slot === "control" && b.export === "tools");
+  };
   const slot = await chatSlot(person, agent);
   await until(
     () =>
@@ -1653,7 +1651,7 @@ test("the person, the agent itself and another program each mount memory on a ru
     return result.mounted;
   };
 
-  // The person mounts control, which reaches management's agents@1 for as long as it is mounted.
+  // The person mounts control, which reaches management's tools for as long as it is mounted.
   assert.equal(await reaches(), false);
   await mounted("person", () =>
     person.call("agents", "mount", {

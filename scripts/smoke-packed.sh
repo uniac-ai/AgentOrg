@@ -14,8 +14,8 @@
 # - 0.0.10 to 0.0.40: an agent with an AgentOrg control unit that must still run, bound as it was,
 #   whose conversation takes a message, and whose unit's skill is this build's.
 # Bound as it was, but that this build gives an agent, at the slot its settings were bound at,
-# management's skill tools in their place, and gives an agent with a control unit management's
-# agents@1 beside its tools, as 0.0.39 and 0.0.40 already did.
+# management's skill tools in their place, and takes off the agents@1 that 0.0.39 and 0.0.40 gave
+# an agent with a control unit beside its tools: its control is those tools now.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -107,15 +107,11 @@ agent_bindings() {
     ' "$3"
 }
 # What an agent bound as $1 says is bound on this build: at its settings slot, management's skill
-# tools in place of its settings, and management's agents@1 beside a control unit's tools, where
-# the version hadn't bound them so already.
+# tools in place of its settings, and no agents@1 beside a control unit's tools, where the version
+# had bound it.
 bound_now() {
-  local management
-  management="$(awk '$1 == "control" { print $3 }' "$1")"
-  {
-    sed -E 's/^settings agent\.settings@[12] ([^ ]+) settings$/settings tools@1 \1 skillTools/' "$1"
-    [ -z "$management" ] || grep -q '^agents agents@1 ' "$1" || echo "agents agents@1 $management agents"
-  } | LC_ALL=C sort
+  sed -E -e 's/^settings agent\.settings@[12] ([^ ]+) settings$/settings tools@1 \1 skillTools/' \
+    -e '/^agents agents@1 [^ ]+ agents$/d' "$1" | LC_ALL=C sort
 }
 # Make a connection to the MCP test fixture with `agentorg` ($1) on a home ($2), once a way to
 # connect is offered there, and print its id; nothing if none is offered in time.
