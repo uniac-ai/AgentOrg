@@ -6,6 +6,7 @@ import {
   type OutputItem,
   Refusal,
   type Shown,
+  summarize,
   type Tool,
 } from "../src/index.ts";
 import { FRAME, HAND_BACK, NO_REPLY, SEND, STATUS, workInstructions } from "../src/loop.ts";
@@ -52,6 +53,7 @@ function looperWith(
       cancel: async () => ({}),
     },
     request: async () => ({ instructions: "Be brief.", tools }),
+    summarizer: () => summarize,
     out: {
       message: (thread, message) => said.push({ thread, message }),
       delta: (thread, id, text) => deltas.push({ thread, id, text }),

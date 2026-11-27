@@ -198,6 +198,37 @@ test("a request the model refuses for its length is asked again once after a sum
   assert.equal(looper.state("a").state, "error");
 });
 
+test("with no summarizer, nothing is summarized: the oldest are cut, the turn goes on, and the record keeps them all", async () => {
+  const { looper, asked, raw, summaries, answer, lives, warnings, said } = looperWith({
+    tools: [look],
+    instructions: FLOOR,
+    summarizer: () => undefined,
+  });
+  await looper.send("a", "Read every file.");
+  await until(() => asked.length === 1, "the request");
+  answer("Read every file.", looks(0, 20));
+  await until(() => asked.length === 2, "the request after the calls");
+  // No summary is asked for, and nothing warns of one: the request is cut to fit, and says so.
+  assert.equal(summaries.length, 0);
+  assert.deepEqual(warnings, []);
+  assert.ok(
+    (raw[1] as Item[]).some(
+      (item) => item.type === "function_call_output" && item.output.startsWith("(Left out:"),
+    ),
+  );
+  answer("Read every file.", sends("Read them all."));
+  await looper.settled();
+  assert.ok(said.includes("a: assistant: Read them all."));
+  assert.equal(looper.state("a").state, "idle");
+  const { entries } = await looper.entries("a", undefined, 30);
+  assert.equal(entries.map(shown).filter((line) => line === "look done").length, 20);
+  assert.ok(!entries.map(shown).includes(COMPACTION_LINE));
+  assert.deepEqual(
+    lives.map((line) => line.split(": ")[1]),
+    ["turnStarted", "turnEnded"],
+  );
+});
+
 test("a turn stopped while its steps are summarized keeps nothing of the summary", async () => {
   const { looper, asked, summaries, answer } = looperWith({
     tools: [look],

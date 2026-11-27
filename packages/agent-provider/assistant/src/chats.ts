@@ -23,6 +23,7 @@ import {
   type Part,
   Refusal,
   type Retry,
+  summarize,
   type Tool,
   textOf,
 } from "@agentorg/looper";
@@ -291,6 +292,8 @@ export function createChats(options: {
         return party === PERSON ? undefined : (party ?? "a party it doesn't know");
       },
       files: filesOf,
+      // A work's earlier steps, past the budget, are summarized by the looper's own summarizer.
+      summarizer: () => summarize,
       // Each conversation has the agent's own loop, which every message there reaches first: the
       // agent alone, doing the work itself.
       conversations: "alone",
