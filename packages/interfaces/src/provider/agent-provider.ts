@@ -1,8 +1,8 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
-import { Id, Name } from "./hub.js";
-import { ModelId } from "./llm-session.js";
-import { CapabilityId, View } from "./units.js";
+import { Id, Name } from "../base/names.js";
+import { ModelId } from "../exposure/llm-session.js";
+import { CapabilityId, View } from "../exposure/views.js";
 
 const Title = z.string().min(1).max(128);
 const Description = z.string().max(2000);

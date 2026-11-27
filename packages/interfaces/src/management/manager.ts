@@ -1,5 +1,18 @@
 import { defineInterface, method } from "@agentorg/sdk";
 import { z } from "zod";
+import { Id, SlotName } from "../base/names.js";
+import { ModelId } from "../exposure/llm-session.js";
+import {
+  CapabilityId,
+  FactRow,
+  FieldValues,
+  LiveMode,
+  LiveSurface,
+  LiveTicket,
+  Surface,
+  UnitId,
+  View,
+} from "../exposure/views.js";
 import {
   AgentModels,
   AgentStatus,
@@ -8,39 +21,19 @@ import {
   CreatableId,
   HELD_MAX,
   HeldCapability,
-} from "./agent-provider.js";
+} from "../provider/agent-provider.js";
+import { Arguments, CapabilityDefinition, Mounting } from "../provider/capability-provider.js";
 import {
-  CapabilityPlugin,
-  SKILL_FILE_MAX,
-  SkillEntry,
-  SkillName,
-  SkillPath,
-} from "./agent-settings.js";
-import { Arguments, CapabilityDefinition, Mounting } from "./capability-provider.js";
-import {
-  ConnectionKind,
-  ConnectionParams,
   ConnectionSecrets,
   ConnectionState,
   ConnectionStatus,
   ConnectionTarget,
-} from "./connection.js";
-import { Id, SlotName } from "./hub.js";
-import { ModelId } from "./llm-session.js";
-import {
-  CapabilityId,
-  FactRow,
-  FieldValues,
-  LiveMode,
-  LiveSurface,
-  LiveTicket,
-  Problem,
-  ResultKind,
-  Surface,
-  Unit,
-  UnitId,
-  View,
-} from "./units.js";
+} from "../provider/connection.js";
+import { CapabilityPlugin } from "../provider/plugins.js";
+import { SKILL_FILE_MAX, SkillName, SkillPath } from "../provider/skills.js";
+import { Problem, ResultKind, Unit } from "../provider/unit-provider.js";
+import { SkillEntry } from "./agent-settings.js";
+import { ConnectionKind, ConnectionParams } from "./connection.js";
 
 const Time = z.string().max(64);
 export const ActorName = z.string().min(1).max(128);
