@@ -58,7 +58,7 @@ import {
   type Worked,
   workedOut,
 } from "./form.js";
-import { CONTROL_ROOT, holdsControl } from "./settings.js";
+import { CONTROL_ROOT, holdsControl, SKILL_TOOLS_EXPORT, SKILLS_SLOT } from "./settings.js";
 import type { SkillFiles, Skills } from "./skills.js";
 
 /** A unit an agent has: what its provider made, and what was filled in. Never a secret. */
@@ -397,8 +397,6 @@ export interface StackParts {
 
 /** What a capability's Actor exports as itself, and what each of its connections exports. */
 const CAPABILITY_EXPORT = "capability";
-/** The agent's slot that management's `agent.settings@2` is bound to. */
-const SETTINGS_SLOT = "settings";
 const TOOLS_EXPORT = "tools";
 /** The slot an agent's Work is reached at by the agent that made it: named by its id. */
 const workSlot = (agent: string) => `work_${agent}`;
@@ -848,11 +846,17 @@ export function createStacks(parts: StackParts) {
     return { placed, problems };
   };
 
-  /** The connections a living agent has now; what is exposed to it is the Hub's to say. */
+  /**
+   * The connections a living agent has now; what is exposed to it is the Hub's to say. Management's
+   * skill tools, which every agent has, are none.
+   */
   const toolsOf = async (agent: string) =>
     (await hub.bindings.list({ actor: agent })).bindings.filter(
       (binding) =>
-        binding.consumer === agent && binding.interface === TOOLS && !madeWork(agent, binding),
+        binding.consumer === agent &&
+        binding.interface === TOOLS &&
+        !madeWork(agent, binding) &&
+        !(binding.provider === self && binding.export === SKILL_TOOLS_EXPORT),
     );
   /** Whether a binding of `maker`'s is the Work of an agent it made, which no page shows. */
   const madeWork = (maker: string, binding: AgentBinding) =>
@@ -1716,6 +1720,26 @@ export function createStacks(parts: StackParts) {
     }
   };
   /**
+   * Expose management's skill tools to an agent at `SKILLS_SLOT`: it is there already, or made. As
+   * an agent is made, one that can't be is its creation's failure; else it is logged.
+   */
+  const reachSkills = async (agent: string, making = false) => {
+    try {
+      await hub.grants.expose({
+        provider: self,
+        export: SKILL_TOOLS_EXPORT,
+        to: agent,
+        as: SKILLS_SLOT,
+      });
+    } catch (error) {
+      if (making) throw error;
+      // An agent of a release before declares its own slot there until it is back without it,
+      // when this is done again.
+      if (alreadyGone(error) || (error instanceof Refused && error.code === "conflict")) return;
+      log.warn(`Reaching management for skills: ${messageOf(error)}`, { agent });
+    }
+  };
+  /**
    * Make the person's slots to what agents hold again, where the Hub has dropped one, as it
    * does when an Actor stops offering its export or offers it as another interface. Nothing
    * changes where they are there. `actor` is the one that came back; with none, every one is
@@ -1878,6 +1902,14 @@ export function createStacks(parts: StackParts) {
     fromUnit,
     reachHeld,
     reachControl,
+    /**
+     * Have every agent, or only `actor` if it is one, reach management's skill tools: one kept
+     * before they were exposed, too. Nothing changes where they are there.
+     */
+    reachSkills: async (actor?: string) => {
+      for (const agent of Object.keys(records.agents))
+        if (actor === undefined || agent === actor) await reachSkills(agent);
+    },
     wireMade,
     unwireMade,
     settleControl,
@@ -2096,12 +2128,7 @@ export function createStacks(parts: StackParts) {
         };
         creating.set(agent, record);
         undo.push(() => creating.delete(agent));
-        await hub.grants.bind({
-          consumer: agent,
-          slot: SETTINGS_SLOT,
-          provider: self,
-          export: "settings",
-        });
+        await reachSkills(agent, true);
         // Its provider holds what is mounted on it from its first word: the record being made.
         await provider.call.mounted({ agent, mounted: parts.listOf(agent) });
 

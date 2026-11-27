@@ -13,9 +13,9 @@
 #   person, the one last written in, which takes a message;
 # - 0.0.10 to 0.0.40: an agent with an AgentOrg control unit that must still run, bound as it was,
 #   whose conversation takes a message, and whose unit's skill is this build's.
-# Bound as it was, but that this build reads an agent's settings at their second major, through the
-# same binding, and gives an agent with a control unit management's agents@1 beside its tools, as
-# 0.0.39 and 0.0.40 already did.
+# Bound as it was, but that this build gives an agent, at the slot its settings were bound at,
+# management's skill tools in their place, and gives an agent with a control unit management's
+# agents@1 beside its tools, as 0.0.39 and 0.0.40 already did.
 # Once a version is published, it gets a section here, or joins the loop of an earlier version
 # when it takes the same commands and the same is asked of this build on its home (not in the
 # change that releases it: the registry has it only after its tag). A section makes, with that
@@ -106,14 +106,14 @@ agent_bindings() {
       console.log(own.map(line).sort().join("\n"));
     ' "$3"
 }
-# What an agent bound as $1 says is bound on this build: its settings binding, the same one, at
-# their second major, and management's agents@1 beside a control unit's tools, where the version
-# hadn't bound them so already.
+# What an agent bound as $1 says is bound on this build: at its settings slot, management's skill
+# tools in place of its settings, and management's agents@1 beside a control unit's tools, where
+# the version hadn't bound them so already.
 bound_now() {
   local management
   management="$(awk '$1 == "control" { print $3 }' "$1")"
   {
-    sed 's/^settings agent\.settings@1 /settings agent.settings@2 /' "$1"
+    sed -E 's/^settings agent\.settings@[12] ([^ ]+) settings$/settings tools@1 \1 skillTools/' "$1"
     [ -z "$management" ] || grep -q '^agents agents@1 ' "$1" || echo "agents agents@1 $management agents"
   } | LC_ALL=C sort
 }

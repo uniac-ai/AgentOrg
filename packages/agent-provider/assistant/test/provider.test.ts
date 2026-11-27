@@ -8,7 +8,6 @@ import test from "node:test";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   agentProvider,
-  agentSettings2,
   type CapabilityDefinition,
   capabilityProvider,
   chat,
@@ -274,7 +273,7 @@ test("an Assistant is made running, bound to the model, with no store and nothin
     (["model", "settings", "store", "actors"] as const).map(
       (slot) => s.hub.state.declaration(agent, "slot", slot) !== undefined,
     ),
-    [true, true, false, false],
+    [true, false, false, false],
   );
   const request = await s.turn("hello");
   assert.deepEqual(request.tools, []);
@@ -414,7 +413,7 @@ test("a stopped agent whose connection ended is down until it is stopped or star
     hubUrl: s.hubUrl,
     actorId: agent,
     credential,
-    slots: { model: llmSession, settings: agentSettings2 },
+    slots: { model: llmSession },
     exports: { chat },
     start() {},
   });
@@ -451,7 +450,7 @@ You act only through your tools, and your tools are exactly the connections the 
 Before you promise to do something, check that one of your tools does it. A connection you are given later shows up as new tools at your next turn; until then, don't say you can use it.
 Keep replies short and plain.`;
 
-test("what is mounted, settings and an exposed tools@1 reach the agent as they do any engine", async (t) => {
+test("what is mounted, the skill tools at settings and an exposed tools@1 reach the agent as they do any engine", async (t) => {
   const s = await setup(t);
   const { agent } = await s.create();
   const give = (instructions: string) =>
@@ -470,26 +469,25 @@ test("what is mounted, settings and an exposed tools@1 reach the agent as they d
       hubUrl: s.hubUrl,
       actorId: made.actorId,
       credential: made.credential as string,
-      exports: { settings: agentSettings2, tools },
+      exports: { skillTools: tools, tools },
     }),
   );
-  management.exports.settings.implement({
-    // What is mounted comes to its provider; the agent reads only its skills here.
-    get: async () => {
-      throw new Refused("unimplemented", "Not read.");
-    },
-    skill: async () => ({ text: "# Review" }),
+  // What is mounted comes to its provider; the agent reads only its skills here.
+  management.exports.skillTools.implement({
+    list: async () => ({ tools: [{ name: "skill", inputSchema: { type: "object" } }] }),
+    call: async () => ({ output: "# Review" }),
+    stop: async () => ({}),
   });
   management.exports.tools.implement({
     list: async () => ({ tools: [{ name: "search", inputSchema: { type: "object" } }] }),
     call: async () => ({ output: "" }),
     stop: async () => ({}),
   });
-  s.hub.state.bind(PERSON, {
-    consumer: agent,
-    slot: "settings",
+  s.hub.state.expose(PERSON, {
     provider: made.actorId,
-    export: "settings",
+    export: "skillTools",
+    to: agent,
+    as: "settings",
   });
   s.hub.state.expose(PERSON, { provider: made.actorId, export: "tools", to: agent, as: "lookup" });
   await until(async () => {
@@ -639,7 +637,7 @@ test("an agent that joins the Hub again unloads the plugins it held before, and 
     hubUrl: s.hubUrl,
     actorId: agent,
     credential,
-    slots: { model: llmSession, settings: agentSettings2 },
+    slots: { model: llmSession },
     exports: { chat },
     start() {},
   });

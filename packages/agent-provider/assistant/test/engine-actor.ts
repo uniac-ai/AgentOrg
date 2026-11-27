@@ -1,15 +1,7 @@
 // The engine as the tests host it: an Actor with a store slot in place of a provider's own files,
 // holding what an executor gives every agent: its connections, and its instructions and skills
 // from the tree it is given.
-import {
-  agentSettings2,
-  capability,
-  chat,
-  kv,
-  llmSession,
-  type SettingsRoot,
-  tools,
-} from "@agentorg/interfaces";
+import { capability, chat, kv, llmSession, type SettingsRoot, tools } from "@agentorg/interfaces";
 import { defineActor } from "@agentorg/sdk";
 import type { Context } from "cordis";
 import type { z } from "zod";
@@ -88,7 +80,7 @@ function everyAgent(
 }
 
 export default defineActor({
-  slots: { model: llmSession, store: kv, settings: agentSettings2 },
+  slots: { model: llmSession, store: kv },
   exports: { chat, capability, tools },
   start(ctx) {
     const store = ctx.slots.store.call;

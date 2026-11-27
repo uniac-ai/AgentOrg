@@ -616,7 +616,7 @@ test("a call that's refused, or whose connection went, reaches the model as its 
  */
 const treeOf = (
   instructions: string,
-  skills: { name: string; description: string }[],
+  skills: { name: string; description: string; always?: string }[],
   plugins: string[] = [],
 ): z.input<typeof SettingsRoot>[] => [
   { mounted: "instructions", capability: "instructions", arguments: { text: instructions } },
@@ -624,17 +624,22 @@ const treeOf = (
   ...plugins.map((name) => ({ mounted: name, capability: name, arguments: {}, provider: SELF })),
 ];
 
-/** The settings an agent is bound to, in memory, which read its skills' files. */
-function settingsOf() {
+/**
+ * The tools exposed to an agent at `settings`, in memory, as management's are: one, `skill`, which
+ * reads its skills' files, listed while `listed` says it has a skill.
+ */
+function settingsOf(listed = () => true) {
   const files = new Map([
     ["review", "# Review\nRead the diff first."],
     ["review/notes.md", "Notes."],
   ]);
   return {
-    skill: ({ name, path }: { name: string; path?: string }) => {
+    list: () => ({ tools: listed() ? [{ name: "skill", inputSchema: { type: "object" } }] : [] }),
+    call: ({ arguments: input }: { arguments: Record<string, unknown> }) => {
+      const { name, path } = input as { name: string; path?: string };
       const text = files.get(path ? `${name}/${path}` : name);
       if (text === undefined) throw new Refused("unknown", "No such skill or file.");
-      return { text };
+      return { output: text };
     },
   };
 }
@@ -643,7 +648,11 @@ const REVIEW = { name: "review", description: "Review a change." };
 test("given a tree, instructions and skills come from it, read at each request", async () => {
   let skills = [REVIEW];
   const s = await setup(undefined, undefined, () => treeOf("You keep the docs.", skills));
-  s.actor.bind("settings", settingsOf());
+  s.actor.expose(
+    "settings",
+    tools,
+    settingsOf(() => skills.length > 0),
+  );
   await s.turn("hello");
   const told = String(s.requests[0]?.instructions);
   assert.ok(told.startsWith("You keep the docs."));
@@ -658,31 +667,16 @@ test("given a tree, instructions and skills come from it, read at each request",
   assert.deepEqual(offeredNames(s.requests[1]), []);
 });
 
-test("a skill's ALWAYS.md is told while the skill is given, after the agent's words and before the skills, and is gone at the next turn once it isn't", async () => {
+test("a skill's ALWAYS.md, as it comes with the skill, is told while the skill is given, after the agent's words and before the skills, and is gone at the next turn once it isn't", async () => {
   const PLAIN = { name: "plain", description: "Has nothing always to say." };
-  let skills = [REVIEW, PLAIN];
+  let skills = [{ ...REVIEW, always: "Review only what you are shown.\n" }, PLAIN];
   const s = await setup(undefined, undefined, () => treeOf("You keep the docs.", skills));
-  const files = new Map([
-    ["review", "# Review"],
-    ["review/ALWAYS.md", "Review only what you are shown.\n"],
-  ]);
-  const read: string[] = [];
-  s.actor.bind("settings", {
-    skill: ({ name, path }: { name: string; path?: string }) => {
-      read.push(path ? `${name}/${path}` : name);
-      const text = files.get(path ? `${name}/${path}` : name);
-      if (text === undefined) throw new Refused("unknown", "No such skill or file.");
-      return { text };
-    },
-  });
   await s.turn("hello");
   assert.ok(
     String(s.requests[0]?.instructions).startsWith(
       "You keep the docs.\n\nReview only what you are shown.\n\n## Skills",
     ),
   );
-  // Each skill's ALWAYS.md is asked for, and nothing else of it: one with none costs that one read.
-  assert.deepEqual([...new Set(read)].sort(), ["plain/ALWAYS.md", "review/ALWAYS.md"]);
   // The skill taken away, as with its unit: not told at the next turn.
   skills = [PLAIN];
   await s.turn("again");
@@ -693,19 +687,12 @@ test("a skill's ALWAYS.md is told while the skill is given, after the agent's wo
 
 test("what skills always tell the agent fits within the limit too, in order, before their names; what doesn't is left out and reported", async () => {
   const instructions = "x".repeat(MAX_INSTRUCTIONS - 3_000);
-  const files = new Map([
-    ["a/ALWAYS.md", "a".repeat(2_000)],
-    ["b/ALWAYS.md", "b".repeat(2_000)],
-  ]);
-  const skills = ["a", "b"].map((name) => ({ name, description: "y" }));
+  const skills = ["a", "b"].map((name) => ({
+    name,
+    description: "y",
+    always: name.repeat(2_000),
+  }));
   const s = await setup(undefined, undefined, () => treeOf(instructions, skills));
-  s.actor.bind("settings", {
-    skill: ({ name, path }: { name: string; path?: string }) => {
-      const text = files.get(`${name}/${path}`);
-      if (text === undefined) throw new Refused("unknown", "No such skill or file.");
-      return { text };
-    },
-  });
   await s.turn("hello");
   const told = String(s.requests[0]?.instructions);
   assert.ok(told.includes("a".repeat(2_000)));
@@ -733,9 +720,9 @@ test("words that open with the template's earlier words are told its words now i
   assert.equal(s.requests[1]?.instructions, instructions);
 });
 
-test("the model reads a skill's text and files through settings", async () => {
+test("the model reads a skill's text and files through the tools exposed at settings", async () => {
   const s = await setup(undefined, undefined, () => treeOf("Do the work.", [REVIEW]));
-  s.actor.bind("settings", settingsOf());
+  s.actor.expose("settings", tools, settingsOf());
   s.script.push(
     calls(
       callTool("settings__skill", { name: "review" }, "c1"),

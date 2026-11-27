@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chat, tools } from "@agentorg/interfaces";
-import { describeInterface, NotConnected, Refused } from "@agentorg/sdk";
+import { describeInterface, NotConnected } from "@agentorg/sdk";
 import type { Context } from "cordis";
 import { connections } from "../src/capabilities/connections.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
 import { skills } from "../src/capabilities/skills.ts";
 import type { AgentHub } from "../src/connector.ts";
 import { type Capability, createPluginHost, type Request } from "../src/plugins.ts";
+import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 
 /** A kv store in memory, as an agent's own store answers. */
 function memory() {
@@ -98,12 +99,11 @@ test("what a capability reads once a turn is read before the turn's requests, on
   await plugins.close();
 });
 
-/** A stand-in for the agent's channel: `exposed` is what is exposed to it, `skill` reads a skill's file. */
-function hubOf(exposed: object[], skill?: (input: { name: string; path?: string }) => unknown) {
+/** A stand-in for the agent's channel: `exposed` is what is exposed to it. */
+function hubOf(exposed: object[]) {
   return {
     exposed: () => exposed,
     onExposed: () => () => {},
-    slots: { settings: { call: { skill: async (input: never) => skill?.(input) } } },
   } as unknown as AgentHub;
 }
 const connector = (hub: AgentHub): Capability => ({
@@ -112,11 +112,15 @@ const connector = (hub: AgentHub): Capability => ({
   provide: "hub",
   apply: (ctx: Context) => void ctx.provide("hub", hub),
 });
-const toolsSlot = (slot: string, list: () => Promise<unknown>) => ({
+const toolsSlot = (
+  slot: string,
+  list: () => Promise<unknown>,
+  call: (input: never) => Promise<unknown> = async () => ({ output: "done" }),
+) => ({
   slot,
   described: describeInterface(tools),
   provider: { actor: `act_${slot}`, export: "tools" },
-  call: { list, call: async () => ({ output: "done" }) },
+  call: { list, call },
   on: () => () => {},
 });
 
@@ -171,46 +175,67 @@ test("connections lists every exposed tools@1 slot once a turn, offers the agent
 const EARLIER = "You are an agent, as its template once said.";
 const REVIEW = { name: "review", description: "Review a change." };
 
-test("instructions and skills tell the agent's words first, then what each skill always says, read once a turn, then the skills' names, and offer the function that reads them", async () => {
-  const read: string[] = [];
-  const hub = hubOf([], ({ name, path }) => {
-    read.push(`${name}/${path}`);
-    if (name === "review") return { text: "Review only what you are shown." };
-    throw new Refused("unknown", "No such file.");
-  });
+test("instructions and skills tell the agent's words first, then what each skill always says, as it came with them, then the skills' names, and offer the function that reads them once, in its place, through the tools at settings", async () => {
+  const asked: unknown[] = [];
+  const listed = [{ name: "skill", inputSchema: { type: "object" } }];
+  const hub = hubOf([
+    toolsSlot("files", async () => ({
+      tools: [{ name: "read", inputSchema: { type: "object" } }],
+    })),
+    toolsSlot(
+      "settings",
+      async () => ({ tools: listed }),
+      async (input) => {
+        asked.push(input);
+        return { output: "# Review" };
+      },
+    ),
+  ]);
   const plugins = await createPluginHost(log, [
     instructions({ now: () => "You are an agent.", earlier: EARLIER }),
     skills(),
   ]).open("agent", { store: memory(), provides: ["hub"] });
   await plugins.mount(connector(hub));
+  await plugins.mount(connections());
   await plugins.hold([
     { name: "instructions", settings: { text: `${EARLIER}\n\nWhat you are for: docs.` } },
     {
       name: "skills",
-      settings: { skills: [REVIEW, { name: "plain", description: "Says nothing always." }] },
+      settings: {
+        skills: [
+          { ...REVIEW, always: "Review only what you are shown." },
+          { name: "plain", description: "Says nothing always." },
+        ],
+      },
     },
   ]);
   await plugins.turn();
   plugins.pass(fresh());
   const passed = plugins.pass(fresh());
-  assert.deepEqual(read.sort(), ["plain/ALWAYS.md", "review/ALWAYS.md"]);
   // Its template's earlier words are told as its words now.
   assert.deepEqual(
-    passed.instructions.map(({ owner, text }) => [owner, text]),
+    passed.instructions.map(({ owner, text, max }) => [owner, text, max]),
     [
-      ["agent", "You are an agent.\n\nWhat you are for: docs."],
-      ["review/ALWAYS.md", "Review only what you are shown."],
+      ["agent", "You are an agent.\n\nWhat you are for: docs.", MAX_INSTRUCTIONS],
+      ["review/ALWAYS.md", "Review only what you are shown.", 2_000],
       [
         "skills",
         "## Skills\nA skill is written instructions for a kind of task. When one fits what you're asked, read it with settings__skill and follow it before you start. Pass path to read a file its SKILL.md refers to.\n- review: Review a change.\n- plain: Says nothing always.",
+        undefined,
       ],
     ],
   );
+  // Offered before the other connections, and not again with the tools at settings.
   assert.deepEqual(
     passed.functions.map(({ slot, name }) => `${slot}__${name}`),
-    ["settings__skill"],
+    ["settings__skill", "files__read"],
   );
-  // With no skills, nothing of them, and nothing to read them with.
+  assert.deepEqual(passed.leftOut, []);
+  const read = passed.functions[0];
+  assert.deepEqual(await read?.run({ name: "review" }, "g1"), { output: "# Review", ok: true });
+  assert.deepEqual(asked, [{ name: "skill", arguments: { name: "review" }, group: "g1" }]);
+  // With no skills, nothing of them, and nothing to read them with but what settings lists.
+  listed.length = 0;
   await plugins.hold([
     { name: "instructions", settings: { text: "Keep the docs." } },
     { name: "skills", settings: { skills: [] } },
@@ -218,6 +243,21 @@ test("instructions and skills tell the agent's words first, then what each skill
   await plugins.turn();
   const none = plugins.pass(fresh());
   assert.deepEqual(owners(none), ["agent"]);
-  assert.deepEqual(none.functions, []);
+  assert.deepEqual(
+    none.functions.map(({ slot, name }) => `${slot}__${name}`),
+    ["files__read"],
+  );
+  await plugins.close();
+});
+
+test("the function that reads a skill says it can't while nothing is exposed at settings", async () => {
+  const plugins = await createPluginHost(log, [skills()]).open("agent", {
+    store: memory(),
+    provides: ["hub"],
+  });
+  await plugins.mount(connector(hubOf([])));
+  await plugins.hold([{ name: "skills", settings: { skills: [REVIEW] } }]);
+  const [read] = plugins.pass(fresh()).functions;
+  await assert.rejects(read?.run({ name: "review" }, "g1") ?? Promise.resolve(), NotConnected);
   await plugins.close();
 });

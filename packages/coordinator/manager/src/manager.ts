@@ -30,7 +30,15 @@ import { createActivity } from "./activity.js";
 import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createMounts, keysOf } from "./mounts.js";
-import { CONTROL_ROOT, treeOf } from "./settings.js";
+import {
+  ALWAYS,
+  alwaysOf,
+  CONTROL_ROOT,
+  fitted,
+  SKILL_TOOL,
+  skillAsked,
+  treeOf,
+} from "./settings.js";
 import { createSkills, readSkillFolder } from "./skills.js";
 import { type AgentRecord, createStacks, Records, slotFieldOf } from "./stack.js";
 
@@ -154,12 +162,13 @@ function withoutLater(parsed: unknown) {
 }
 
 /**
- * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1` and, as `settings`,
- * `agent.settings@2`. It keeps only what the Hub can't know. A provider is connected by exposing
- * its export to this Actor: the Hub's slots are the list of them, and what is exposed to an agent
- * is the Hub's bindings. No status is stored, and no secret reaches it to keep. Each agent's
- * provider is given what is mounted on the agent, with `agent.provider@2`'s `mounted`: when it is
- * made, whenever that changes, and whenever the provider is there anew.
+ * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1`, as `settings`,
+ * `agent.settings@2`, and, as `skillTools`, a `tools@1` whose one tool, `skill`, reads a skill's
+ * files, exposed to each agent at `settings`. It keeps only what the Hub can't know. A provider is
+ * connected by exposing its export to this Actor: the Hub's slots are the list of them, and what
+ * is exposed to an agent is the Hub's bindings. No status is stored, and no secret reaches it to
+ * keep. Each agent's provider is given what is mounted on the agent, with `agent.provider@2`'s
+ * `mounted`: when it is made, whenever that changes, and whenever the provider is there anew.
  */
 export async function startManager(options: ManagerOptions): Promise<Manager> {
   const log = options.log ?? quiet;
@@ -230,7 +239,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
     actorId: options.actorId,
     credential: options.credential,
     slots: { actors: hubActors, grants: hubGrants, bindings: hubBindings },
-    exports: { agents, agents2, connections, skills, settings: agentSettings2, tools },
+    exports: {
+      agents,
+      agents2,
+      connections,
+      skills,
+      settings: agentSettings2,
+      tools,
+      skillTools: tools,
+    },
     log,
     start(ctx) {
       const hub = {
@@ -301,7 +318,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       const settingsOf = (agent: string) => creating.get(agent) ?? recordOf(agent);
       /**
        * What is mounted on an agent now, as its settings answer it and its provider is given it:
-       * the tree, with the words management tells it of itself and the skills exposed to it.
+       * the tree, with the words management tells it of itself and the skills exposed to it, each
+       * with what its `ALWAYS.md` says, so the agent reads nothing for it.
        */
       const listOf = (agent: string) => {
         const record = settingsOf(agent);
@@ -318,7 +336,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               ]
             : []),
         ].join("\n\n");
-        const exposed = names.flatMap((name) => library.entry(name) ?? []);
+        const exposed = names.flatMap((name) => {
+          const entry = library.entry(name);
+          const always = entry && alwaysOf(library.read(name, ALWAYS));
+          return entry ? [always ? { ...entry, always } : entry] : [];
+        });
         return treeOf(record, options.actorId, told, exposed);
       };
       /** Each agent's giving now, so each is given its list after the one before has answered. */
@@ -648,6 +670,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             stacks.holdOwns(actor),
             stacks.reachHeld(actor),
             stacks.reachControl(actor),
+            stacks.reachSkills(actor),
           ]);
           await stacks.reachAgents(
             (reached, holder) => !actor || reached === actor || holder === actor,
@@ -790,16 +813,40 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         stop: () => ({}),
       });
 
-      ctx.exports.settings.implement({
-        get: (_, { caller }) => ({ mounted: listOf(caller) }),
-        skill: ({ name, path: file }, { caller }) => {
-          const text = settingsOf(caller).skills.includes(name)
+      /**
+       * A file of a skill exposed to the agent calling, `SKILL.md` if no `path`: refused `unknown`
+       * when the skill isn't exposed to it or has no such file.
+       */
+      const skillFile = (caller: string, name: string, file?: string) => {
+        const text =
+          agentOf(caller) && settingsOf(caller).skills.includes(name)
             ? library.read(name, file)
             : undefined;
-          if (text === undefined)
-            throw new Refused("unknown", `No skill ${name} with that file is exposed to you.`);
-          return { text };
+        if (text === undefined)
+          throw new Refused("unknown", `No skill ${name} with that file is exposed to you.`);
+        return text;
+      };
+
+      ctx.exports.settings.implement({
+        get: (_, { caller }) => ({ mounted: listOf(caller) }),
+        skill: ({ name, path: file }, { caller }) => ({ text: skillFile(caller, name, file) }),
+      });
+
+      // Its one tool, listed to an agent while a skill it is told of is exposed to it.
+      ctx.exports.skillTools.implement({
+        list: (_, { caller }) => ({
+          tools:
+            agentOf(caller) && settingsOf(caller).skills.some((name) => library.has(name))
+              ? [SKILL_TOOL]
+              : [],
+        }),
+        call: ({ name, arguments: input }, { caller }) => {
+          if (name !== SKILL_TOOL.name) throw new Refused("unknown", `There is no tool ${name}.`);
+          const asked = skillAsked(input);
+          return { output: fitted(skillFile(caller, asked.name, asked.path)) };
         },
+        // Reading leaves nothing running.
+        stop: () => ({}),
       });
 
       personOnly(ctx.exports.agents, "agents", [

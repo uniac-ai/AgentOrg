@@ -18,7 +18,6 @@ import test from "node:test";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   agentProvider,
-  agentSettings,
   agentSettings2,
   agents,
   agents2,
@@ -29,6 +28,7 @@ import {
   hubActors,
   hubBindings,
   hubGrants,
+  type SettingsRoot,
   skills,
   type Template2,
   tools,
@@ -49,16 +49,22 @@ const until = async (condition: () => boolean | Promise<boolean>, ms = 15_000) =
 };
 const refused = (code: string) => (error: unknown) =>
   error instanceof Refused && error.code === code;
+type Root = z.infer<typeof SettingsRoot>;
 const SKILL = (name: string, text = "Use it well.") =>
   `---\nname: ${name}\ndescription: The ${name} skill.\n---\n${text}\n`;
-/** An agent's settings, read: its tree, and of it what management tells it and the rest it holds. */
-const settingsRead = async (channel: { slots: { settings: Slot<typeof agentSettings2> } }) => {
+/**
+ * What is mounted on an agent, as its provider was last given it: its tree, and of it what
+ * management tells it and the rest it holds.
+ */
+const settingsRead = async (channel: {
+  slots: { settings: { call: { get(input: object): Promise<{ mounted: Root[] }> } } };
+}) => {
   const { mounted } = await channel.slots.settings.call.get({});
   const own = (name: string) => mounted.find((root) => root.mounted === name)?.arguments ?? {};
   return {
     mounted,
     instructions: own("instructions").text as string,
-    skills: own("skills").skills as { name: string; description: string }[],
+    skills: own("skills").skills as { name: string; description: string; always?: string }[],
     /** Its roots but management's own. */
     held: mounted.filter((root) => root.provider !== undefined),
   };
@@ -453,8 +459,11 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
   const script: {
     fail?: string;
     alsoFail?: string;
-    /** Its agents' settings slot takes the first major, which management's export isn't. */
-    earlierSettings?: boolean;
+    /**
+     * Its agents declare a `settings` slot of their own, as a release before's did, where
+     * management exposes its skill tools.
+     */
+    declaresSettings?: boolean;
     chat?: string;
     /** Parties whose conversation's turn failed. */
     failed?: string[];
@@ -527,7 +536,6 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
   };
   const running = new Map<string, { close(): void; slots: never; on?: never }>();
   const credentials = new Map<string, string>();
-  const heard = new Map<string, number>();
   /** Every message sent to each agent, in the order they came, whoever sent it. */
   const chats = new Map<string, { text: string; with: string }[]>();
   /** Each agent's own side, to reach what is exposed to it as it would. */
@@ -597,7 +605,7 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
             hubUrl: server.url,
             actorId,
             credential: credential as string,
-            slots: { settings: script.earlierSettings ? agentSettings : agentSettings2 },
+            slots: script.declaresSettings ? { settings: agentSettings2 } : {},
             // What a `working` agent holds of itself it serves as these.
             exports: { chat, capability, tools },
             start(own) {
@@ -652,9 +660,6 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
                     more: false,
                   };
                 },
-              });
-              own.slots.settings.on("changed", () => {
-                heard.set(actorId, (heard.get(actorId) ?? 0) + 1);
               });
               // Its Work, as the Assistant serves it: one operation.
               own.exports.tools.implement({
@@ -952,9 +957,23 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
         name: "Search",
       })
     ).connection;
-  /** The agent's own channel, to read its settings as it would. */
-  const agentChannel = (agent: string) =>
-    running.get(agent) as unknown as { slots: { settings: Slot<typeof agentSettings2> } };
+  /** How many lists of what is mounted on an agent its provider was given. */
+  const listed = (agent: string) => given.lists.filter((one) => one.agent === agent).length;
+  /** What is mounted on an agent, as its provider was last given it, read as its settings were. */
+  const agentChannel = (agent: string) => ({
+    slots: {
+      settings: {
+        get bound() {
+          return listed(agent) > 0;
+        },
+        call: {
+          get: async (_: object) => ({
+            mounted: (given.lists.findLast((one) => one.agent === agent)?.mounted ?? []) as Root[],
+          }),
+        },
+      },
+    },
+  });
   const base = { provider: agentActor.actorId, creatable: "plain" };
   const unit = (id: string, values?: Record<string, string | boolean>, more?: object) => ({
     provider: unitsActor.actorId,
@@ -995,23 +1014,25 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     }
   };
   /**
-   * An agent leaves and comes back offering its chats as `offered`, and reading its settings as
-   * `settings`, as a new release's would.
+   * An agent leaves and comes back offering its chats as `offered`, and taking `slots`, as a new
+   * release's would.
    */
   const rejoin = async (
     agent: string,
     offered: Interface,
     more: Record<string, Interface> = {},
-    settings: Interface = agentSettings2,
+    slots: Record<string, Interface> = {},
   ) => {
     running.get(agent)?.close();
     const client = await connect({
       hubUrl: server.url,
       actorId: agent,
       credential: credentials.get(agent) as string,
-      slots: { settings },
+      slots,
       exports: { chat: offered, ...more },
-      start() {},
+      start(own) {
+        contexts.set(agent, own as never);
+      },
     });
     running.set(agent, client as never);
     leaving.push(() => client.close());
@@ -1059,7 +1080,7 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     logged,
     warned,
     given,
-    heard,
+    listed,
     agentActor,
     unitsActor,
     management,
@@ -1238,7 +1259,7 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
 
 const FAILURES: [string, (s: Awaited<ReturnType<typeof setup>>) => void][] = [
   ["the provider making the agent", (s) => (s.script.fail = "agent")],
-  ["binding its settings", (s) => (s.script.earlierSettings = true)],
+  ["exposing its skill tools at settings", (s) => (s.script.declaresSettings = true)],
   ["giving its provider what is mounted on it", (s) => (s.script.fail = "mounted")],
   ["reading a skill's file", (s) => (s.script.fail = "skill")],
   ["applying the unit", (s) => (s.script.fail = "apply")],
@@ -1429,20 +1450,45 @@ test("a unit's skill whose name is here keeps the one here, and survives a failu
   assert.deepEqual((await s.calls.skills.get({ name: "notes" })).agents, [agent]);
 });
 
-test("an agent sees only its own settings, and only it hears that they changed", async (t) => {
+/** Management's one skill tool, as an agent's model is offered it. */
+const SKILL_TOOL = {
+  name: "skill",
+  description: "Read a skill: its SKILL.md, or with path a file in its folder.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "The skill's name, as your instructions list it." },
+      path: { type: "string", description: "A file in the skill's folder, relative to it." },
+    },
+    required: ["name"],
+    additionalProperties: false,
+  },
+};
+type ToolsCalls = Slot<typeof tools>["call"];
+const readSkill = (calls: ToolsCalls, input: object) =>
+  calls.call({ name: "skill", arguments: input as never });
+
+test("an agent is given only its own list, with what each skill always says, and reads only the skills exposed to it, through the tools at its settings", async (t) => {
   const s = await setup(t);
   const make = async (name: string) =>
     (await s.calls.agents.create({ stack: { base: s.base, units: [] }, name })).agent;
   const [a, b] = [await make("A"), await make("B")];
   const [one, other] = [s.agentChannel(a), s.agentChannel(b)];
-  await until(() => one.slots.settings.bound && other.slots.settings.bound);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  const [reads, otherReads] = [
+    await s.exposedTo<ToolsCalls>(a, "settings"),
+    await s.exposedTo<ToolsCalls>(b, "settings"),
+  ];
+  // With no skill exposed to it, its tool isn't listed.
+  assert.deepEqual(await reads.list({}), { tools: [] });
   await s.calls.skills.add({
-    files: { "SKILL.md": SKILL("secret-sauce"), "more/deep.md": "Deep." },
+    files: {
+      "SKILL.md": SKILL("secret-sauce"),
+      "ALWAYS.md": "\n  Taste first.  \n",
+      "more/deep.md": "Deep.",
+    },
   });
+  const toOther = s.listed(b);
   await s.calls.agents.expose({ agent: a, skill: "secret-sauce" });
-  await until(() => (s.heard.get(a) ?? 0) === 1);
-  assert.equal(s.heard.get(b) ?? 0, 0);
 
   // What it is told and its skills are management's own roots, naming no provider.
   assert.deepEqual(await one.slots.settings.call.get({}), {
@@ -1451,52 +1497,82 @@ test("an agent sees only its own settings, and only it hears that they changed",
       {
         mounted: "skills",
         capability: "skills",
-        arguments: { skills: [{ name: "secret-sauce", description: "The secret-sauce skill." }] },
+        arguments: {
+          skills: [
+            {
+              name: "secret-sauce",
+              description: "The secret-sauce skill.",
+              always: "Taste first.",
+            },
+          ],
+        },
       },
     ],
   });
   assert.deepEqual((await settingsRead(other)).skills, []);
-  assert.match((await one.slots.settings.call.skill({ name: "secret-sauce" })).text, /Use it well/);
-  assert.equal(
-    (await one.slots.settings.call.skill({ name: "secret-sauce", path: "more/deep.md" })).text,
-    "Deep.",
-  );
+  assert.deepEqual(await reads.list({}), { tools: [SKILL_TOOL] });
+  assert.deepEqual(await otherReads.list({}), { tools: [] });
+  assert.match((await readSkill(reads, { name: "secret-sauce" })).output, /Use it well/);
+  assert.deepEqual(await readSkill(reads, { name: "secret-sauce", path: "more/deep.md" }), {
+    output: "Deep.",
+  });
+  await assert.rejects(readSkill(otherReads, { name: "secret-sauce" }), refused("unknown"));
   await assert.rejects(
-    other.slots.settings.call.skill({ name: "secret-sauce" }),
+    readSkill(reads, { name: "secret-sauce", path: "nothing.md" }),
     refused("unknown"),
   );
-  await assert.rejects(
-    one.slots.settings.call.skill({ name: "secret-sauce", path: "nothing.md" }),
-    refused("unknown"),
-  );
-  // Replacing it tells those who have it; removing it takes it off them.
-  await s.calls.skills.add({ files: { "SKILL.md": SKILL("secret-sauce", "Better.") } });
-  await until(() => (s.heard.get(a) ?? 0) === 2);
-  assert.match((await one.slots.settings.call.skill({ name: "secret-sauce" })).text, /Better/);
+  await assert.rejects(readSkill(reads, { name: "Secret Sauce" }), refused("invalid"));
+  await assert.rejects(reads.call({ name: "other", arguments: {} }), refused("unknown"));
+  // Replacing it gives those who have it what it always says now, cut to 2,000 characters;
+  // removing it takes it off them.
+  await s.calls.skills.add({
+    files: { "SKILL.md": SKILL("secret-sauce", "Better."), "ALWAYS.md": "t".repeat(2_001) },
+  });
+  assert.equal((await settingsRead(one)).skills[0]?.always, "t".repeat(2_000));
+  assert.match((await readSkill(reads, { name: "secret-sauce" })).output, /Better/);
   await s.calls.skills.remove({ name: "secret-sauce" });
-  await until(() => (s.heard.get(a) ?? 0) === 3);
   assert.deepEqual((await settingsRead(one)).skills, []);
-  assert.equal(s.heard.get(b) ?? 0, 0);
+  assert.deepEqual(await reads.list({}), { tools: [] });
+  assert.equal(s.listed(b), toOther);
 });
 
-test("an agent's provider is given what is mounted on it, as its settings answer it: once it is made, when that changes, when the provider comes back, and when management starts again", async (t) => {
+test("an agent has management's skill tools at its settings from when it is made, and again when management starts and when the agent is back, should they have gone", async (t) => {
+  const s = await setup(t);
+  const agent = await s.makeStack([], "Reader");
+  const at = async () =>
+    (await s.bindingsOf(agent))
+      .filter((b) => b.consumer === agent && b.slot === "settings")
+      .map((b) => `${b.provider} ${b.export} ${b.interface}`);
+  const exposed = [`${s.management.actorId} skillTools tools@1`];
+  assert.deepEqual(await at(), exposed);
+  await s.person.slots.grants.call.unexpose({ to: agent, slot: "settings" });
+  assert.deepEqual(await at(), []);
+  await s.restart(() => {});
+  await until(async () => (await at()).length > 0);
+  assert.deepEqual(await at(), exposed);
+  await s.person.slots.grants.call.unexpose({ to: agent, slot: "settings" });
+  await s.rejoin(agent, chat);
+  await until(async () => (await at()).length > 0);
+  assert.deepEqual(await at(), exposed);
+});
+
+test("an agent's provider is given what is mounted on it: once it is made, when that changes, when the provider comes back, and when management starts again", async (t) => {
   const s = await setup(t);
   const make = async (name: string) =>
     (await s.calls.agents.create({ stack: { base: s.base, units: [] }, name })).agent;
   const [a, b] = [await make("A"), await make("B")];
-  await until(
-    () => s.agentChannel(a).slots.settings.bound && s.agentChannel(b).slots.settings.bound,
-  );
-  const answered = async (agent: string) =>
-    (await s.agentChannel(agent).slots.settings.call.get({})).mounted;
   const last = (lists: { agent: string; mounted: unknown[] }[], agent: string) =>
     lists.findLast((one) => one.agent === agent)?.mounted;
-  // Given before its creation, or a change, answers.
-  assert.deepEqual(last(s.given.lists, a), await answered(a));
+  // Given when it is made, and when that changes.
+  assert.deepEqual(last(s.given.lists, a), [
+    { mounted: "instructions", capability: "instructions", arguments: { text: "Be plain." } },
+    { mounted: "skills", capability: "skills", arguments: { skills: [] } },
+  ]);
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
   await s.calls.agents.expose({ agent: a, skill: "notes" });
-  assert.deepEqual(last(s.given.lists, a), await answered(a));
   assert.match(JSON.stringify(last(s.given.lists, a)), /The notes skill/);
+  const was = new Map([a, b].map((agent) => [agent, last(s.given.lists, agent)]));
+  const answered = async (agent: string) => was.get(agent);
 
   // The provider leaves and comes back holding nothing: each of its agents is given its list.
   await s.leaveAgents();
@@ -1919,7 +1995,6 @@ test("a unit can be added to a living agent and removed, with what it made", asy
   );
 
   const added = await s.calls.agents.addUnit({ agent, unit: s.unit("files", { folder: "/a" }) });
-  await until(() => (s.heard.get(agent) ?? 0) >= 2);
   assert.deepEqual(
     (await settingsRead(channel)).skills.map((one) => one.name),
     ["notes"],
@@ -4348,16 +4423,15 @@ test("the Memory unit builds a capability made of the memory plugin, with no Act
   );
 
   // Taken off, the agent is told and holds no plugin; added to it living, it is told again.
+  const toOther = s.listed(other);
   await s.calls.agents.removeUnit({ agent, instance: built.from as string });
-  await until(() => (s.heard.get(agent) ?? 0) === 1);
   assert.deepEqual(await plugins(), []);
   assert.deepEqual(kept(), []);
   const taken = await s.calls.agents.get({ agent });
   assert.deepEqual([taken.units, taken.capabilities], [[], []]);
   await s.calls.agents.addUnit({ agent, unit: memory } as never);
-  await until(() => (s.heard.get(agent) ?? 0) === 2);
   assert.deepEqual(await plugins(), held);
-  assert.equal(s.heard.get(other) ?? 0, 0);
+  assert.equal(s.listed(other), toOther);
   // A template names it, as it names any unit, by its provider's name.
   await s.calls.agents.saveTemplate({
     id: "keeper",
@@ -4639,7 +4713,7 @@ test("the person, the agent itself and another program each list what may be mou
   }
   const plugins = async () => (await settingsRead(s.agentChannel(agent))).held;
   for (const { calls, by } of callers) {
-    const heard = s.heard.get(agent) ?? 0;
+    const heard = s.listed(agent);
     const made = await calls.mount({
       agent,
       provider: s.agentActor.actorId,
@@ -4657,7 +4731,7 @@ test("the person, the agent itself and another program each list what may be mou
         provider: s.agentActor.actorId,
       },
     ]);
-    await until(() => (s.heard.get(agent) ?? 0) > heard);
+    await until(() => s.listed(agent) > heard);
     const tree = [
       {
         mounted: made.mounted,
@@ -4827,40 +4901,41 @@ test("an agent holding the control unit reaches management's agents@1, answered 
   assert.deepEqual(await reach(plain), []);
 });
 
-test("an agent kept as 0.0.38 kept it, its settings binding made while its executor read the first major, is kept as it reads the second and gets the tree: refused while its ends differ, answered once they are alike", async (t) => {
+test("an agent made before skills were tools, its settings slot bound to management's agent.settings@2, has that binding dropped once it is back without the slot, and management's skill tools there", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([], "Elder");
-  const settings = async () =>
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
+  await s.calls.agents.expose({ agent, skill: "notes" });
+  const at = async () =>
     (await s.bindingsOf(agent))
       .filter((b) => b.consumer === agent && b.slot === "settings")
       .map((b) => `${b.provider} ${b.export} ${b.interface}`);
-  const bound = await settings();
-  assert.deepEqual(bound, [`${s.management.actorId} settings agent.settings@2`]);
-  // Its record as 0.0.38 kept it, with nothing mounted on it, and its executor reading the first
-  // major, as management starts: its binding is kept, and refused while its ends differ.
-  let earlier: Awaited<ReturnType<typeof s.rejoin>> | undefined;
-  await s.restart(async (kept) => {
-    delete (kept.agents as unknown as Record<string, { mounted?: unknown }>)[agent]?.mounted;
-    earlier = await s.rejoin(agent, chat, {}, agentSettings);
+  // As a release before left it: its executor declares the slot, bound to management's settings.
+  await s.rejoin(agent, chat, {}, { settings: agentSettings2 });
+  s.hub.state.bind(PERSON, {
+    consumer: agent,
+    slot: "settings",
+    provider: s.management.actorId,
+    export: "settings",
   });
-  assert.ok(earlier);
-  assert.deepEqual(await settings(), [`${s.management.actorId} settings agent.settings@1`]);
-  await assert.rejects(
-    (earlier.slots as { settings: Slot<typeof agentSettings> }).settings.call.get({}),
-    (error: Error) => error instanceof Refused,
+  const earlier = [`${s.management.actorId} settings agent.settings@2`];
+  assert.deepEqual(await at(), earlier);
+  // Management of this release starts while it is so: the slot is the agent's own, and is left,
+  // with no word of it.
+  await s.restart(() => {});
+  await new Promise((later) => setTimeout(later, 200));
+  assert.deepEqual(await at(), earlier);
+  assert.deepEqual(
+    s.warned.filter(({ line }) => line.includes("already has a slot")),
+    [],
   );
-  // As this one reads it: the same binding answers.
-  const now = await s.rejoin(agent, chat);
-  assert.deepEqual(await settings(), bound);
-  const reads = (now.slots as { settings: Slot<typeof agentSettings2> }).settings;
-  for (let i = 0; !reads.bound; i++) {
-    assert.ok(i < 300, "it was never bound");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.deepEqual((await reads.call.get({})).mounted, [
-    { mounted: "instructions", capability: "instructions", arguments: { text: "Be plain." } },
-    { mounted: "skills", capability: "skills", arguments: { skills: [] } },
-  ]);
+  // Back as this release's executor, with no such slot: the Hub drops the binding, and
+  // management exposes its skill tools there, through which it reads its skills.
+  await s.rejoin(agent, chat);
+  await until(async () => (await at()).some((one) => one.includes("skillTools")));
+  assert.deepEqual(await at(), [`${s.management.actorId} skillTools tools@1`]);
+  const reads = await s.exposedTo<ToolsCalls>(agent, "settings");
+  assert.match((await readSkill(reads, { name: "notes" })).output, /Use it well/);
 });
 
 test("control mounted on an agent reaches management's agents@1 for as long as it or the control unit is there, and an agent holds one control", async (t) => {
@@ -4933,7 +5008,7 @@ test("a capability is held once, and one its provider doesn't make isn't kept", 
   );
 
   s.script.mountProblems = [{ path: "/owner", message: "No such owner." }];
-  const before = s.heard.get(agent) ?? 0;
+  const before = s.listed(agent);
   assert.deepEqual(await mount("github", { owner: "x", token: "t" }), {
     problems: [{ path: "/owner", message: "No such owner." }],
   });
@@ -4948,7 +5023,7 @@ test("a capability is held once, and one its provider doesn't make isn't kept", 
     ["memory"],
   );
   // Kept, then put back: the agent was told both times.
-  await until(() => (s.heard.get(agent) ?? 0) >= before + 2);
+  await until(() => s.listed(agent) >= before + 2);
 
   await assert.rejects(
     s.calls.agents.mount({

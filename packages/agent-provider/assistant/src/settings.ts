@@ -1,22 +1,22 @@
 /**
- * What the `settings` slot adds to a request: the skills exposed to this agent, named in its
- * instructions, and one tool to read them. A skill's text is read only when the model asks for it,
- * but for its `ALWAYS.md`, which every request is told while the skill is exposed (see the README).
+ * What the skills exposed to this agent add to a request: each named in its instructions, and one
+ * tool to read them, which management exposes to it at `settings`. A skill's text is read only when
+ * the model asks for it, but for its `ALWAYS.md`, which comes with the list of what is mounted on
+ * the agent and every request is told while the skill is exposed (see the README).
  */
-import type { agentSettings2, SkillEntry } from "@agentorg/interfaces";
+import type { SkillEntry } from "@agentorg/interfaces";
 import { FRAME, type Part } from "@agentorg/looper";
-import type { Slot } from "@agentorg/sdk";
+import { NotConnected } from "@agentorg/sdk";
 import type { z } from "zod";
-import type { Candidate, LeftOut } from "./tools.js";
-
-/** What reads a skill's files: the agent's `settings` slot. */
-type Reads = Pick<Slot<typeof agentSettings2>, "call">;
+import type { AgentHub } from "./connector.js";
+import { type Candidate, type LeftOut, listsTools, runThrough } from "./tools.js";
 
 /**
  * The longest the agent's own instructions may be: what a request can carry, less room for what
  * the looper tells a worker before them, its frame, and after them.
  */
 export const MAX_INSTRUCTIONS = 198_000 - FRAME.length - 2;
+/** Where management exposes the `tools@1` whose one tool reads a skill's files. */
 const SLOT = "settings";
 /** The file of a skill whose words the agent is told in every request while it has the skill. */
 export const ALWAYS = "ALWAYS.md";
@@ -24,25 +24,14 @@ export const ALWAYS = "ALWAYS.md";
 export const ALWAYS_MAX = 2_000;
 
 /**
- * The `ALWAYS.md` of each skill exposed to the agent, in their order, read through `settings`, each
- * as a part. A skill with none is refused `unknown`, and gives no part; so does one that can't be
- * read now.
+ * What each skill exposed to the agent always says, in their order, each as a part: its
+ * `ALWAYS.md`, as management gives it with the skill. A skill with none gives no part.
  */
-export async function alwaysOf(
-  slot: Reads,
-  skills: z.output<typeof SkillEntry>[],
-): Promise<Part[]> {
-  const read = await Promise.all(
-    skills.map(async ({ name }): Promise<Part | undefined> => {
-      try {
-        const text = (await slot.call.skill({ name, path: ALWAYS })).text.trim();
-        return text ? { owner: `${name}/${ALWAYS}`, text, max: ALWAYS_MAX } : undefined;
-      } catch {
-        return undefined;
-      }
-    }),
-  );
-  return read.filter((part) => part !== undefined);
+export function alwaysOf(skills: { name: string; always?: string }[]): Part[] {
+  return skills.flatMap(({ name, always }) => {
+    const text = always?.trim();
+    return text ? [{ owner: `${name}/${ALWAYS}`, text, max: ALWAYS_MAX }] : [];
+  });
 }
 
 const HEADING = `## Skills
@@ -90,8 +79,11 @@ export function instructionsWith(
     : { parts: [own, ...kept, { owner: "skills", text }], leftOut };
 }
 
-/** The one way the model reads a skill: its `SKILL.md`, or a file of its folder by `path`. */
-export function skillTool(slot: Reads): Candidate {
+/**
+ * The one way the model reads a skill: its `SKILL.md`, or a file of its folder by `path`. It runs
+ * through the `tools@1` exposed to the agent at `settings` as the call runs.
+ */
+export function skillTool(hub: Pick<AgentHub, "exposed">): Candidate {
   return {
     slot: SLOT,
     name: "skill",
@@ -105,9 +97,10 @@ export function skillTool(slot: Reads): Candidate {
       required: ["name"],
       additionalProperties: false,
     },
-    run: async (args) => {
-      const { text } = await slot.call.skill(args as { name: string; path?: string });
-      return { output: text, ok: true };
+    run: async (args, group) => {
+      const slot = hub.exposed().find((one) => one.slot === SLOT && listsTools(one.described));
+      if (!slot) throw new NotConnected(SLOT);
+      return runThrough(slot, "skill")(args, group);
     },
   };
 }
