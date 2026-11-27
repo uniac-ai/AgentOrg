@@ -254,7 +254,7 @@ async function runApp() {
     return;
   }
   // The Hub is loaded only to run the app: a command through it needs none of it.
-  const { startApp } = await import("./gateway.js");
+  const { startApp } = await import("./app.js");
   let app: Awaited<ReturnType<typeof startApp>>;
   try {
     const frontend = values.frontend as string | undefined;

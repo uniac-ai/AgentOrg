@@ -8,7 +8,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,12 +31,6 @@ import { MAX_MESSAGE, type PersonSide, serveSocket } from "./api.js";
 import { LIVE_MAX, pipeLive, type Ticket } from "./live.js";
 import { Notes } from "./notes.js";
 import { oauthRoute } from "./oauth.js";
-import {
-  closePackageActors,
-  type Programs,
-  type ProgramsOptions,
-  startPrograms,
-} from "./programs.js";
 import { SignIn } from "./signin.js";
 
 /**
@@ -65,23 +58,12 @@ export const FRONTEND_CONTRACT = 1;
 const VERSION = (
   JSON.parse(readFileSync(join(STATIC, "..", "package.json"), "utf8")) as { version: string }
 ).version;
-/** The frontend this package carries, `@agentorg/shell`'s build, when it is installed with it. */
-function carriedFrontend(): string | undefined {
-  try {
-    return join(
-      dirname(createRequire(import.meta.url).resolve("@agentorg/shell/package.json")),
-      "dist",
-    );
-  } catch {
-    return undefined;
-  }
-}
 /**
- * The frontend to serve: the folder given, else the one carried, else none. A folder that isn't a
- * frontend, or speaks another contract, is refused with what goes together.
+ * The frontend to serve: the folder given, else none. A folder that isn't a frontend, or speaks
+ * another contract, is refused with what goes together.
  */
 export function frontendOf(given?: string): string | undefined {
-  const folder = given === undefined ? carriedFrontend() : resolve(given);
+  const folder = given === undefined ? undefined : resolve(given);
   if (folder === undefined) return undefined;
   if (!existsSync(join(folder, "index.html")))
     throw new Error(`${folder} isn't a frontend: it has no index.html.`);
@@ -121,7 +103,12 @@ export const HUB_OPTIONS = {
 /** A route another part of the app adds, such as the model Actor's sign-in callback (step 5). */
 export type Route = (request: IncomingMessage, response: ServerResponse, url: URL) => void;
 
-export interface AppOptions {
+/** What the gateway starts beside serving, and closes when it stops: the first run's programs. */
+export interface Started {
+  close(): Promise<void>;
+}
+
+export interface GatewayOptions<P extends Started> {
   /** The Hub home. */
   home: string;
   /**
@@ -131,16 +118,21 @@ export interface AppOptions {
   port?: number;
   /** The port a fresh home starts on, `DEFAULT_PORT` by default; 0 for any free one. For tests. */
   defaultPort?: number;
-  /** The frontend's folder; the one this package carries by default, if it carries one. */
+  /** The frontend's folder, if there is one to serve. */
   frontend?: string;
+  /** Close the Actors an earlier release left running in the home: before the Hub opens. */
+  closePackageActors: (home: string) => void;
   /**
-   * How the first run, at each start, logs, reaches ChatGPT and finds a computer service: the
-   * app's own by default.
+   * The first run, at each start, beside serving: on the person's side, with the home, the Hub's
+   * address and the app's log.
    */
-  firstRun?: Pick<ProgramsOptions, "fetch" | "log" | "computer" | "assistant" | "carried">;
+  startPrograms: (
+    person: PersonSide,
+    given: { home: string; hubUrl: string; log: (message: string) => void },
+  ) => Promise<P>;
 }
 
-export interface App {
+export interface Gateway<P> {
   /** The gateway's origin, `http://127.0.0.1:<port>`. */
   readonly url: string;
   /** The frontend it serves, if it serves one. */
@@ -149,7 +141,7 @@ export interface App {
   readonly hubUrl: string;
   readonly hub: Hub;
   /** This start's first run: the programs it started, once it's done. */
-  readonly firstRun: Promise<Programs | undefined>;
+  readonly firstRun: Promise<P | undefined>;
   /** A fresh one-time sign-in address, `<url>/signin#<code>`. */
   signInUrl(): string;
   /** Serve `path` with `route`, for another part of the app. */
@@ -190,9 +182,13 @@ function writePrivate(file: string, text: string) {
  * The app: a Hub in this process, and the person's gateway, its single running instance. The
  * gateway holds the person's one channel to the Hub. Browser tabs and the CLI are the person's UIs,
  * not channels: they reach the gateway at `/api`, and their calls run through the person's slots,
- * and the person's notes are the app's own file.
+ * and the person's notes are the app's own file. What it starts beside serving, and the frontend's
+ * folder, are handed in.
  */
-export async function startApp(options: AppOptions): Promise<App> {
+export async function startGateway<P extends Started>(
+  options: GatewayOptions<P>,
+): Promise<Gateway<P>> {
+  const { closePackageActors, startPrograms } = options;
   // Before anything is opened: a frontend that won't do refuses the start.
   const frontend = frontendOf(options.frontend);
   const home = resolve(options.home);
@@ -279,7 +275,6 @@ export async function startApp(options: AppOptions): Promise<App> {
     home,
     hubUrl: listener.url,
     log,
-    ...options.firstRun,
   }).catch((error: unknown) => {
     log(`First run didn't work: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;

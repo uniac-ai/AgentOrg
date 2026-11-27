@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { serveSocket } from "../src/index.ts";
+import { serveSocket } from "../src/api.ts";
 
 test("a socket has 64 calls in flight at most; past it, a call is refused busy", async () => {
   const sent: { id?: number; result?: unknown; error?: { code?: string } }[] = [];

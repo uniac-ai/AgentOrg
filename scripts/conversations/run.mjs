@@ -633,7 +633,7 @@ function standInResponse(body) {
 // --- The app, and the person's side of it ------------------------------------------------------
 
 async function startTheApp() {
-  const { startApp } = await import(join(root, "packages", "app", "dist", "src", "gateway.js"));
+  const { startApp } = await import(join(root, "packages", "app", "dist", "src", "index.js"));
   app = await startApp({
     home,
     port: 0,
