@@ -129,11 +129,19 @@ const OFFERED = [
 ];
 
 type Actor = ReturnType<typeof createTestContext<typeof engine.slots, typeof engine.exports>>;
-/** `rest` binds the rest of what the agent holds in the same go as its model, as at a start. */
-
-async function setup(values = new Map<string, unknown>(), rest?: (actor: Actor) => void) {
+/**
+ * `rest` binds the rest of what the agent holds in the same go as its model, as at a start.
+ * `mounted` is the tree its host was last given, read each time: with none, its host gives none.
+ */
+async function setup(
+  values = new Map<string, unknown>(),
+  rest?: (actor: Actor) => void,
+  mounted?: () => z.input<typeof SettingsRoot>[] | undefined,
+) {
+  given.mounted = mounted;
   const actor = createTestContext(engine, { actorId: "assistant", module: "logic" });
   await actor.start();
+  delete given.mounted;
   const host = engines.at(-1) as (typeof engines)[number];
   const store = memory(values);
   actor.bind("store", store.handlers);
@@ -603,29 +611,26 @@ test("a call that's refused, or whose connection went, reaches the model as its 
 });
 
 /**
- * The tree an agent's settings give: its words and its skills, management's own, and each plugin
- * named as its executor's to hold.
+ * The tree an agent is given: its words and its skills, management's own, and each plugin named as
+ * its executor's to hold.
  */
 const treeOf = (
   instructions: string,
   skills: { name: string; description: string }[],
   plugins: string[] = [],
-): { mounted: z.input<typeof SettingsRoot>[] } => ({
-  mounted: [
-    { mounted: "instructions", capability: "instructions", arguments: { text: instructions } },
-    { mounted: "skills", capability: "skills", arguments: { skills } },
-    ...plugins.map((name) => ({ mounted: name, capability: name, arguments: {}, provider: SELF })),
-  ],
-});
+): z.input<typeof SettingsRoot>[] => [
+  { mounted: "instructions", capability: "instructions", arguments: { text: instructions } },
+  { mounted: "skills", capability: "skills", arguments: { skills } },
+  ...plugins.map((name) => ({ mounted: name, capability: name, arguments: {}, provider: SELF })),
+];
 
-/** The settings an agent is given, in memory. */
-function settingsOf(instructions: string, skills: { name: string; description: string }[]) {
+/** The settings an agent is bound to, in memory, which read its skills' files. */
+function settingsOf() {
   const files = new Map([
     ["review", "# Review\nRead the diff first."],
     ["review/notes.md", "Notes."],
   ]);
   return {
-    get: () => treeOf(instructions, skills),
     skill: ({ name, path }: { name: string; path?: string }) => {
       const text = files.get(path ? `${name}/${path}` : name);
       if (text === undefined) throw new Refused("unknown", "No such skill or file.");
@@ -635,13 +640,10 @@ function settingsOf(instructions: string, skills: { name: string; description: s
 }
 const REVIEW = { name: "review", description: "Review a change." };
 
-test("bound to settings, instructions and skills come from it, read at each request", async () => {
-  const s = await setup();
+test("given a tree, instructions and skills come from it, read at each request", async () => {
   let skills = [REVIEW];
-  s.actor.bind("settings", {
-    ...settingsOf("You keep the docs.", []),
-    get: () => treeOf("You keep the docs.", skills),
-  });
+  const s = await setup(undefined, undefined, () => treeOf("You keep the docs.", skills));
+  s.actor.bind("settings", settingsOf());
   await s.turn("hello");
   const told = String(s.requests[0]?.instructions);
   assert.ok(told.startsWith("You keep the docs."));
@@ -657,16 +659,15 @@ test("bound to settings, instructions and skills come from it, read at each requ
 });
 
 test("a skill's ALWAYS.md is told while the skill is given, after the agent's words and before the skills, and is gone at the next turn once it isn't", async () => {
-  const s = await setup();
+  const PLAIN = { name: "plain", description: "Has nothing always to say." };
+  let skills = [REVIEW, PLAIN];
+  const s = await setup(undefined, undefined, () => treeOf("You keep the docs.", skills));
   const files = new Map([
     ["review", "# Review"],
     ["review/ALWAYS.md", "Review only what you are shown.\n"],
   ]);
-  const PLAIN = { name: "plain", description: "Has nothing always to say." };
-  let skills = [REVIEW, PLAIN];
   const read: string[] = [];
   s.actor.bind("settings", {
-    get: () => treeOf("You keep the docs.", skills),
     skill: ({ name, path }: { name: string; path?: string }) => {
       read.push(path ? `${name}/${path}` : name);
       const text = files.get(path ? `${name}/${path}` : name);
@@ -691,15 +692,14 @@ test("a skill's ALWAYS.md is told while the skill is given, after the agent's wo
 });
 
 test("what skills always tell the agent fits within the limit too, in order, before their names; what doesn't is left out and reported", async () => {
-  const s = await setup();
   const instructions = "x".repeat(MAX_INSTRUCTIONS - 3_000);
   const files = new Map([
     ["a/ALWAYS.md", "a".repeat(2_000)],
     ["b/ALWAYS.md", "b".repeat(2_000)],
   ]);
   const skills = ["a", "b"].map((name) => ({ name, description: "y" }));
+  const s = await setup(undefined, undefined, () => treeOf(instructions, skills));
   s.actor.bind("settings", {
-    get: () => treeOf(instructions, skills),
     skill: ({ name, path }: { name: string; path?: string }) => {
       const text = files.get(`${name}/${path}`);
       if (text === undefined) throw new Refused("unknown", "No such skill or file.");
@@ -721,13 +721,9 @@ test("what skills always tell the agent fits within the limit too, in order, bef
   });
 });
 
-test("settings that open with the template's earlier words are told its words now in their place", async () => {
-  const s = await setup();
+test("words that open with the template's earlier words are told its words now in their place", async () => {
   let instructions = `${EARLIER}\n\nWhat you are for: notes.`;
-  s.actor.bind("settings", {
-    ...settingsOf("", []),
-    get: () => treeOf(instructions, []),
-  });
+  const s = await setup(undefined, undefined, () => treeOf(instructions, []));
   await s.turn("hello");
   const now = `${INSTRUCTIONS}\n\nWhat you are for: notes.`;
   assert.equal(s.requests[0]?.instructions, now);
@@ -738,8 +734,8 @@ test("settings that open with the template's earlier words are told its words no
 });
 
 test("the model reads a skill's text and files through settings", async () => {
-  const s = await setup();
-  s.actor.bind("settings", settingsOf("Do the work.", [REVIEW]));
+  const s = await setup(undefined, undefined, () => treeOf("Do the work.", [REVIEW]));
+  s.actor.bind("settings", settingsOf());
   s.script.push(
     calls(
       callTool("settings__skill", { name: "review" }, "c1"),
@@ -760,11 +756,10 @@ test("the model reads a skill's text and files through settings", async () => {
 });
 
 test("skills that won't fit the instructions are left out and reported", async () => {
-  const s = await setup();
   const instructions = "x".repeat(MAX_INSTRUCTIONS - 600);
   const skills = ["a", "b"].map((name) => ({ name, description: "y".repeat(50) }));
   skills.push({ name: "c", description: "y".repeat(1000) });
-  s.actor.bind("settings", settingsOf(instructions, skills));
+  const s = await setup(undefined, undefined, () => treeOf(instructions, skills));
   await s.turn("hello");
   assert.equal(s.requests.length, 1);
   const told = String(s.requests[0]?.instructions);
@@ -776,26 +771,20 @@ test("skills that won't fit the instructions are left out and reported", async (
 });
 
 test("an agent's own words past the limit are cut to it, so the whole request is within what the model takes", async () => {
-  const s = await setup();
-  s.actor.bind("settings", settingsOf("x".repeat(200_000), [REVIEW]));
+  const s = await setup(undefined, undefined, () => treeOf("x".repeat(200_000), [REVIEW]));
   await s.turn("hello");
   assert.equal(s.requests.length, 1);
   assert.equal(String(s.requests[0]?.instructions), "x".repeat(MAX_INSTRUCTIONS));
   assert.ok(String(s.whole[0]?.instructions).length <= 200_000);
 });
 
-test("bound settings that can't answer end the turn rather than run it without its instructions", async () => {
-  const s = await setup();
-  s.actor.bind("settings", {
-    get: () => {
-      throw new NotConnected("settings");
-    },
-  });
+test("with no tree given yet by a host that gives one, the turn ends rather than run without its instructions", async () => {
+  const s = await setup(undefined, undefined, () => undefined);
   assert.equal((await s.turn("hello"))?.code, "not_connected");
   assert.equal(s.requests.length, 0);
 });
 
-test("with settings unbound, the instructions are the host's", async () => {
+test("with no tree from its host, the instructions are the host's", async () => {
   const s = await setup();
   await s.turn("hello");
   assert.equal(s.requests[0]?.instructions, INSTRUCTIONS);
@@ -1147,17 +1136,13 @@ async function waits(s: Awaited<ReturnType<typeof setup>>) {
 }
 const WENT_ON = ["assistant: ok"];
 
-test("a turn that was cut off waits for the agent's settings to answer, and goes on with them", async () => {
-  // The agent is back before what holds its settings is running.
-  let away = true;
-  const s = await setup(await cutOff(), (actor) =>
-    actor.bind("settings", {
-      get: () => (away ? gone("settings") : treeOf("Be kind.", [])),
-    }),
-  );
+test("a turn that was cut off waits for the agent's tree, and goes on once it is given", async () => {
+  // The agent is back before management has given its host what is mounted on it.
+  let tree: z.input<typeof SettingsRoot>[] | undefined;
+  const s = await setup(await cutOff(), undefined, () => tree);
   await waits(s);
-  away = false;
-  s.actor.usable("settings");
+  tree = treeOf("Be kind.", []);
+  await s.host.hold();
   assert.equal(await s.ended(0), undefined);
   assert.equal(s.requests[0]?.instructions, "Be kind.");
   assert.deepEqual(s.messages(), WENT_ON);
@@ -2012,7 +1997,7 @@ test("a plain message is answered by the conversation's own loop in one request,
     ["working", "idle"],
   );
   assert.equal(s.requests.length, 1);
-  // With no settings bound it is told the agent's standing instructions.
+  // Given no tree by its host, it is told the agent's standing instructions.
   assert.equal(s.requests[0]?.instructions, INSTRUCTIONS);
   s.script.push(say("Still here."));
   await sendAs(s, "Still there?");
@@ -2907,45 +2892,45 @@ test("Work carries the steps each piece of work keeps", async () => {
   );
 });
 
-test("a hold never applies settings older than one already held: what a later read named stays held", async (t) => {
+test("a hold never applies a tree older than one already held: what a later tree named stays held", async (t) => {
   const said: string[] = [];
   const quiet = { info() {}, warn() {}, error() {} };
   const plugins = await createPluginHost(quiet, [saying("notes", said)]).open("assistant", {
     store: memory().handlers as never,
     provides: ["hub", "model"],
   });
+  // The hold after `slow` is set waits until it is let go, as a slow plugin's may.
+  const holding = plugins.hold;
+  const slow = { next: false, gate: gate() };
+  plugins.hold = async (named, everything) => {
+    if (slow.next) {
+      slow.next = false;
+      await slow.gate.shut;
+    }
+    return holding(named, everything);
+  };
   given.plugins = plugins;
   t.after(() => {
     delete given.plugins;
   });
-  const s = await setup();
-  // Each read answers with what was named as it was read; the first waits until it is let go, as
-  // a read over a slow channel may.
-  let names: string[] = [];
-  const slow = gate();
-  let first = true;
-  s.actor.bind("settings", {
-    ...settingsOf("You keep the docs.", []),
-    get: async () => {
-      const named = names;
-      if (first) {
-        first = false;
-        await slow.shut;
-      }
-      return treeOf("You keep the docs.", [], named);
-    },
-  });
-  // Bound, it reads them, slowly, while they name nothing. Then they name notes, and it is asked
-  // to hold them again, as a provider does once management has named one there.
+  let names = ["notes"];
+  const s = await setup(undefined, undefined, () => treeOf("You keep the docs.", [], names));
+  await until(() => plugins.list().some(({ name }) => name === "notes"), "notes to be held");
+  await s.host.settled();
+  // Given a tree that names nothing, it holds it, slowly. Then one that names notes, and it is
+  // asked to hold that too, as its host does once management has given it.
+  names = [];
+  slow.next = true;
+  const first = s.host.hold();
+  await new Promise((done) => setTimeout(done, 20));
   names = ["notes"];
   const later = s.host.hold();
   await new Promise((done) => setTimeout(done, 20));
-  slow.open();
-  await later;
-  await new Promise((done) => setTimeout(done, 20));
+  slow.gate.open();
+  await Promise.all([first, later]);
   assert.ok(
     plugins.list().some(({ name }) => name === "notes"),
     JSON.stringify(said),
   );
-  assert.ok(!said.includes("notes unloaded"), JSON.stringify(said));
+  assert.deepEqual(said, ["notes loaded", "notes unloaded", "notes loaded"]);
 });

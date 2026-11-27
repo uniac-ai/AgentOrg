@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Id, Name } from "../base/names.js";
 import { ModelId } from "../exposure/llm-session.js";
 import { CapabilityId, View } from "../exposure/views.js";
+import { ROOTS_MAX, SettingsRoot } from "./mounted.js";
 
 const Title = z.string().min(1).max(128);
 const Description = z.string().max(2000);
@@ -121,14 +122,14 @@ export const AgentModels = z.object({
 });
 
 /**
- * `agent.provider@1`: a program that makes agents: an execution system and its way of running one.
+ * `agent.provider@2`: a program that makes agents: an execution system and its way of running one.
  * It says what it can create, and makes, starts, stops and removes the agents it made, and keeps
- * the model chosen for each; each is an Actor. A call naming an agent it didn't make is refused
- * `unknown`.
+ * the model chosen for each; each is an Actor. It is given what is mounted on each, with
+ * `mounted`. A call naming an agent it didn't make is refused `unknown`.
  */
 export const agentProvider = defineInterface({
   name: "agent.provider",
-  major: 1,
+  major: 2,
   kind: "rpc",
   methods: {
     creatable: method({
@@ -136,10 +137,9 @@ export const agentProvider = defineInterface({
       output: z.object({ creatables: z.array(Creatable) }),
     }),
     /**
-     * Make and start an agent of a creatable, named `name`. `settings` is the agent's slot typed
-     * `agent.settings@1`, for whoever serves it to bind, and `chat` its export typed `chat@1`.
-     * Refused `unknown` for a creatable it doesn't offer, and `invalid` when an ask with no
-     * `optional` has no answer.
+     * Make and start an agent of a creatable, named `name`. `chat` is its export typed `chat@1`.
+     * It holds what is mounted on it once it is given that with `mounted`. Refused `unknown` for a
+     * creatable it doesn't offer, and `invalid` when an ask with no `optional` has no answer.
      */
     create: method({
       input: z.object({
@@ -147,7 +147,16 @@ export const agentProvider = defineInterface({
         name: Title,
         answers: Answers,
       }),
-      output: z.object({ agent: Id, settings: Name, chat: Name }),
+      output: z.object({ agent: Id, chat: Name }),
+    }),
+    /**
+     * What is mounted on an agent now: every root, in order, as the agent is to hold it. Each is
+     * the whole list, in place of the one before. It answers once the agent holds what the list
+     * names; an agent off its channel holds it when it joins again.
+     */
+    mounted: method({
+      input: OnAgent.extend({ mounted: z.array(SettingsRoot).max(ROOTS_MAX) }),
+      output: z.object({}),
     }),
     status: method({ input: OnAgent, output: ProvidedStatus }),
     start: method({ input: OnAgent, output: z.object({}) }),

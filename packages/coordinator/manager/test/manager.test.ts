@@ -453,7 +453,8 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
   const script: {
     fail?: string;
     alsoFail?: string;
-    settings?: string;
+    /** Its agents' settings slot takes the first major, which management's export isn't. */
+    earlierSettings?: boolean;
     chat?: string;
     /** Parties whose conversation's turn failed. */
     failed?: string[];
@@ -507,6 +508,8 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     /** What the capability provider was asked to mount, and to take off. */
     mounted: { agent: string; capability: string; arguments: object }[];
     unmounted: { agent: string; mounted: string }[];
+    /** Each list of what is mounted on an agent the agent provider was given, in order. */
+    lists: { agent: string; mounted: unknown[] }[];
   } = {
     secrets: [],
     removed: [],
@@ -514,6 +517,7 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     checked: [],
     mounted: [],
     unmounted: [],
+    lists: [],
   };
   /** What the capability provider holds on each agent, by its id for each. */
   const mountedOn = new Map<string, Map<string, string>>();
@@ -593,7 +597,7 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
             hubUrl: server.url,
             actorId,
             credential: credential as string,
-            slots: { settings: agentSettings2 },
+            slots: { settings: script.earlierSettings ? agentSettings : agentSettings2 },
             // What a `working` agent holds of itself it serves as these.
             exports: { chat, capability, tools },
             start(own) {
@@ -662,11 +666,12 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
           });
           running.set(actorId, client as never);
           leaving.push(() => client.close());
-          return {
-            agent: actorId,
-            settings: script.settings ?? "settings",
-            chat: script.chat ?? "chat",
-          };
+          return { agent: actorId, chat: script.chat ?? "chat" };
+        },
+        mounted(input) {
+          failing("mounted");
+          given.lists.push(input);
+          return {};
         },
         status: ({ agent }) => {
           failing("agent.status");
@@ -1037,6 +1042,11 @@ async function setup(t: test.TestContext, extra: Partial<Parameters<typeof start
     mountedOn,
     restart,
     rejoin,
+    /** The agent provider leaves, as when its program stops. */
+    leaveAgents: async () => {
+      agentsProvider.close();
+      await agentsProvider.closed;
+    },
     /** An agent's connection goes, as when its provider stops. */
     leave: (agent: string) => running.get(agent)?.close(),
     exposedTo,
@@ -1228,7 +1238,8 @@ test("a stack is made, bound, exposed and recorded, with its chat to the person"
 
 const FAILURES: [string, (s: Awaited<ReturnType<typeof setup>>) => void][] = [
   ["the provider making the agent", (s) => (s.script.fail = "agent")],
-  ["binding its settings", (s) => (s.script.settings = "nothing")],
+  ["binding its settings", (s) => (s.script.earlierSettings = true)],
+  ["giving its provider what is mounted on it", (s) => (s.script.fail = "mounted")],
   ["reading a skill's file", (s) => (s.script.fail = "skill")],
   ["applying the unit", (s) => (s.script.fail = "apply")],
   ["the unit making other connections than it said", (s) => (s.script.wrongSlot = "other")],
@@ -1466,6 +1477,54 @@ test("an agent sees only its own settings, and only it hears that they changed",
   await until(() => (s.heard.get(a) ?? 0) === 3);
   assert.deepEqual((await settingsRead(one)).skills, []);
   assert.equal(s.heard.get(b) ?? 0, 0);
+});
+
+test("an agent's provider is given what is mounted on it, as its settings answer it: once it is made, when that changes, when the provider comes back, and when management starts again", async (t) => {
+  const s = await setup(t);
+  const make = async (name: string) =>
+    (await s.calls.agents.create({ stack: { base: s.base, units: [] }, name })).agent;
+  const [a, b] = [await make("A"), await make("B")];
+  await until(
+    () => s.agentChannel(a).slots.settings.bound && s.agentChannel(b).slots.settings.bound,
+  );
+  const answered = async (agent: string) =>
+    (await s.agentChannel(agent).slots.settings.call.get({})).mounted;
+  const last = (lists: { agent: string; mounted: unknown[] }[], agent: string) =>
+    lists.findLast((one) => one.agent === agent)?.mounted;
+  // Given before its creation, or a change, answers.
+  assert.deepEqual(last(s.given.lists, a), await answered(a));
+  await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
+  await s.calls.agents.expose({ agent: a, skill: "notes" });
+  assert.deepEqual(last(s.given.lists, a), await answered(a));
+  assert.match(JSON.stringify(last(s.given.lists, a)), /The notes skill/);
+
+  // The provider leaves and comes back holding nothing: each of its agents is given its list.
+  await s.leaveAgents();
+  const back: { agent: string; mounted: unknown[] }[] = [];
+  const provider = await connect({
+    hubUrl: s.hubUrl,
+    actorId: s.agentActor.actorId,
+    credential: s.agentActor.credential as string,
+    exports: { provider: agentProvider },
+    start(ctx) {
+      ctx.exports.provider.implement({
+        mounted: (input: (typeof back)[number]) => {
+          back.push(input);
+          return {};
+        },
+      } as never);
+    },
+  });
+  t.after(() => provider.close());
+  const each = async () => {
+    await until(() => [a, b].every((agent) => last(back, agent)));
+    for (const agent of [a, b]) assert.deepEqual(last(back, agent), await answered(agent));
+  };
+  await each();
+  // Management starts again: each is given its list again.
+  back.length = 0;
+  await s.restart(() => {});
+  await each();
 });
 
 test("removing an agent takes its units last first, and leaves what it was given", async (t) => {

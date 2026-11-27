@@ -5,10 +5,10 @@
  * Management keeps the record, and gates nothing: whoever is bound to `agents@1` mounts and
  * unmounts. What an agent may mount, and when a person is asked, is the controlling capability's.
  *
- * A capability mounted from the agent's own executor is held by that executor through the tree its
- * settings give (`treeOf`), so it is kept, and the agent told its settings changed, before the
- * provider is asked: a turn that reads the settings meanwhile already holds it. If the provider
- * doesn't make it, the record goes back as it was, and the agent is told again.
+ * A capability mounted from the agent's own executor is held by that executor through the tree it
+ * is given (`treeOf`), so it is kept, and the agent's provider given the tree and answered, before
+ * the capability's provider is asked: the agent holds it by then. If the provider doesn't make it,
+ * the record goes back as it was, and the agent is given that.
  *
  * The tree's other roots aren't mounted here, so none is mounted or unmounted through this:
  * `instructions` and `skills` are management's own, and the rest came with a unit.
@@ -53,8 +53,10 @@ export interface MountParts {
   serial<T>(agent: string, work: () => T | Promise<T>): Promise<T>;
   /** The capability providers exposed to management now. */
   providers(): { actor: string; call: Provider }[];
-  /** Tell the agent its settings changed. */
-  changed(agent: string): void;
+  /** Tell the agent its settings changed, and give its provider its list: settles once answered. */
+  changed(agent: string): Promise<void>;
+  /** Give the agent's provider its list, with no word to the agent: settles once answered. */
+  give(agent: string): Promise<void>;
   /** Have an agent holding control reach management's `agents@1`, or no longer. */
   reachControl(agent: string, reach: boolean): Promise<void>;
   /** Wire what a provider made for a mount, all or none; what it wired is kept on the mount. */
@@ -215,7 +217,7 @@ export function createMounts(parts: MountParts) {
     };
     record.mounted.push(root);
     save();
-    changed(agent);
+    await changed(agent);
     const unkeep = () => {
       record.mounted = record.mounted.filter((one) => one !== root);
       save();
@@ -268,6 +270,8 @@ export function createMounts(parts: MountParts) {
         unkeep();
         throw redacted(error, echoed);
       }
+    // What was wired, such as its skills, is the agent's too.
+    if (wiring) await parts.give(agent);
     // Control reaches management's agents@1, as the control unit's does.
     if (capability === CONTROL_ROOT) await parts.reachControl(agent, true);
     return { mounted: root.mounted };
@@ -292,7 +296,7 @@ export function createMounts(parts: MountParts) {
     }
     record.mounted.splice(at, 1);
     save();
-    changed(agent);
+    await changed(agent);
     try {
       await takeOff(agent, root);
     } catch (error) {
@@ -302,6 +306,7 @@ export function createMounts(parts: MountParts) {
       throw error;
     }
     await parts.unwire(agent, record, root);
+    await parts.give(agent);
     if (root.capability === CONTROL_ROOT && !holdsControl(record, self))
       await parts.reachControl(agent, false);
     return {};
@@ -429,7 +434,7 @@ export function createMounts(parts: MountParts) {
         const at = record.mounted.indexOf(root);
         record.mounted.splice(at, 1);
         save();
-        changed(agent);
+        await changed(agent);
         try {
           await takeOff(agent, root);
         } catch (error) {
@@ -445,6 +450,7 @@ export function createMounts(parts: MountParts) {
           });
         }
         await parts.unwire(agent, record, root);
+        await parts.give(agent);
       }
     },
 

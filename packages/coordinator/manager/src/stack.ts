@@ -19,6 +19,7 @@ import {
   type OwnCapability,
   type Problem,
   ResultKind,
+  type SettingsRoot,
   SkillName,
   SlotName,
   Surface,
@@ -375,7 +376,12 @@ export interface StackParts {
   recordOf(agent: string): TheAgent;
   openActors(): Promise<Map<string, { name: string }>>;
   nameOf(actor: string): Promise<string>;
-  changed(agent: string): void;
+  /** Tell the agent what is mounted on it changed, and give its provider its list. */
+  changed(agent: string): Promise<void>;
+  /** Give the agent's provider what is mounted on the agent now; it never fails. */
+  give(agent: string): Promise<void>;
+  /** What is mounted on the agent now: one being made, too. */
+  listOf(agent: string): z.infer<typeof SettingsRoot>[];
   fromEach<T, R>(list: T[], read: (one: T) => Promise<R>): Promise<R[]>;
   exposeConnection(agent: string, connection: string, as?: string): Promise<string>;
   /** Connect the person to an export of an Actor made for an agent; it gives the person's slot. */
@@ -391,6 +397,8 @@ export interface StackParts {
 
 /** What a capability's Actor exports as itself, and what each of its connections exports. */
 const CAPABILITY_EXPORT = "capability";
+/** The agent's slot that management's `agent.settings@2` is bound to. */
+const SETTINGS_SLOT = "settings";
 const TOOLS_EXPORT = "tools";
 /** The slot an agent's Work is reached at by the agent that made it: named by its id. */
 const workSlot = (agent: string) => `work_${agent}`;
@@ -2090,10 +2098,12 @@ export function createStacks(parts: StackParts) {
         undo.push(() => creating.delete(agent));
         await hub.grants.bind({
           consumer: agent,
-          slot: made.settings,
+          slot: SETTINGS_SLOT,
           provider: self,
           export: "settings",
         });
+        // Its provider holds what is mounted on it from its first word: the record being made.
+        await provider.call.mounted({ agent, mounted: parts.listOf(agent) });
 
         const work: Work = { agent, name: input.name, caller, record, undo, origins: {} };
         const applied = new Map<number | string, TheUnitRecord>();
@@ -2115,6 +2125,8 @@ export function createStacks(parts: StackParts) {
         keepOrigins(work);
         save();
         creating.delete(agent);
+        // And what its units gave it, before this returns.
+        await parts.give(agent);
         // Its maker reaches it before this returns, as does it every other agent if it is at
         // "all"; any other agent at "all" reaches it in its own queue's time. The maker reaches its
         // Work once it is connected.
@@ -2150,7 +2162,7 @@ export function createStacks(parts: StackParts) {
         if (unit && at !== undefined) placeAt(record, unit.instance, at);
         keepOrigins(work);
         save();
-        changed(agent);
+        await changed(agent);
         if (unit) return { instance: unit.instance };
         return {
           instance:
@@ -2171,7 +2183,7 @@ export function createStacks(parts: StackParts) {
         const needing = record.units.find((one) => Object.values(one.needs).includes(instance));
         if (needing) throw new Refused("state", `${needing.title} needs this unit.`);
         await dropUnit(agent, record, unit);
-        changed(agent);
+        await changed(agent);
         return {};
       }
       // What a provider's unit gave isn't a unit of its own, so it can't be taken off alone.
@@ -2181,7 +2193,7 @@ export function createStacks(parts: StackParts) {
       if (skill) {
         record.skills = record.skills.filter((name) => name !== skill);
         save();
-        changed(agent);
+        await changed(agent);
         return {};
       }
       const tool = (await toolsOf(agent)).find(

@@ -82,7 +82,7 @@ test("the agent management interfaces are named, versioned and compile strictly"
     [
       "tools@1",
       "agent.settings@1",
-      "agent.provider@1",
+      "agent.provider@2",
       "agents@1",
       "connections@1",
       "skills@1",

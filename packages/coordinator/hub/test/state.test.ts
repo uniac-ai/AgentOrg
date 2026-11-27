@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { hubActors, hubAudit, hubBindings, hubGrants, tools } from "@agentorg/interfaces";
+import {
+  agentProvider,
+  hubActors,
+  hubAudit,
+  hubBindings,
+  hubGrants,
+  tools,
+} from "@agentorg/interfaces";
 import { defineInterface, describeInterface, method, Refused } from "@agentorg/sdk";
 import { z } from "zod";
 import { HUB, HubState, PERSON, type StateEvents } from "../src/index.ts";
@@ -420,6 +427,61 @@ test("an update on either end keeps a binding: it differs until both ends declar
   // A binding still goes when a name is no longer declared.
   state.declareExternal(holder, { slots: {}, exports: {} });
   assert.deepEqual(wired(), ["agent pad other@1"]);
+});
+
+test("management's slot to an agent provider keeps its binding when either end declares agent.provider@2 in place of @1, whichever is first", (t) => {
+  const { state } = open(t);
+  // The first major, as both ends declared it before the upgrade: no `mounted`.
+  const { mounted: _, ...methods } = agentProvider.methods;
+  const before = describeInterface(
+    defineInterface({ name: "agent.provider", major: 1, kind: "rpc", methods }),
+  );
+  const after = describeInterface(agentProvider);
+  assert.deepEqual([before.id, after.id], ["agent.provider@1", "agent.provider@2"]);
+  for (const first of ["provider", "management"] as const) {
+    const provider = state.createActor(PERSON, { name: "Agents" }).actorId;
+    const management = state.createActor(PERSON, { name: "Management" }).actorId;
+    const declare = (actor: string, iface: typeof after) =>
+      actor === provider
+        ? state.declareExternal(provider, { slots: {}, exports: { provider: iface } })
+        : state.declareExternal(management, { slots: { agents: iface }, exports: {} });
+    declare(provider, before);
+    declare(management, before);
+    state.bind(PERSON, { consumer: management, slot: "agents", provider, export: "provider" });
+    const bound = () => {
+      const b = state.binding(management, "agents");
+      return b && `${b.provider} ${b.export} ${b.interface}${b.mismatched ? " differs" : ""}`;
+    };
+    const [one, other] = first === "provider" ? [provider, management] : [management, provider];
+    // One end updated: the binding is kept, differing until the other is too. Its interface is
+    // its slot's.
+    declare(one, after);
+    const slot = first === "provider" ? before.id : after.id;
+    assert.equal(bound(), `${provider} provider ${slot} differs`, first);
+    // Then the other: it works again as it was, made by no one anew.
+    declare(other, after);
+    assert.equal(bound(), `${provider} provider agent.provider@2`, first);
+  }
+});
+
+test("management's slot to an agent provider made by exposing its export, as the app makes it, goes when the provider declares agent.provider@2, and exposing it again, as each start does, makes it at @2", (t) => {
+  const { state } = open(t);
+  const { mounted: _, ...methods } = agentProvider.methods;
+  const before = describeInterface(
+    defineInterface({ name: "agent.provider", major: 1, kind: "rpc", methods }),
+  );
+  const provider = state.createActor(PERSON, { name: "Agents" }).actorId;
+  const management = state.createActor(PERSON, { name: "Management" }).actorId;
+  state.declareExternal(provider, { slots: {}, exports: { provider: before } });
+  state.declareExternal(management, { slots: {}, exports: {} });
+  const expose = () => state.expose(PERSON, { provider, export: "provider", to: management }).slot;
+  const slot = expose();
+  assert.equal(state.binding(management, slot)?.interface, "agent.provider@1");
+  const after = describeInterface(agentProvider);
+  state.declareExternal(provider, { slots: {}, exports: { provider: after } });
+  assert.equal(state.binding(management, slot), undefined);
+  assert.equal(expose(), slot);
+  assert.equal(state.binding(management, slot)?.interface, "agent.provider@2");
 });
 
 test("one optional member added to tools@1 keeps an agent's exposed tools as they were, and its model kept until both ends declare the same", (t) => {
