@@ -17,7 +17,6 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   agentProvider,
-  agentSettings2,
   type CapabilityDefinition,
   capability,
   capabilityProvider,
@@ -281,7 +280,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           hubUrl,
           actorId: agent,
           credential: (stored[agent] as z.infer<typeof Stored>).credential,
-          slots: { model: llmSession, settings: agentSettings2 },
+          slots: { model: llmSession },
           exports: { chat, capability, tools },
           log,
           start(ctx) {

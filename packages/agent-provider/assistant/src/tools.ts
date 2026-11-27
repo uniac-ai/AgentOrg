@@ -93,6 +93,28 @@ export const filesOf: FilesOf = (call) => {
 /** Whether a slot is a `tools@1`, whose tools are whatever it lists. */
 export const listsTools = (described: DescribedInterface) => described.id === TOOLS_ID;
 
+/** A `tools@1` slot as a call reaches it: through `call` as it is when the call runs. */
+type ToolsSlot = { readonly call: Readonly<Record<string, (input: unknown) => Promise<unknown>>> };
+
+/**
+ * Run the tool `name` through a `tools@1` slot: its output, and its pictures; one that ran and
+ * failed says so as `failed`.
+ */
+export const runThrough =
+  (slot: ToolsSlot, name: string) =>
+  async (args: unknown, group: string): Promise<Outcome> => {
+    const call = slot.call.call as (input: object) => Promise<unknown>;
+    const { output, failed, images } = (await call({
+      name,
+      arguments: args,
+      group,
+    })) as z.output<(typeof toolsInterface)["methods"]["call"]["output"]>;
+    const pictures = images ? { images } : {};
+    return failed
+      ? { output, ok: false, code: "failed", ...pictures }
+      : { output, ok: true, ...pictures };
+  };
+
 /**
  * What a `tools@1` slot lists now. A slot that can't answer gives no tools and says why, and is
  * asked again at the next turn. A call reads `slot.call` when it runs, so a slot that gives its
@@ -100,7 +122,7 @@ export const listsTools = (described: DescribedInterface) => described.id === TO
  */
 export async function listedBy(
   name: string,
-  slot: { readonly call: Readonly<Record<string, (input: unknown) => Promise<unknown>>> },
+  slot: ToolsSlot,
 ): Promise<{ candidates: Candidate[]; leftOut: LeftOut[] }> {
   const list = slot.call.list as (input: object) => Promise<unknown>;
   let entries: z.output<typeof ToolEntry>[];
@@ -115,18 +137,7 @@ export async function listedBy(
       name: entry.name,
       ...(entry.description ? { description: entry.description } : {}),
       parameters: entry.inputSchema as Candidate["parameters"],
-      run: async (args, group) => {
-        const call = slot.call.call as (input: object) => Promise<unknown>;
-        const { output, failed, images } = (await call({
-          name: entry.name,
-          arguments: args,
-          group,
-        })) as z.output<(typeof toolsInterface)["methods"]["call"]["output"]>;
-        const pictures = images ? { images } : {};
-        return failed
-          ? { output, ok: false, code: "failed", ...pictures }
-          : { output, ok: true, ...pictures };
-      },
+      run: runThrough(slot, entry.name),
     }),
   );
   return { candidates, leftOut: [] };

@@ -5,15 +5,7 @@
  * - the model, on `hub`, which offers `model`: a capability's own question to the agent's model.
  * Neither takes arguments, so no caller can mount one with another agent's identity.
  */
-import type {
-  agentSettings2,
-  capability,
-  chat,
-  Item,
-  llmSession,
-  Tool,
-  tools,
-} from "@agentorg/interfaces";
+import type { capability, chat, Item, llmSession, Tool, tools } from "@agentorg/interfaces";
 import type { Context as HubContext, Slot } from "@agentorg/sdk";
 import type { Context } from "cordis";
 import type { z } from "zod";
@@ -22,7 +14,7 @@ import type { Capability } from "./substrate.js";
 /** What the agent reaches of the Hub through its channel: its slots, its exports, what is exposed to it. */
 export type AgentHub = Pick<
   HubContext<
-    { model: typeof llmSession; settings: typeof agentSettings2 },
+    { model: typeof llmSession },
     { chat: typeof chat; capability: typeof capability; tools: typeof tools }
   >,
   "slots" | "exports" | "exposed" | "onExposed" | "log"

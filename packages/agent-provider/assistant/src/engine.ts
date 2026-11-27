@@ -5,15 +5,7 @@
  * last given it. Its host says where the records are kept and what the agent is told when it
  * gives no tree.
  */
-import type {
-  agentSettings2,
-  capability,
-  chat,
-  kv,
-  llmSession,
-  SettingsRoot,
-  tools,
-} from "@agentorg/interfaces";
+import type { capability, chat, kv, llmSession, SettingsRoot, tools } from "@agentorg/interfaces";
 import { type Conversed, type Model, type Part, Refusal } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
@@ -32,7 +24,7 @@ const SECTION = "plugin:";
 
 type Host = Pick<
   Context<
-    { model: typeof llmSession; settings: typeof agentSettings2 },
+    { model: typeof llmSession },
     { chat: typeof chat; capability: typeof capability; tools: typeof tools }
   >,
   "slots" | "exports" | "exposed" | "onExposed" | "log"

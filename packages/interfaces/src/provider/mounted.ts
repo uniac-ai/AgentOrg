@@ -18,7 +18,8 @@ export const Arguments = z.record(z.string().min(1).max(64), z.json());
  * Two roots are management's own, and name no provider: no caller mounts or unmounts them.
  * - `instructions`, whose arguments are `{ text }`: the words the agent is told of itself.
  * - `skills`, whose arguments are `{ skills }`: each skill exposed to it, by its name and
- *   description, whose files `agent.settings@2`'s `skill` reads.
+ *   description, and, as `always`, what its `ALWAYS.md` says, if it has one. Its files are read
+ *   with the `skill` tool management exposes to the agent at `settings`.
  */
 export const SettingsRoot = z.strictObject({
   mounted: Id,
