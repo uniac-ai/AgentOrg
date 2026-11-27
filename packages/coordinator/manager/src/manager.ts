@@ -177,7 +177,8 @@ function withoutLater(parsed: unknown) {
  * connected by exposing its export to this Actor: the Hub's slots are the list of them, and what
  * is exposed to an agent is the Hub's bindings. No status is stored, and no secret reaches it to
  * keep. Each agent's provider is given what is mounted on the agent, with `agent.provider@2`'s
- * `mounted`: when it is made, whenever that changes, and whenever the provider is there anew.
+ * `mounted`: when it is made, whenever that changes, whenever the provider is there anew, and,
+ * while it hasn't taken the agent's list, again at whatever shows it may take it now.
  */
 export async function startManager(options: ManagerOptions): Promise<Manager> {
   const log = options.log ?? quiet;
@@ -358,26 +359,43 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       /** Each agent's giving now, so each is given its list after the one before has answered. */
       const giving = new Map<string, Promise<void>>();
+      /** Each agent's last giving asked for, while it hasn't begun: it gives the newest list. */
+      const waiting = new Map<string, Promise<void>>();
+      /**
+       * The agents whose provider hasn't taken their list: it wasn't there to be called, or didn't
+       * answer. Each is owed its list until its provider takes one.
+       */
+      const owed = new Set<string>();
       /**
        * Give an agent's provider what is mounted on the agent now, and settle once it has answered:
-       * the list is made as it goes, so the last given is the newest. A provider that isn't there,
-       * or doesn't answer, is given every list when it is there again: that is logged, and
-       * nothing fails for it.
+       * the list is made as it goes, so the last given is the newest. A list its provider doesn't
+       * take, because it isn't there or doesn't answer, is owed, and nothing fails for it: it is
+       * given again at whatever shows the provider may take it now, whether or not what is mounted
+       * changes meanwhile.
        */
       const give = (agent: string) => {
         const done = (giving.get(agent) ?? Promise.resolve()).then(async () => {
+          if (waiting.get(agent) === done) waiting.delete(agent);
           // What is on offer is told in it: a read under way is waited for.
           await readingOffers;
           const record = creating.get(agent) ?? records.agents[agent];
-          const provider = agentProviders().find((one) => one.actor === record?.provider);
-          if (!provider) return;
+          // One gone meanwhile is owed nothing.
+          if (!record) return void owed.delete(agent);
+          const provider = agentProviders().find((one) => one.actor === record.provider);
+          if (!provider) return void owed.add(agent);
           try {
             await provider.call.mounted({ agent, mounted: listOf(agent) });
           } catch (error) {
+            owed.add(agent);
             log.warn(`Giving an agent what is mounted on it: ${messageOf(error)}`, { agent });
+            return;
           }
+          owed.delete(agent);
+          // It answers: what it is owed for its other agents, it may take now too.
+          giveOwed(record.provider);
         });
         giving.set(agent, done);
+        waiting.set(agent, done);
         void done.then(() => {
           if (giving.get(agent) === done) giving.delete(agent);
         });
@@ -387,6 +405,17 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       const giveAll = (actor?: string) => {
         for (const [agent, record] of Object.entries(records.agents))
           if (actor === undefined || record.provider === actor) void give(agent);
+      };
+      /**
+       * Give each agent owed its list, or each of `actor`'s, again: one with a giving that hasn't
+       * begun has it given already.
+       */
+      const giveOwed = (actor?: string) => {
+        for (const agent of owed) {
+          const record = creating.get(agent) ?? records.agents[agent];
+          if (!waiting.has(agent) && (actor === undefined || record?.provider === actor))
+            void give(agent);
+        }
       };
       /**
        * What is mounted on the agent changed: it is told so, and its provider is given its list.
@@ -405,11 +434,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         agent: string,
         provider: string,
       ): Promise<z.infer<typeof ProvidedStatus>> => {
+        let status: z.infer<typeof ProvidedStatus>;
         try {
-          return await named(agentProviders(), provider, "agent provider").call.status({ agent });
+          status = await named(agentProviders(), provider, "agent provider").call.status({ agent });
         } catch {
           return { state: "down" as const, detail: "Its provider can't be reached." };
         }
+        // It answers: what it is owed for its agents, it may take now.
+        giveOwed(provider);
+        return status;
       };
       const instanceOf = (connection: string) => records.instances[connection] ?? connection;
       const forget = (connection: string) => {
@@ -708,8 +741,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             return void (await stacks.reachAgents((reached) => reached === actor));
           // A unit provider that is back may serve newer skills than were copied here.
           if (actor && unitProviders().some((one) => one.actor === actor)) void refreshing();
-          // An agent provider that is back holds nothing of what is mounted on its agents.
+          // An agent provider that is back holds nothing of what is mounted on its agents; and
+          // any that didn't take a list may take it now.
           giveAll(actor);
+          giveOwed();
           await Promise.all([
             stacks.holdOwns(actor),
             stacks.reachHeld(actor),
@@ -742,12 +777,13 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       // And a capability provider exposed to it, or no longer, changes what is on offer.
       ctx.onExposed(readOffers);
       // And an agent provider exposed to it anew, as at management's start, is given its agents'
-      // lists.
+      // lists; and any that didn't take a list may take it now.
       let providersNow = new Set<string>();
       ctx.onExposed(() => {
         const now = new Set(agentProviders().map(({ actor }) => actor));
         for (const actor of now) if (!providersNow.has(actor)) giveAll(actor);
         providersNow = now;
+        giveOwed();
       });
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
