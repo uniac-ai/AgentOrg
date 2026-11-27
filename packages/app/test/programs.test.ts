@@ -419,6 +419,185 @@ test("on a home whose providers are no longer exposed to management, as after an
   assert.equal((await app.firstRun)?.management, management);
 });
 
+/** Management's four functions, as an agent holding a skill and a control unit is offered them. */
+const MANAGEMENTS = [
+  "settings__skill",
+  "control__capability_list",
+  "control__capability_mount",
+  "control__capability_unmount",
+];
+
+/**
+ * A home with one agent holding a skill and an AgentOrg control unit, signed in to the stand-in
+ * model, stopped once its first turn has ended: each model request's offered functions are kept
+ * in `asked`, and every one is answered with nothing.
+ */
+async function holdingSkillAndControl(t: test.TestContext) {
+  const fake = await fakeOpenAI();
+  const asked: string[][] = [];
+  const fetch = async (request: Request) => {
+    if (!request.url.endsWith("/responses")) return fake.handle(request);
+    const body = (await request.clone().json()) as { tools?: { name: string }[] };
+    asked.push((body.tools ?? []).map((one) => one.name));
+    fake.script({ events: [completed([])] });
+    return fake.handle(request);
+  };
+  const s = await open(t, undefined, fetch);
+  const { person, ran } = await s.start();
+  const management = ran?.management as string;
+  const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
+    redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
+  });
+  await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
+  const agent = await createAssistant(person, "Holder");
+  await person.call("skills", "add", {
+    files: {
+      "SKILL.md": "---\nname: review\ndescription: Review a change.\n---\n\nRead the diff.\n",
+    },
+  });
+  await person.call("agents", "expose", { agent, skill: "review" });
+  await person.call("agents", "addUnit", {
+    agent,
+    unit: { provider: management, unit: "control", values: { templates: ["assistant"] } },
+  });
+  const slot = await chatSlot(person, agent);
+  await until(
+    () =>
+      person.call(slot, "list").then(
+        () => true,
+        () => false,
+      ),
+    "the chat to be exposed",
+  );
+  // Running as it was made, its first request offers all four.
+  await person.call(slot, "send", { text: "Hi!" });
+  await until(() => asked.length >= 1, "the agent to be asked");
+  await until(
+    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  for (const name of MANAGEMENTS) assert.ok(asked[0]?.includes(name), name);
+  await s.stop();
+  asked.length = 0;
+  return { s, fetch, asked, agent, slot, management };
+}
+
+/**
+ * Send the agent a message as early as the person's calls reach its chat on a start under way,
+ * and wait for its first model request: whether it was sent before management was connected and
+ * before the app's start completed, and the functions that request offered.
+ */
+async function sentAsEarlyAsItCan(
+  app: App,
+  home: string,
+  held: Awaited<ReturnType<typeof holdingSkillAndControl>>,
+) {
+  let started = false;
+  void app.firstRun.then(() => {
+    started = true;
+  });
+  const person = personOf(app, home);
+  for (let i = 0; ; i++) {
+    const sent = await person.call(held.slot, "send", { text: "Hi again!" }).then(
+      () => true,
+      () => false,
+    );
+    if (sent) break;
+    if (i > 5000) assert.fail("the chat never took the message");
+    await delay(2);
+  }
+  const early = { beforeManagement: !app.hub.connected(held.management), beforeStart: !started };
+  await until(() => held.asked.length >= 1, "the agent to be asked");
+  await until(
+    async () => (await person.call<{ state: string }>(held.slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  return { person, early, offered: held.asked[0] ?? [] };
+}
+
+test("a message sent as early as the agent's chat takes it while the app starts is answered by a first request that offers management's skill and control functions", async (t) => {
+  const held = await holdingSkillAndControl(t);
+  const app = await startApp({
+    home: held.s.home,
+    defaultPort: 0,
+    firstRun: { log: () => {}, computer: { path: "" }, fetch: held.fetch, assistant: false },
+  });
+  let person: Person | undefined;
+  t.after(async () => {
+    await person?.close();
+    await app.close();
+  });
+  const sent = await sentAsEarlyAsItCan(app, held.s.home, held);
+  person = sent.person;
+  assert.ok(sent.early.beforeStart, "sent before the app's start completed");
+  for (const name of MANAGEMENTS)
+    assert.ok(sent.offered.includes(name), `${name}: ${sent.offered}`);
+});
+
+test("the same right after an upgrade-style start, its bindings there before management, whose providers are exposed to it again slowly", async (t) => {
+  const held = await holdingSkillAndControl(t);
+  const { management } = held;
+  // What the Hub drops as a provider's export changes its contract: each provider's exposures to
+  // management. The agent's own slots, to management's tools at settings and control, stay.
+  const hub = HubState.open(held.s.home);
+  try {
+    const gone = hub
+      .bindings(management)
+      .filter(
+        (b) =>
+          b.consumer === management &&
+          b.exposed &&
+          (b.export === "provider" || b.export === "capabilities"),
+      );
+    for (const b of gone) hub.unexpose(PERSON, management, b.slot);
+    const agentSlots = hub
+      .bindings(held.agent)
+      .filter((b) => b.consumer === held.agent && b.provider === management)
+      .map((b) => b.slot)
+      .sort();
+    assert.deepEqual(agentSlots, ["control", "settings"]);
+  } finally {
+    hub.close();
+  }
+  // Each exposure to management takes a moment, so management starts that much later.
+  const app = await startGateway({
+    home: held.s.home,
+    defaultPort: 0,
+    closePackageActors,
+    startPrograms: (side, given) =>
+      startPrograms(
+        {
+          async call(slot, method, input) {
+            if (
+              slot === "grants" &&
+              method === "expose" &&
+              (input as { to?: string }).to === management
+            )
+              await delay(300);
+            return side.call(slot, method, input);
+          },
+        },
+        {
+          ...given,
+          log: () => {},
+          computer: { path: "" },
+          fetch: held.fetch,
+          assistant: false,
+        },
+      ),
+  });
+  let person: Person | undefined;
+  t.after(async () => {
+    await person?.close();
+    await app.close();
+  });
+  const sent = await sentAsEarlyAsItCan(app, held.s.home, held);
+  person = sent.person;
+  assert.ok(sent.early.beforeManagement, "sent before management was connected");
+  for (const name of MANAGEMENTS)
+    assert.ok(sent.offered.includes(name), `${name}: ${sent.offered}`);
+});
+
 test("an agent given Memory keeps a line it writes, and is told it at its next turn and after the app starts again", async (t) => {
   // The model, scripted: each of the agent's requests answered in turn, nothing once those run out,
   // and a message heard apart asks for no stop. What each of its requests is told and offered is
