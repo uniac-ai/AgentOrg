@@ -22,10 +22,10 @@
       "packages/app/test/oauth.test.ts"
     ],
     "agent provider": [
-      "packages/assistant",
-      "packages/looper",
-      "packages/chatgpt",
-      "packages/memory"
+      "packages/agent-provider/assistant",
+      "packages/agent-provider/looper",
+      "packages/agent-provider/chatgpt",
+      "packages/agent-provider/memory"
     ],
     "capability": ["packages/computer"],
     "all-in-one": [
@@ -54,16 +54,16 @@
     }
   },
   "crossings in tests and scripts": {
-    "packages/assistant/test/provider.test.ts": {
+    "packages/agent-provider/assistant/test/provider.test.ts": {
       "coordinator": "stands up a real Hub to test against"
     },
-    "packages/assistant/test/run-path.test.ts": {
+    "packages/agent-provider/assistant/test/run-path.test.ts": {
       "coordinator": "stands up a real Hub to test against"
     },
-    "packages/chatgpt/test/program.test.ts": {
+    "packages/agent-provider/chatgpt/test/program.test.ts": {
       "coordinator": "stands up a real Hub to test against"
     },
-    "packages/chatgpt/test/session-version.test.ts": {
+    "packages/agent-provider/chatgpt/test/session-version.test.ts": {
       "coordinator": "stands up a real Hub to test against"
     },
     "packages/computer/test/provider.test.ts": {

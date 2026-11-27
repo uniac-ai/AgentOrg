@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isReference, literals } from "./check-imports.mjs";
+import { folders, isReference, listOf, literals, siblingOf } from "./check-imports.mjs";
 
 /** The references the scanner finds in a source, as `line text`, with `(import)` on specifiers. */
 const found = (source) =>
@@ -67,6 +67,45 @@ test("a path up into a sibling workspace's folder counts", () => {
     'readFileSync(new URL("../dist/index.html", import.meta.url));',
   ].join("\n");
   assert.deepEqual(found(source), ["1 ../app/package.json", "2 ../../app/package.json"]);
+});
+
+test("a path up into a nested workspace's folder counts, by its path or by its name", () => {
+  const source = [
+    'join(here, "../../../coordinator/mcp/dist/test/fixtures/server.js");',
+    'readFileSync(new URL("../../looper/package.json", import.meta.url));',
+    'readFileSync(new URL("../../coordinator/package.json", import.meta.url));',
+  ].join("\n");
+  assert.deepEqual(found(source), [
+    "1 ../../../coordinator/mcp/dist/test/fixtures/server.js",
+    "2 ../../looper/package.json",
+  ]);
+  assert.deepEqual(siblingOf("../../../coordinator/mcp/dist/test/fixtures/server.js"), {
+    dir: "packages/coordinator/mcp",
+    path: "packages/coordinator/mcp/dist/test/fixtures/server.js",
+  });
+  // From the assistant's test, ../../ climbs only to agent-provider/, where the looper sits.
+  assert.deepEqual(siblingOf("../../looper/package.json"), {
+    dir: "packages/agent-provider/looper",
+    path: "packages/agent-provider/looper/package.json",
+  });
+});
+
+test("two workspaces with the same name are refused", () => {
+  assert.throws(
+    () => folders(["packages/coordinator/kv", "packages/agent-provider/kv"]),
+    /packages\/coordinator\/kv and packages\/agent-provider\/kv are both named kv/,
+  );
+});
+
+test("a nested workspace's tests and scripts go on the tests-and-scripts list", () => {
+  assert.equal(
+    listOf("packages/agent-provider/assistant/test/provider.test.ts"),
+    "crossings in tests and scripts",
+  );
+  assert.equal(listOf("packages/coordinator/hub/scripts/any.js"), "crossings in tests and scripts");
+  assert.equal(listOf("packages/shell/test/frontend.test.ts"), "crossings in tests and scripts");
+  assert.equal(listOf("packages/agent-provider/assistant/src/provider.ts"), "crossings in src");
+  assert.equal(listOf("packages/agent-provider/test/stray.ts"), "crossings in src");
 });
 
 test("regular expressions, JSX text and code in a template don't throw the reading off", () => {
