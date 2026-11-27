@@ -1,8 +1,6 @@
 {
   "account.login@1": "sha256-725bc98c9c4abf3b28fda62e6986e4c662a691fe771e9d199feb53b24daad94f",
   "agent.provider@2": "sha256-d6d41b8d14690edd3eac8ec304c37f3051f653c15e227431adb485d6473eaa47",
-  "agent.settings@1": "sha256-d59f9f44ce5f0aae30d4691305ceb9e0c6637feb46c6b84059cc8e6726d80c0f",
-  "agent.settings@2": "sha256-8f70617e958e77df6cb280e525545cc6a6c371a0c3d3b46bdf52be9cd857ecd1",
   "agents@1": "sha256-1d18ed68e2e282badf53828ac4dc4d10414fad90d582fb6e78a1ffdac31bbd48",
   "agents@2": "sha256-df63fabde77f7f2bc9e7ce81ed15104f35706d0745eaba2f2ddcfc02d3b74dad",
   "capability.provider@1": "sha256-defb4e150e28476b83b7a6bbc29c6ec4af6ebb7d6b234307ddb8a4117fb84975",

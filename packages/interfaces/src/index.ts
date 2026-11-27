@@ -52,8 +52,6 @@ export {
   hubGrants,
   PERSON,
 } from "./joining/hub.js";
-export { agentSettings, SkillEntry } from "./management/agent-settings.js";
-export { agentSettings2 } from "./management/agent-settings-2.js";
 export { agents2, ListedTemplate2, MountedCapability2, Template2 } from "./management/agents-2.js";
 export { ConnectionKind, ConnectionParams } from "./management/connection.js";
 export {
@@ -102,7 +100,7 @@ export {
 } from "./provider/connection.js";
 export { Arguments, ROOTS_MAX, SettingsRoot } from "./provider/mounted.js";
 export { CapabilityPlugin, PluginName } from "./provider/plugins.js";
-export { SKILL_FILE_MAX, SkillName, SkillPath } from "./provider/skills.js";
+export { SKILL_FILE_MAX, SkillEntry, SkillName, SkillPath } from "./provider/skills.js";
 export {
   Field,
   Form,

@@ -1,6 +1,6 @@
 /**
  * What is mounted on an agent, as the program that runs it is given it: by management, in
- * `agent.provider@2`'s `mounted`, and as `agent.settings@2` answers it.
+ * `agent.provider@2`'s `mounted`.
  */
 import { z } from "zod";
 import { Id } from "../base/names.js";

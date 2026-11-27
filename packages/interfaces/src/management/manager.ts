@@ -31,9 +31,8 @@ import {
 } from "../provider/connection.js";
 import { Arguments } from "../provider/mounted.js";
 import { CapabilityPlugin } from "../provider/plugins.js";
-import { SKILL_FILE_MAX, SkillName, SkillPath } from "../provider/skills.js";
+import { SKILL_FILE_MAX, SkillEntry, SkillName, SkillPath } from "../provider/skills.js";
 import { Problem, ResultKind, Unit } from "../provider/unit-provider.js";
-import { SkillEntry } from "./agent-settings.js";
 import { ConnectionKind, ConnectionParams } from "./connection.js";
 
 const Time = z.string().max(64);

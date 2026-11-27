@@ -8,8 +8,6 @@ import {
   Activity,
   accountLogin,
   agentProvider,
-  agentSettings,
-  agentSettings2,
   agents,
   agents2,
   capability,
@@ -65,14 +63,12 @@ test("every interface's schemas compile under the Hub's strict validator", () =>
 
 const management = [
   tools,
-  agentSettings,
   agentProvider,
   agents,
   connections,
   skills,
   unitProvider,
   capabilityProvider,
-  agentSettings2,
   agents2,
 ];
 
@@ -81,14 +77,12 @@ test("the agent management interfaces are named, versioned and compile strictly"
     management.map((i) => describeInterface(i).id),
     [
       "tools@1",
-      "agent.settings@1",
       "agent.provider@2",
       "agents@1",
       "connections@1",
       "skills@1",
       "unit.provider@1",
       "capability.provider@1",
-      "agent.settings@2",
       "agents@2",
     ],
   );
@@ -107,11 +101,11 @@ test("tools@1 carries any tool's arguments, and a failure only as a flag", () =>
 });
 
 test("a skill's name and paths stay inside its folder", () => {
-  const skill = compiled(agentSettings)["skill.input"];
-  assert.ok(skill);
+  const read = compiled(capabilityProvider)["skill.input"];
+  assert.ok(read);
+  const skill = (asked: object) => read({ capability: "files", ...asked });
   for (const path of ["SKILL.md", "references/guide.md", "a/b.c/d", ".hidden/x", "a..b/c"])
     assert.ok(skill({ name: "pdf-tools", path }), path);
-  assert.ok(skill({ name: "pdf-tools" }));
   for (const path of [
     "",
     "..",
@@ -130,7 +124,7 @@ test("a skill's name and paths stay inside its folder", () => {
   ])
     assert.equal(skill({ name: "pdf-tools", path }), false, JSON.stringify(path));
   for (const name of ["", "PDF", "a b", "-a", "a-", "a--b", "x".repeat(65)])
-    assert.equal(skill({ name }), false, JSON.stringify(name));
+    assert.equal(skill({ name, path: "SKILL.md" }), false, JSON.stringify(name));
 });
 
 test("a connection's status can't carry extra fields, and a base holds only what it asks", () => {
@@ -173,7 +167,7 @@ test("a unit's status may restate an instance made under older words: its answer
   assert.equal(status({ state: "connected", connections: [], now: { rows: now.rows } }), false);
 });
 
-test("a capability may be made of plugins, with or without an Actor, and the agent's settings say every plugin it holds", () => {
+test("a capability may be made of plugins, with or without an Actor", () => {
   const applied = compiled(unitProvider)["apply.output"];
   assert.ok(applied);
   const made = { instance: "i1", connections: [], results: [] };
@@ -185,15 +179,6 @@ test("a capability may be made of plugins, with or without an Actor, and the age
   assert.ok(applied({ ...made, capability: { actor: "a1", plugins: [{ name: "search" }] } }));
   assert.equal(applied({ ...made, capability: { plugins: [{ name: "Memory" }] } }), false);
   assert.equal(applied({ ...made, capability: { plugins: [{ ...memory, on: true }] } }), false);
-
-  const settings = compiled(agentSettings)["get.output"];
-  assert.ok(settings);
-  // From a management that doesn't say them: none, as before.
-  assert.ok(settings({ instructions: "Hi.", skills: [] }));
-  assert.ok(
-    settings({ instructions: "Hi.", skills: [], plugins: [{ ...memory, capability: "memory" }] }),
-  );
-  assert.equal(settings({ instructions: "Hi.", skills: [], plugins: [memory] }), false);
 });
 
 test("what an agent holds may be made of plugins, and then needn't be reached by the person: agents@1 says both", () => {
@@ -1171,10 +1156,10 @@ test("a field says what an agent may do with it, from a closed list", () => {
   assert.equal(Field.parse(field).authority, undefined, "none declared: closed");
 });
 
-test("agent.settings@2 gives what is mounted on the caller, in order, each root by its id, capability and arguments; management's own name no provider", () => {
-  const settings = compiled(agentSettings2);
-  const got = settings["get.output"];
-  assert.ok(got);
+test("agent.provider@2's mounted gives what is mounted on an agent, in order, each root by its id, capability and arguments; management's own name no provider", () => {
+  const given = compiled(agentProvider)["mounted.input"];
+  assert.ok(given);
+  const got = (list: object) => given({ agent: "act_a", ...list });
   const instructions = {
     mounted: "instructions",
     capability: "instructions",
@@ -1194,9 +1179,7 @@ test("agent.settings@2 gives what is mounted on the caller, in order, each root 
   };
   assert.ok(got({ mounted: [instructions, skills, memory, github] }));
   assert.ok(got({ mounted: [] }));
-  // In place of the first major's shape, not beside it; a root says no more than this.
-  assert.equal(got({ instructions: "x", skills: [] }), false);
-  assert.equal(got({ mounted: [instructions], instructions: "x" }), false);
+  // A root says no more than this.
   assert.equal(got({ mounted: [{ ...memory, plugins: [{ name: "memory" }] }] }), false);
   assert.equal(got({ mounted: [{ ...memory, capability: "Memory" }] }), false);
   assert.equal(got({ mounted: [{ ...memory, arguments: undefined }] }), false);
@@ -1206,12 +1189,6 @@ test("agent.settings@2 gives what is mounted on the caller, in order, each root 
   assert.ok(got({ mounted: [instructions, skills, ...many(65)] }));
   assert.ok(got({ mounted: many(256) }));
   assert.equal(got({ mounted: many(257) }), false);
-  // A skill's files are read as before; told what changed, it reads the tree again.
-  assert.ok(settings["skill.input"]?.({ name: "review", path: "SKILL.md" }));
-  assert.equal(settings["skill.input"]?.({ name: "review", path: "../x" }), false);
-  assert.ok(settings["changed.event"]?.({}));
-  // The first major stays as it was, for a program that still reads it.
-  assert.ok(compiled(agentSettings)["get.output"]?.({ instructions: "x", skills: [] }));
 });
 
 test("agents@1 lists every capability its providers offer, each naming its provider", () => {

@@ -5,6 +5,11 @@ export const SkillName = z
   .string()
   .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/)
   .max(64);
+/** What a list says of a skill, from its `SKILL.md` front matter. */
+export const SkillEntry = z.object({
+  name: SkillName,
+  description: z.string().max(1024),
+});
 /**
  * A file of a skill: a relative path inside its folder, of plain segments, never `.` or `..`, with
  * no backslash or control character.
