@@ -53,7 +53,7 @@ export interface MountParts {
   serial<T>(agent: string, work: () => T | Promise<T>): Promise<T>;
   /** The capability providers exposed to management now. */
   providers(): { actor: string; call: Provider }[];
-  /** Tell the agent its settings changed, and give its provider its list: settles once answered. */
+  /** What is mounted on the agent changed: give its provider its list. Settles once answered. */
   changed(agent: string): Promise<void>;
   /** Give the agent's provider its list, with no word to the agent: settles once answered. */
   give(agent: string): Promise<void>;

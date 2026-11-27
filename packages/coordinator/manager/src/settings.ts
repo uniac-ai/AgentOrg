@@ -1,6 +1,6 @@
 /**
- * What an agent is run with, as `agent.settings@2` says it and its provider is given it: the tree
- * of what is mounted on it, worked out from its record at each read, so nothing new is kept.
+ * What an agent is run with, as its provider is given it in `agent.provider@2`'s `mounted`: the
+ * tree of what is mounted on it, worked out from its record each time, so nothing new is kept.
  *
  * - `instructions` and `skills` are management's own: the words it is told of itself, and the
  *   skills exposed to it, each with what its `ALWAYS.md` says. No caller mounts or unmounts them.
@@ -47,7 +47,7 @@ export const SKILL_TOOL = {
     additionalProperties: false,
   },
 };
-/** Its arguments, as `agent.settings@2`'s `skill` takes them. */
+/** Its arguments: the skill's name, and the file in its folder if not `SKILL.md`. */
 const SkillAsked = z.object({ name: SkillName, path: SkillPath.optional() });
 /** What `skill` was asked, or refused `invalid` as the slot's own check refuses it. */
 export function skillAsked(input: unknown) {

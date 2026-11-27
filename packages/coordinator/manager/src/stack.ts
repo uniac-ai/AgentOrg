@@ -376,7 +376,7 @@ export interface StackParts {
   recordOf(agent: string): TheAgent;
   openActors(): Promise<Map<string, { name: string }>>;
   nameOf(actor: string): Promise<string>;
-  /** Tell the agent what is mounted on it changed, and give its provider its list. */
+  /** What is mounted on the agent changed: give its provider its list. */
   changed(agent: string): Promise<void>;
   /** Give the agent's provider what is mounted on the agent now; it never fails. */
   give(agent: string): Promise<void>;

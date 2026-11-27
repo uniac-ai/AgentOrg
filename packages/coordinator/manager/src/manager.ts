@@ -3,7 +3,6 @@ import { join } from "node:path";
 import {
   type Arguments,
   agentProvider,
-  agentSettings2,
   agents,
   agents2,
   type ConnectionOrigin,
@@ -171,14 +170,14 @@ function withoutLater(parsed: unknown) {
 }
 
 /**
- * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1`, as `settings`,
- * `agent.settings@2`, and, as `skillTools`, a `tools@1` whose one tool, `skill`, reads a skill's
- * files, exposed to each agent at `settings`. It keeps only what the Hub can't know. A provider is
- * connected by exposing its export to this Actor: the Hub's slots are the list of them, and what
- * is exposed to an agent is the Hub's bindings. No status is stored, and no secret reaches it to
- * keep. Each agent's provider is given what is mounted on the agent, with `agent.provider@2`'s
- * `mounted`: when it is made, whenever that changes, whenever the provider is there anew, and,
- * while it hasn't taken the agent's list, again at whatever shows it may take it now.
+ * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1`, and, as
+ * `skillTools`, a `tools@1` whose one tool, `skill`, reads a skill's files, exposed to each agent
+ * at `settings`. It keeps only what the Hub can't know. A provider is connected by exposing its
+ * export to this Actor: the Hub's slots are the list of them, and what is exposed to an agent is
+ * the Hub's bindings. No status is stored, and no secret reaches it to keep. Each agent's provider
+ * is given what is mounted on the agent, with `agent.provider@2`'s `mounted`: when it is made,
+ * whenever that changes, whenever the provider is there anew, and, while it hasn't taken the
+ * agent's list, again at whatever shows it may take it now.
  */
 export async function startManager(options: ManagerOptions): Promise<Manager> {
   const log = options.log ?? quiet;
@@ -241,7 +240,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       // Nothing else to do.
     }
   };
-  /** Agents being made: they can read their settings, and nothing else can see them yet. */
+  /**
+   * Agents being made: their provider is given what is mounted on them and they can read their
+   * skills, and nothing else can see them yet.
+   */
   const creating = new Map<string, z.infer<typeof AgentRecord>>();
 
   const client = await connect({
@@ -254,7 +256,6 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       agents2,
       connections,
       skills,
-      settings: agentSettings2,
       tools,
       skillTools: tools,
     },
@@ -331,9 +332,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       /** The read of it under way, if one is. */
       let readingOffers: Promise<void> | undefined;
       /**
-       * What is mounted on an agent now, as its settings answer it and its provider is given it:
-       * the tree, with the words management tells it of itself and the skills exposed to it, each
-       * with what its `ALWAYS.md` says, so the agent reads nothing for it.
+       * What is mounted on an agent now, as its provider is given it: the tree, with the words
+       * management tells it of itself and the skills exposed to it, each with what its `ALWAYS.md`
+       * says, so the agent reads nothing for it.
        */
       const listOf = (agent: string) => {
         const record = settingsOf(agent);
@@ -418,13 +419,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         }
       };
       /**
-       * What is mounted on the agent changed: it is told so, and its provider is given its list.
-       * It settles once the provider has answered.
+       * What is mounted on the agent changed: its provider is given its list. It settles once the
+       * provider has answered.
        */
-      const changed = (agent: string) => {
-        ctx.exports.settings.emit("changed", {}, { to: agent });
-        return give(agent);
-      };
+      const changed = (agent: string) => give(agent);
       const originOf = (connection: string) => {
         const origin = records.connections[connection];
         if (!origin) throw new Refused("unknown", `Management has no connection ${connection}.`);
@@ -942,11 +940,6 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           throw new Refused("unknown", `No skill ${name} with that file is exposed to you.`);
         return text;
       };
-
-      ctx.exports.settings.implement({
-        get: (_, { caller }) => ({ mounted: listOf(caller) }),
-        skill: ({ name, path: file }, { caller }) => ({ text: skillFile(caller, name, file) }),
-      });
 
       // Its one tool, listed to an agent while a skill it is told of is exposed to it.
       ctx.exports.skillTools.implement({

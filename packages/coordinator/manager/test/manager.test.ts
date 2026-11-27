@@ -18,7 +18,6 @@ import test from "node:test";
 import { Hub, listen, PERSON } from "@agentorg/hub";
 import {
   agentProvider,
-  agentSettings2,
   agents,
   agents2,
   capability,
@@ -28,13 +27,25 @@ import {
   hubActors,
   hubBindings,
   hubGrants,
-  type SettingsRoot,
+  ROOTS_MAX,
+  SettingsRoot,
+  SKILL_FILE_MAX,
+  SkillName,
+  SkillPath,
   skills,
   type Template2,
   tools,
   unitProvider,
 } from "@agentorg/interfaces";
-import { defineInterface, type Interface, method, Refused, type Slot } from "@agentorg/sdk";
+import {
+  defineInterface,
+  describeInterface,
+  event,
+  type Interface,
+  method,
+  Refused,
+  type Slot,
+} from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import { z } from "zod";
 import { reachOf, SKILL_SHIPPED, skillFile } from "../src/control.ts";
@@ -52,6 +63,26 @@ const refused = (code: string) => (error: unknown) =>
 type Root = z.infer<typeof SettingsRoot>;
 const SKILL = (name: string, text = "Use it well.") =>
   `---\nname: ${name}\ndescription: The ${name} skill.\n---\n${text}\n`;
+/**
+ * `agent.settings@2` as a release before defined it: what its agents declared at their `settings`
+ * slot, bound to management's export of the same name. The contract is gone from this release.
+ */
+const agentSettings2 = defineInterface({
+  name: "agent.settings",
+  major: 2,
+  kind: "rpc",
+  methods: {
+    get: method({
+      input: z.object({}),
+      output: z.object({ mounted: z.array(SettingsRoot).max(ROOTS_MAX) }),
+    }),
+    skill: method({
+      input: z.object({ name: SkillName, path: SkillPath.optional() }),
+      output: z.object({ text: z.string().max(SKILL_FILE_MAX) }),
+    }),
+  },
+  events: { changed: event(z.object({})) },
+});
 /**
  * What is mounted on an agent, as its provider was last given it: its tree, and of it what
  * management tells it and the rest it holds.
@@ -5136,41 +5167,78 @@ test("what is on offer reaches an agent holding control in what is mounted on it
   );
 });
 
-test("an agent made before skills were tools, its settings slot bound to management's agent.settings@2, has that binding dropped once it is back without the slot, and management's skill tools there", async (t) => {
+test("an agent made before skills were tools, its settings slot bound to management's agent.settings@2, loses that binding as management starts without the export, and has management's skill tools there once it is back without the slot", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([], "Elder");
   await s.calls.skills.add({ files: { "SKILL.md": SKILL("notes") } });
   await s.calls.agents.expose({ agent, skill: "notes" });
+  const { state } = s.hub;
+  const self = s.management.actorId;
   const at = async () =>
     (await s.bindingsOf(agent))
       .filter((b) => b.consumer === agent && b.slot === "settings")
       .map((b) => `${b.provider} ${b.export} ${b.interface}`);
-  // As a release before left it: its executor declares the slot, bound to management's settings.
+  // What of the Hub names the contract: a declaration of management's, or of the agent's own slot,
+  // and any binding.
+  const named = () => [
+    ...state
+      .exports()
+      .filter((one) => one.interface.startsWith("agent.settings@"))
+      .map((one) => `${one.actor} exports ${one.export} ${one.interface}`),
+    ...(state.declaration(agent, "slot", "settings")?.iface.id.startsWith("agent.settings@")
+      ? [`${agent} declares settings`]
+      : []),
+    ...state
+      .bindings()
+      .filter((b) => b.export === "settings" && b.provider === self)
+      .map((b) => `${b.consumer} ${b.slot} bound to ${b.provider} ${b.export}`),
+  ];
+  // As a release before left it: its executor declares the slot, and management, the export of the
+  // same name, the one bound to the other.
   await s.rejoin(agent, chat, {}, { settings: agentSettings2 });
-  s.hub.state.bind(PERSON, {
-    consumer: agent,
-    slot: "settings",
-    provider: s.management.actorId,
-    export: "settings",
+  const before = s.warned.length;
+  /** What management warned of since, of the slot or of reaching its skill tools there. */
+  const warnedOfIt = () =>
+    s.warned
+      .slice(before)
+      .map(({ line }) => line)
+      .filter((line) => /settings|already has a slot|Reaching management for skills/.test(line));
+  await s.restart(async () => {
+    const declared = (side: "slot" | "export", name: string) => {
+      const iface = state.declaration(self, side, name)?.iface;
+      assert.ok(iface, `management declares its ${side} ${name}`);
+      return iface;
+    };
+    state.declareExternal(self, {
+      slots: Object.fromEntries(
+        ["actors", "grants", "bindings"].map((name) => [name, declared("slot", name)]),
+      ),
+      exports: {
+        ...Object.fromEntries(
+          state.exports(self).map((one) => [one.export, declared("export", one.export)]),
+        ),
+        settings: describeInterface(agentSettings2),
+      },
+    });
+    state.bind(PERSON, { consumer: agent, slot: "settings", provider: self, export: "settings" });
+    assert.deepEqual(await at(), [`${self} settings agent.settings@2`]);
+    assert.equal(named().length, 3);
   });
-  const earlier = [`${s.management.actorId} settings agent.settings@2`];
-  assert.deepEqual(await at(), earlier);
-  // Management of this release starts while it is so: the slot is the agent's own, and is left,
-  // with no word of it.
-  await s.restart(() => {});
+  // Management of this release starts without the export: the Hub drops it, with the binding.
+  // The slot is the agent's own until it is back, and is left, with no word of it.
   await new Promise((later) => setTimeout(later, 200));
-  assert.deepEqual(await at(), earlier);
-  assert.deepEqual(
-    s.warned.filter(({ line }) => line.includes("already has a slot")),
-    [],
-  );
-  // Back as this release's executor, with no such slot: the Hub drops the binding, and
-  // management exposes its skill tools there, through which it reads its skills.
+  assert.deepEqual(named(), [`${agent} declares settings`]);
+  assert.deepEqual(await at(), []);
+  assert.deepEqual(warnedOfIt(), []);
+  // Back as this release's executor, with no such slot: management exposes its skill tools there,
+  // through which it reads its skills, and nothing of the Hub names the contract.
   await s.rejoin(agent, chat);
   await until(async () => (await at()).some((one) => one.includes("skillTools")));
-  assert.deepEqual(await at(), [`${s.management.actorId} skillTools tools@1`]);
+  assert.deepEqual(await at(), [`${self} skillTools tools@1`]);
+  assert.deepEqual(named(), []);
   const reads = await s.exposedTo<ToolsCalls>(agent, "settings");
   assert.match((await readSkill(reads, { name: "notes" })).output, /Use it well/);
+  assert.deepEqual(warnedOfIt(), []);
 });
 
 test("control mounted on an agent reaches management's tools at control for as long as it is there, and never agents@1, and an agent holds one control", async (t) => {
