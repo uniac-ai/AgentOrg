@@ -2678,6 +2678,9 @@ test("an agent creates, messages, reads, stops and removes an agent of its own",
     "agent_remove_unit",
     "template_list",
     "unit_list",
+    "capability_list",
+    "capability_mount",
+    "capability_unmount",
   ]);
   const held = await s.calls.agents.get({ agent: parent });
   assert.deepEqual(
@@ -3355,9 +3358,11 @@ test("what an agent can see of connections is what its scope says", async (t) =>
 
 test("each scope gives exactly its tools", async (t) => {
   const s = await delegating(t);
+  // Control's own three, which it holds at every scope.
+  const own = ["capability_list", "capability_mount", "capability_unmount"];
   const names = async (values: object, name: string) =>
     (await s.names((await s.parent(values, undefined, name)).tools)).filter(
-      (one) => !one.startsWith("create_"),
+      (one) => !one.startsWith("create_") && !own.includes(one),
     );
   assert.deepEqual(await names({ templates: ["helper"], agents: "none" }, "None"), []);
   assert.deepEqual(
@@ -3384,6 +3389,7 @@ test("each scope gives exactly its tools", async (t) => {
     ],
   );
   const none = await s.parent({ templates: ["helper"], agents: "none" }, undefined, "Nothing");
+  assert.deepEqual(await s.names(none.tools), own);
   const tried = await none.tools.call({
     name: "create_helper",
     arguments: { name: "X", purpose: "P." },
@@ -4678,16 +4684,15 @@ async function mountCallers(
   return { app: app.slots.agents.call, appActor: appActor.actorId, itself };
 }
 
-test("the person, the agent itself and another program each list what may be mounted, mount a capability on a running agent and take it off, and get gives all three the same tree", async (t) => {
+test("the person and another program each list what may be mounted, mount a capability on a running agent and take it off, and get gives both the same tree; an agent bound to agents@1 is refused every call", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([]);
   const { app, appActor, itself } = await mountCallers(s, t, agent);
   const callers = [
     { calls: s.calls.agents, by: s.callerActor.actorId },
-    { calls: itself, by: agent },
     { calls: app, by: appActor },
   ];
-  // Each is given every capability on offer, naming its provider: the agent bound to agents@1 too.
+  // Each is given every capability on offer, naming its provider.
   // Control's arguments are management's: its AgentOrg control unit's form.
   const form = (await s.calls.agents.units({})).units.find(
     (one) => one.provider === s.management.actorId && one.id === "control",
@@ -4752,9 +4757,22 @@ test("the person, the agent itself and another program each list what may be mou
     assert.deepEqual(await plugins(), []);
     for (const one of callers) assert.deepEqual((await one.calls.get({ agent })).mounted, []);
   }
-  // Everything else stays the person's: an agent reaches it through its control unit. Being bound
-  // to agents@1 for these three gives it nothing more.
+  // All of it is the person's: an agent reaches it through its control's tools. Being bound to
+  // agents@1 gives it nothing.
   const others: [string, () => Promise<unknown>][] = [
+    ["get", () => itself.get({ agent })],
+    ["capabilities", () => itself.capabilities({})],
+    [
+      "mount",
+      () =>
+        itself.mount({
+          agent,
+          provider: s.agentActor.actorId,
+          capability: "memory",
+          arguments: {},
+        }),
+    ],
+    ["unmount", () => itself.unmount({ agent, mounted: "memory" })],
     ["list", () => itself.list({})],
     ["units", () => itself.units({})],
     ["templates", () => itself.templates({})],
@@ -4809,7 +4827,7 @@ test("an agent's settings give the tree of what it holds: management's own roots
     { mounted: "memory", capability: "memory", arguments: {}, provider: executor },
     { mounted: made.mounted, capability: "github", arguments: { owner: "o" }, provider: executor },
   ]);
-  // Its control unit is its control, after management's own.
+  // Its control unit is its control, after management's own, which tell it what it can mount.
   assert.deepEqual(
     (await s.agentChannel(parent).slots.settings.call.get({})).mounted.map((root) => [
       root.mounted,
@@ -4818,6 +4836,7 @@ test("an agent's settings give the tree of what it holds: management's own roots
     [
       ["instructions", undefined],
       ["skills", undefined],
+      ["offered", undefined],
       ["control", executor],
     ],
   );
@@ -4825,26 +4844,42 @@ test("an agent's settings give the tree of what it holds: management's own roots
 
 test("no one mounts or unmounts management's own roots, and what came with a unit goes with the unit", async (t) => {
   const s = await delegating(t);
-  const { agent } = await s.parent({ templates: ["helper"] });
+  const { agent, tools } = await s.parent({ templates: ["helper"] });
   await s.calls.agents.addUnit({ agent, unit: s.own("memory", {}) } as never);
   const tree = async () => (await s.agentChannel(agent).slots.settings.call.get({})).mounted;
   const before = await tree();
-  const itself = await s.exposedTo<AgentsCalls>(agent, "agents");
+  // The agent, through its control's tools: none of them is on offer to it.
+  const itself = {
+    mount: ({ capability }: { capability: string }) =>
+      tools.call({
+        name: "capability_mount",
+        arguments: { provider: s.agentActor.actorId, capability },
+      }),
+    unmount: ({ mounted }: { mounted: string }) =>
+      tools.call({ name: "capability_unmount", arguments: { mounted } }),
+  };
   for (const [by, calls] of [
     ["the person", s.calls.agents],
     ["the agent", itself],
   ] as const) {
-    for (const capability of ["instructions", "skills"]) {
+    for (const capability of ["instructions", "skills", "offered"]) {
       await assert.rejects(
         calls.mount({ agent, provider: s.agentActor.actorId, capability, arguments: {} }),
         (error: Error) =>
-          refused("forbidden")(error) &&
-          error.message === `${capability} is management's own: it is never mounted or unmounted.`,
+          calls === itself
+            ? refused("unknown")(error) &&
+              error.message ===
+                `No capability ${capability} of ${s.agentActor.actorId} is on offer.`
+            : refused("forbidden")(error) &&
+              error.message ===
+                `${capability} is management's own: it is never mounted or unmounted.`,
         `${by} mounting ${capability}`,
       );
       await assert.rejects(
         calls.unmount({ agent, mounted: capability }),
-        refused("forbidden"),
+        (error: Error) =>
+          refused("forbidden")(error) &&
+          error.message === `${capability} is management's own: it is never mounted or unmounted.`,
         `${by} unmounting ${capability}`,
       );
     }
@@ -4860,45 +4895,201 @@ test("no one mounts or unmounts management's own roots, and what came with a uni
   assert.deepEqual(s.given.mounted, []);
 });
 
-test("an agent holding the control unit reaches management's agents@1, answered only what answers whoever is bound: it goes with the unit, and one kept before is given it as management starts", async (t) => {
+test("an agent holding control reaches management's agents@1 no more: what a release before exposed to it is refused every call, and goes as management starts; another program bound to it keeps it", async (t) => {
   const s = await delegating(t);
-  const { agent } = await s.parent({ templates: ["helper"] });
+  const { agent, tools } = await s.parent({ templates: ["helper"] });
   const plain = await s.makeStack([], "Plain");
   const reach = async (of = agent) =>
     (await s.bindingsOf(of))
       .filter((b) => b.consumer === of && b.slot === "agents")
       .map((b) => `${b.provider} ${b.export} ${b.interface}`);
-  const reached = [`${s.management.actorId} agents agents@1`];
-  assert.deepEqual(await reach(), reached);
-  assert.deepEqual(await reach(plain), []);
-  // Only what answers whoever is bound answers it; the rest is through its control unit.
+  assert.deepEqual(await reach(), []);
+  // Its control is management's tools: its control unit's, and control's own three.
+  assert.deepEqual((await s.names(tools)).slice(-3), [
+    "capability_list",
+    "capability_mount",
+    "capability_unmount",
+  ]);
+  // As a release before left it: management's agents@1 exposed to it beside its control unit.
+  await s.person.slots.grants.call.expose({
+    provider: s.management.actorId,
+    export: "agents",
+    to: agent,
+    as: "agents",
+  });
+  assert.deepEqual(await reach(), [`${s.management.actorId} agents agents@1`]);
   const itself = await s.exposedTo<AgentsCalls>(agent, "agents");
-  assert.equal((await itself.get({ agent: plain })).agent, plain);
-  assert.equal((await itself.capabilities({})).capabilities.length, 3);
-  await assert.rejects(itself.list({}), refused("forbidden"));
+  await assert.rejects(itself.get({ agent: plain }), refused("forbidden"));
+  await assert.rejects(itself.capabilities({}), refused("forbidden"));
   // The agent's page shows its control unit's slot as before, and nothing of this.
   assert.deepEqual(
     (await s.calls.agents.get({ agent })).mcp.map((one) => one.slot),
     ["control"],
   );
-
-  // It goes with the unit, and comes with it.
-  const control = (await s.calls.agents.get({ agent })).units.find((one) => one.unit === "control");
-  await s.calls.agents.removeUnit({ agent, instance: control?.instance as string });
-  assert.deepEqual(await reach(), []);
-  await s.calls.agents.addUnit({ agent, unit: s.agentsUnit({ templates: ["helper"] }) } as never);
-  assert.deepEqual(await reach(), reached);
-
-  // An agent kept before it came with the unit is given it as management starts.
-  await s.person.slots.grants.call.unexpose({ to: agent, slot: "agents" });
-  assert.deepEqual(await reach(), []);
-  await s.restart(() => {});
-  for (let i = 0; (await reach()).length === 0; i++) {
-    assert.ok(i < 300, "it was never given it");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  // Another program bound to agents@1 is no agent: what it is bound to stays.
+  const program = s.hub.state.createActor(PERSON, {
+    name: "An app",
+    bindings: [{ slot: "agents", provider: s.management.actorId, export: "agents" }],
+  });
+  // Management starts, and takes it off the agent; once gone, a start changes nothing.
+  for (const _ of [1, 2]) {
+    await s.restart(() => {});
+    for (let i = 0; (await reach()).length > 0; i++) {
+      assert.ok(i < 300, "it was never taken off");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
   }
-  assert.deepEqual(await reach(), reached);
   assert.deepEqual(await reach(plain), []);
+  assert.deepEqual(await reach(program.actorId), [`${s.management.actorId} agents agents@1`]);
+  // What it keeps is its control: what it can mount told in its list, and its tools to mount.
+  await until(() => {
+    const list = s.given.lists.filter((one) => one.agent === agent).at(-1)?.mounted as
+      | { capability: string; arguments: { text?: string } }[]
+      | undefined;
+    const offered = list?.find((one) => one.capability === "offered");
+    return offered?.arguments.text?.startsWith("## Capabilities\n") === true;
+  });
+  const again = await s.exposedTo<ToolCalls>(agent, "control");
+  assert.ok((await s.names(again)).includes("capability_mount"));
+  assert.deepEqual(
+    s.warned.filter(({ line }) => line.includes("agents@1")),
+    [],
+  );
+});
+
+test("an agent's control lists, mounts and unmounts through management's tools, on itself and on an agent it made and on no other, answered and refused as its control was; each mount and unmount is kept in the control log as the agent's", async (t) => {
+  const s = await delegating(t);
+  const { agent, tools } = await s.parent({ templates: ["helper"] });
+  const kid = await s.made(tools, "create_helper", { name: "Kid", purpose: "Be mounted on." });
+  const other = await s.makeStack([], "Other");
+  const provider = s.agentActor.actorId;
+  const call = async (name: string, args: object) =>
+    JSON.parse((await tools.call({ name, arguments: args })).output);
+  const refusal = (name: string, args: object) =>
+    tools.call({ name, arguments: args }).then(
+      () => assert.fail(`${name} was answered`),
+      (error: Error & { code?: string }) => [error.code, error.message],
+    );
+  // What it can mount, each naming its provider, and what is mounted on it.
+  const listed = await call("capability_list", {});
+  assert.deepEqual(
+    listed.capabilities.map((one: { id: string; provider: string }) => [one.id, one.provider]),
+    [
+      ["memory", provider],
+      ["github", provider],
+      ["control", provider],
+    ],
+  );
+  assert.deepEqual(listed.mounted, []);
+  // On itself, and on the agent it made: mounted as its own, and taken off.
+  for (const on of [agent, kid]) {
+    const whose = on === agent ? {} : { agent: on };
+    const made = await call("capability_mount", { ...whose, provider, capability: "memory" });
+    assert.match(made.mounted, /^mnt_/);
+    const [root] = (await s.calls.agents.get({ agent: on })).mounted ?? [];
+    assert.deepEqual([root?.capability, root?.by], ["memory", agent]);
+    assert.deepEqual(
+      (await call("capability_list", whose)).mounted.map((one: { mounted: string }) => one.mounted),
+      [made.mounted],
+    );
+    assert.deepEqual(await call("capability_unmount", { ...whose, mounted: made.mounted }), {});
+    assert.deepEqual((await s.calls.agents.get({ agent: on })).mounted, []);
+    const { entries } = await s.calls.agents.activity({ agent: on });
+    assert.deepEqual(
+      entries
+        .filter((one) => one.tool === "agent_mount" || one.tool === "agent_unmount")
+        .map(({ tool, caller, target, outcome }) => [tool, caller, target, outcome]),
+      [
+        ["agent_unmount", agent, on, "done"],
+        ["agent_mount", agent, on, "done"],
+      ],
+    );
+  }
+  // On an agent it didn't make, or one there isn't: refused, and its provider is asked nothing.
+  const asked = s.given.mounted.length;
+  for (const name of ["capability_list", "capability_mount", "capability_unmount"])
+    assert.deepEqual(
+      await refusal(name, { agent: other, provider, capability: "memory", mounted: "mnt_x" }),
+      [
+        "forbidden",
+        `You can mount and unmount only on yourself and on agents you made, and you didn't make ${other}.`,
+      ],
+    );
+  assert.deepEqual(await refusal("capability_list", { agent: "act_none" }), [
+    "unknown",
+    "Management has no agent act_none.",
+  ]);
+  // What isn't on offer, and what needs a key, which it never holds.
+  assert.deepEqual(await refusal("capability_mount", { provider, capability: "search" }), [
+    "unknown",
+    `No capability search of ${provider} is on offer.`,
+  ]);
+  for (const given of [{ owner: "o" }, { owner: "o", token: "tok" }])
+    assert.deepEqual(
+      await refusal("capability_mount", { provider, capability: "github", arguments: given }),
+      [
+        "needs_key",
+        "GitHub needs a key, which you don't hold and can't be given here: only the person gives it, in Setup. Nothing was mounted. Tell them, in your own words, that you need their key for GitHub, given in Setup.",
+      ],
+    );
+  assert.equal(s.given.mounted.length, asked);
+  // What its provider finds wrong with the arguments is refused as invalid, the problems said.
+  s.script.mountProblems = [{ path: "/x", message: "No x." }];
+  assert.deepEqual(await refusal("capability_mount", { provider, capability: "memory" }), [
+    "invalid",
+    JSON.stringify({ problems: [{ path: "/x", message: "No x." }] }),
+  ]);
+});
+
+test("what is on offer reaches an agent holding control in what is mounted on it, with what it holds said as mounted: again as that changes, as a capability provider comes, and as management starts", async (t) => {
+  const s = await delegating(t);
+  const { agent } = await s.parent({ templates: ["helper"] });
+  const plain = await s.makeStack([], "Plain");
+  type Root = { capability: string; arguments: Record<string, unknown> };
+  /** What a list it was given tells of what it can mount, in its control's arguments. */
+  const toldIn = (mounted: unknown[]) =>
+    (mounted as Root[]).find((one) => one.capability === "offered")?.arguments.text;
+  const told = (of = agent) =>
+    toldIn(s.given.lists.filter((one) => one.agent === of).at(-1)?.mounted ?? []);
+  const words = (...lines: string[]) =>
+    [
+      "## Capabilities",
+      "A capability gives you more to do and know, from your next message. Mount one on yourself with control__capability_mount when what you're asked needs it, and take it off with control__capability_unmount.",
+      ...lines,
+    ].join("\n");
+  const github = "- github (GitHub): Its repositories, as functions.";
+  const control = "- control (Control, mounted): It mounts and unmounts capabilities.";
+  await until(
+    () => told() === words("- memory (Memory): It remembers what you tell it to.", github, control),
+  );
+  // One without control is told none.
+  assert.equal(told(plain), undefined);
+  // Memory mounted on it: said as mounted.
+  await s.calls.agents.mount({
+    agent,
+    provider: s.agentActor.actorId,
+    capability: "memory",
+    arguments: {},
+  });
+  const memory = "- memory (Memory, mounted): It remembers what you tell it to.";
+  assert.equal(told(), words(memory, github, control));
+  // A capability provider comes: what it offers is told too.
+  await outsideProvider(s, t);
+  const all = words(
+    memory,
+    github,
+    control,
+    "- server (Server): A server.",
+    "- printer (Printer): A printer.",
+  );
+  await until(() => told() === all);
+  // Management starts again: its provider is given the list anew, which says it once the providers
+  // are there again.
+  const before = s.given.lists.length;
+  await s.restart(() => {});
+  await until(() =>
+    s.given.lists.slice(before).some((one) => one.agent === agent && toldIn(one.mounted) === all),
+  );
 });
 
 test("an agent made before skills were tools, its settings slot bound to management's agent.settings@2, has that binding dropped once it is back without the slot, and management's skill tools there", async (t) => {
@@ -4938,14 +5129,14 @@ test("an agent made before skills were tools, its settings slot bound to managem
   assert.match((await readSkill(reads, { name: "notes" })).output, /Use it well/);
 });
 
-test("control mounted on an agent reaches management's agents@1 for as long as it or the control unit is there, and an agent holds one control", async (t) => {
+test("control mounted on an agent reaches management's tools at control for as long as it is there, and never agents@1, and an agent holds one control", async (t) => {
   const s = await delegating(t);
   const agent = await s.makeStack([], "Plain");
   const reach = async () =>
     (await s.bindingsOf(agent))
-      .filter((b) => b.consumer === agent && b.slot === "agents")
-      .map((b) => `${b.provider} ${b.export}`);
-  const reached = [`${s.management.actorId} agents`];
+      .filter((b) => b.consumer === agent && ["agents", "control"].includes(b.slot))
+      .map((b) => `${b.slot} ${b.provider} ${b.export}`);
+  const reached = [`control ${s.management.actorId} tools`];
   const control = {
     agent,
     provider: s.agentActor.actorId,
@@ -4963,13 +5154,6 @@ test("control mounted on an agent reaches management's agents@1 for as long as i
     (error: Error) => /The name control is already taken/.test(error.message),
   );
   assert.deepEqual(await reach(), reached);
-  // Kept before it was given with the mount, it is given as management starts.
-  await s.person.slots.grants.call.unexpose({ to: agent, slot: "agents" });
-  await s.restart(() => {});
-  for (let i = 0; (await reach()).length === 0; i++) {
-    assert.ok(i < 300, "it was never given it");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
   // Taken off, it reaches management no more.
   await s.calls.agents.unmount({ agent, mounted: made.mounted });
   assert.deepEqual(await reach(), []);
@@ -5332,29 +5516,45 @@ test("a template of capabilities is listed, saved without a secret, offered as o
 
 test("an agent's control mount on another agent is held to its own control, as a control unit in a template it creates from is: no more than it holds, one level less, and none at its last level", async (t) => {
   const s = await delegating(t);
-  const child = await s.makeStack([], "Child");
-  const mountBy = async (by: string, args: Record<string, unknown>) =>
-    (await s.exposedTo<AgentsCalls>(by, "agents")).mount({
+  /** An agent's mount of control on one it made, through its control: what was made, or why not. */
+  const mountBy = async (
+    tools: ToolCalls,
+    child: string,
+    args: Record<string, unknown>,
+  ): Promise<{ mounted: string } | { problems: { path?: string }[] }> => {
+    const asked = {
       agent: child,
       provider: s.agentActor.actorId,
       capability: "control",
-      arguments: args as never,
-    });
+      arguments: args,
+    };
+    try {
+      return JSON.parse((await tools.call({ name: "capability_mount", arguments: asked })).output);
+    } catch (error) {
+      assert.ok(refused("invalid")(error), String(error));
+      return JSON.parse((error as Error).message);
+    }
+  };
   const paths = (made: { mounted: string } | { problems: { path?: string }[] }) =>
     "problems" in made ? made.problems.map((one) => one.path) : [];
+  const kid = { name: "Child", purpose: "Be given control." };
   // At its last level, it gives none.
-  const { agent: last } = await s.parent({ templates: ["helper"] }, undefined, "Last");
-  assert.deepEqual(paths(await mountBy(last, { templates: ["helper"] })), ["/depth"]);
+  const last = await s.parent({ templates: ["helper"] }, undefined, "Last");
+  const itsOwn = await s.made(last.tools, "create_helper", kid);
+  assert.deepEqual(paths(await mountBy(last.tools, itsOwn, { templates: ["helper"] })), ["/depth"]);
   // Two levels: no more than its own, and not how deep.
-  const { agent: parent } = await s.parent({ templates: ["helper"], depth: 2 });
-  assert.deepEqual(paths(await mountBy(parent, { templates: ["helper"], agents: "all" })), [
+  const { tools } = await s.parent({ templates: ["helper"], depth: 2 });
+  const child = await s.made(tools, "create_helper", kid);
+  assert.deepEqual(paths(await mountBy(tools, child, { templates: ["helper"], agents: "all" })), [
     "/agents",
   ]);
-  assert.deepEqual(paths(await mountBy(parent, { templates: ["worker"] })), ["/templates"]);
-  assert.deepEqual(paths(await mountBy(parent, { templates: ["helper"], depth: 2 })), ["/depth"]);
+  assert.deepEqual(paths(await mountBy(tools, child, { templates: ["worker"] })), ["/templates"]);
+  assert.deepEqual(paths(await mountBy(tools, child, { templates: ["helper"], depth: 2 })), [
+    "/depth",
+  ]);
   assert.deepEqual((await s.calls.agents.get({ agent: child })).mounted, []);
   // Within it, mounted one level less deep.
-  const made = await mountBy(parent, { templates: ["helper"] });
+  const made = await mountBy(tools, child, { templates: ["helper"] });
   assert.ok("mounted" in made, JSON.stringify(made));
   const [mounted] = (await s.calls.agents.get({ agent: child })).mounted ?? [];
   assert.equal(mounted?.arguments.depth, 1);
@@ -5486,7 +5686,7 @@ test("get says how each mount an outside provider made stands, as it says it: do
   assert.equal((await stood()).state, "down");
 });
 
-test("control is mounted with no arguments, as before it took any: no templates to create from, and the reach and the tools it always gave", async (t) => {
+test("control is mounted with no arguments, as before it took any: no templates to create from, and the tools it always gave", async (t) => {
   const s = await delegating(t);
   const agent = await s.makeStack([], "Plain");
   // Its arguments say templates may be left out; the unit's own form still asks for them.
@@ -5505,18 +5705,14 @@ test("control is mounted with no arguments, as before it took any: no templates 
     arguments: {},
   });
   assert.ok("mounted" in made, JSON.stringify(made));
-  // Management's agents@1 is reached, as it always was.
-  assert.ok(
-    (await s.bindingsOf(agent)).some(
-      (b) => b.consumer === agent && b.slot === "agents" && b.provider === s.management.actorId,
-    ),
-  );
-  // With no templates, it creates from none.
+  // With no templates, it creates from none; it mounts through control's own tools, as it always
+  // could.
   const tools = (await (await s.exposedTo<ToolCalls>(agent, "control")).list({})).tools;
   assert.ok(!tools.some((one) => one.name.startsWith("create_")), JSON.stringify(tools));
+  assert.ok(tools.some((one) => one.name === "capability_mount"));
 });
 
-test("control kept mounted with no arguments, as 0.0.39 left it, is still held after a restart, with its reach: what was mounted is never settled again", async (t) => {
+test("control kept mounted with no arguments, as 0.0.39 left it, is still held after a restart, reaching management's tools: what was mounted is never settled again", async (t) => {
   const s = await setup(t);
   const agent = await s.makeStack([]);
   // As 0.0.39 kept it: mounted through management with no arguments, nothing wired for it.
@@ -5533,22 +5729,27 @@ test("control kept mounted with no arguments, as 0.0.39 left it, is still held a
       by: s.callerActor.actorId,
     });
   });
-  // Held: its settings name it, management lists it, and it reaches management's agents@1.
+  // Held: its settings name it, and what it can mount, management lists it, and it reaches
+  // management's tools at control, which answer it.
   const roots = (await settingsRead(s.agentChannel(agent))).mounted;
   assert.deepEqual(
     roots.filter((one) => one.capability === "control"),
     [{ mounted: "mnt_0039", capability: "control", arguments: {}, provider: s.agentActor.actorId }],
   );
+  assert.ok(roots.some((one) => one.capability === "offered"));
   assert.deepEqual(
     (await s.calls.agents.get({ agent })).mounted?.map((one) => [one.mounted, one.arguments]),
     [["mnt_0039", {}]],
   );
-  await until(async () =>
+  const reached = async () =>
     (await s.bindingsOf(agent)).some(
-      (b) => b.consumer === agent && b.slot === "agents" && b.provider === s.management.actorId,
-    ),
-  );
-  // And it can be taken off as any mount is.
+      (b) => b.consumer === agent && b.slot === "control" && b.provider === s.management.actorId,
+    );
+  await until(reached);
+  const tools = await s.exposedTo<ToolCalls>(agent, "control");
+  assert.ok((await tools.list({})).tools.some((one) => one.name === "capability_mount"));
+  // And it can be taken off as any mount is, with management's tools.
   await s.calls.agents.unmount({ agent, mounted: "mnt_0039" });
   assert.deepEqual((await s.calls.agents.get({ agent })).mounted, []);
+  assert.equal(await reached(), false);
 });

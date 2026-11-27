@@ -4,6 +4,7 @@
  *
  * - `instructions` and `skills` are management's own: the words it is told of itself, and the
  *   skills exposed to it, each with what its `ALWAYS.md` says. No caller mounts or unmounts them.
+ * - `offered`, management's own too, while it holds control: the text of what it can mount.
  * - `control`, while it holds an AgentOrg control unit, held by its executor.
  * - Each plugin of a capability a unit built for it, or its creatable gave it, held by its
  *   executor, under the plugin's own name.
@@ -18,8 +19,10 @@ import type { AgentRecord } from "./stack.js";
 type TheAgent = z.infer<typeof AgentRecord>;
 type Root = z.infer<typeof SettingsRoot>;
 
+/** The root that tells an agent holding control what it can mount: management's own. */
+export const OFFERED_ROOT = "offered";
 /** The roots that are management's own: no caller mounts or unmounts them. */
-export const OWN_ROOTS = ["instructions", "skills"];
+export const OWN_ROOTS = ["instructions", "skills", OFFERED_ROOT];
 /** The root an AgentOrg control unit gives its agent, or that is mounted on it as `control`. */
 export const CONTROL_ROOT = "control";
 
@@ -93,9 +96,32 @@ export const holdsControl = (record: TheAgent, self: string) =>
  * The tree of what is mounted on an agent, in order: management's own roots, its control, its
  * capabilities' plugins, then what was mounted on it. `self` is management's own id, whose control
  * unit it looks for; `told` and `skills` are what management tells it of itself, each skill with
- * what it always says (`always`) if it has that.
+ * what it always says (`always`) if it has that. An agent holding control is told, as `offered`,
+ * what `offered` gives of what it can mount, given every capability the tree names.
  */
 export function treeOf(
+  record: TheAgent,
+  self: string,
+  told: string,
+  skills: (z.infer<typeof SkillEntry> & { always?: string })[],
+  offered: (named: string[]) => string | undefined = () => undefined,
+): Root[] {
+  const tree = rootsOf(record, self, told, skills);
+  const text = holdsControl(record, self)
+    ? offered(tree.map(({ capability }) => capability))
+    : undefined;
+  if (text === undefined) return tree;
+  const [instructions, skilled, ...rest] = tree as [Root, Root, ...Root[]];
+  return [
+    instructions,
+    skilled,
+    { mounted: OFFERED_ROOT, capability: OFFERED_ROOT, arguments: { text } },
+    ...rest,
+  ];
+}
+
+/** The tree but for `offered`. */
+function rootsOf(
   record: TheAgent,
   self: string,
   told: string,

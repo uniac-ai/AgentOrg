@@ -14,9 +14,8 @@ import type { AgentRecord, Offer, StackInput } from "./stack.js";
 export const AGENTS_UNIT = "control";
 export const AGENTS_SLOT = "control";
 /**
- * Where an agent holding the control unit reaches management's `agents@1`, exposed to it beside its
- * `control` tools: what its control capability calls. Of `agents@1`, it is answered only what
- * answers whoever is bound.
+ * Where a release before exposed management's `agents@1` to an agent holding control, beside its
+ * `control` tools. None is now: management takes it off as it starts.
  */
 export const AGENTS_REACH = "agents";
 /** Management's `agents@1` export. */

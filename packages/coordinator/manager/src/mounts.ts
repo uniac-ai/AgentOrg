@@ -2,8 +2,8 @@
  * Capabilities mounted on agents through management: each made by a connected capability provider,
  * kept in the agent's record with its arguments, and taken off through the same provider.
  *
- * Management keeps the record, and gates nothing: whoever is bound to `agents@1` mounts and
- * unmounts. What an agent may mount, and when a person is asked, is the controlling capability's.
+ * Management keeps the record. Whoever is bound to `agents@1` mounts and unmounts, the person or
+ * another program; an agent mounts through its control's tools, on itself and the agents it made.
  *
  * A capability mounted from the agent's own executor is held by that executor through the tree it
  * is given (`treeOf`), so it is kept, and the agent's provider given the tree and answered, before
@@ -57,8 +57,8 @@ export interface MountParts {
   changed(agent: string): Promise<void>;
   /** Give the agent's provider its list, with no word to the agent: settles once answered. */
   give(agent: string): Promise<void>;
-  /** Have an agent holding control reach management's `agents@1`, or no longer. */
-  reachControl(agent: string, reach: boolean): Promise<void>;
+  /** Have an agent that holds control no more reach management's tools, or other agents, by it. */
+  unreachControl(agent: string): Promise<void>;
   /** Wire what a provider made for a mount, all or none; what it wired is kept on the mount. */
   wire(
     agent: string,
@@ -272,8 +272,6 @@ export function createMounts(parts: MountParts) {
       }
     // What was wired, such as its skills, is the agent's too.
     if (wiring) await parts.give(agent);
-    // Control reaches management's agents@1, as the control unit's does.
-    if (capability === CONTROL_ROOT) await parts.reachControl(agent, true);
     return { mounted: root.mounted };
   };
 
@@ -308,7 +306,7 @@ export function createMounts(parts: MountParts) {
     await parts.unwire(agent, record, root);
     await parts.give(agent);
     if (root.capability === CONTROL_ROOT && !holdsControl(record, self))
-      await parts.reachControl(agent, false);
+      await parts.unreachControl(agent);
     return {};
   };
 

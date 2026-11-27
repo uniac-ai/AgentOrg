@@ -23,18 +23,27 @@ import {
   type Unit,
   unitProvider,
 } from "@agentorg/interfaces";
-import { describeInterface, type Interface, type Log, Refused, type Slot } from "@agentorg/sdk";
+import {
+  describeInterface,
+  type Interface,
+  type Log,
+  NotConnected,
+  Refused,
+  type Slot,
+} from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { z } from "zod";
 import { createActivity } from "./activity.js";
 import { type Activity, AGENTS_UNIT, createControl } from "./control.js";
 import { schemaOf, secretsSchemaOf, settle } from "./form.js";
 import { createMounts, keysOf } from "./mounts.js";
+import { createOffers, type Offered, offeredOf } from "./offers.js";
 import {
   ALWAYS,
   alwaysOf,
   CONTROL_ROOT,
   fitted,
+  holdsControl,
   SKILL_TOOL,
   skillAsked,
   treeOf,
@@ -316,6 +325,10 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             }
           : {};
       const settingsOf = (agent: string) => creating.get(agent) ?? recordOf(agent);
+      /** What the capability providers offer, as an agent holding control is told it: kept as read. */
+      let onOffer: Offered[] = [];
+      /** The read of it under way, if one is. */
+      let readingOffers: Promise<void> | undefined;
       /**
        * What is mounted on an agent now, as its settings answer it and its provider is given it:
        * the tree, with the words management tells it of itself and the skills exposed to it, each
@@ -341,7 +354,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           const always = entry && alwaysOf(library.read(name, ALWAYS));
           return entry ? [always ? { ...entry, always } : entry] : [];
         });
-        return treeOf(record, options.actorId, told, exposed);
+        return treeOf(record, options.actorId, told, exposed, offeredOf(onOffer));
       };
       /** Each agent's giving now, so each is given its list after the one before has answered. */
       const giving = new Map<string, Promise<void>>();
@@ -353,6 +366,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
        */
       const give = (agent: string) => {
         const done = (giving.get(agent) ?? Promise.resolve()).then(async () => {
+          // What is on offer is told in it: a read under way is waited for.
+          await readingOffers;
           const record = creating.get(agent) ?? records.agents[agent];
           const provider = agentProviders().find((one) => one.actor === record?.provider);
           if (!provider) return;
@@ -511,12 +526,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         wire: (agent, record, root, made, skillOf) =>
           stacks.wireMade(agent, record, root, made, skillOf),
         unwire: (agent, record, root) => stacks.unwireMade(agent, record, root),
-        reachControl: async (agent, reach) => {
-          if (reach) await stacks.reachManagement(agent);
-          else {
-            await stacks.unreachManagement(agent);
-            await stacks.unreachAgents(agent);
-          }
+        unreachControl: async (agent) => {
+          await stacks.unreachControl(agent);
+          await stacks.unreachAgents(agent);
         },
         settleControl: (record, given, by) => stacks.settleControl(record, given as never, by),
         wireControl: (agent, record) => stacks.wireControl(agent, record),
@@ -549,6 +561,35 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             (await call.capabilities({})).capabilities.map((one) => ({ ...one, provider: actor })),
           )
         ).flat();
+      /**
+       * Read what is on offer again: as a provider comes or goes, and as management starts. When
+       * it changed, each agent holding control is given its list again, which tells it. One read
+       * at a time, and one more after it for whatever asked while it ran.
+       */
+      let readAgain = false;
+      const readOffers = () => {
+        readAgain = true;
+        readingOffers ??= (async () => {
+          while (readAgain) {
+            readAgain = false;
+            const now = (await offered()).map(({ id, title, description }) => ({
+              id,
+              title,
+              description,
+            }));
+            if (JSON.stringify(now) === JSON.stringify(onOffer)) continue;
+            onOffer = now;
+            for (const [agent, record] of Object.entries(records.agents))
+              if (holdsControl(record, options.actorId)) void give(agent);
+          }
+        })()
+          .catch((error) => log.warn(`Reading what is on offer: ${messageOf(error)}`))
+          .finally(() => {
+            readingOffers = undefined;
+            // Asked again as this one ended.
+            if (readAgain) readOffers();
+          });
+      };
       const withControl = async <T extends { id: string; arguments: unknown }>(all: T[]) => {
         const schema = all.some((one) => one.id === CONTROL_ROOT)
           ? await stacks.controlSchema()
@@ -658,6 +699,9 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       };
       const holding = (actor?: string) =>
         void (async () => {
+          // What a capability provider offers is read again as it comes or goes, and as
+          // management starts.
+          if (!actor || capabilityProviders().some((one) => one.actor === actor)) readOffers();
           // One that has closed, or isn't back yet, has nothing to reach, and the agent that
           // made it reaches its Work no more until it is back.
           if (actor && !(await hub.actors.get({ actorId: actor })).connected)
@@ -681,11 +725,22 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       ctx.slots.actors.on("changed", ({ actor }) => holding(actor));
       // And all of them once management can make a slot: what the Hub dropped while it was away.
       ctx.slots.grants.onBind(() => holding());
+      // An agent reaches management's agents@1 no more: what a release before exposed goes as
+      // management starts, once it can both read and take off what is exposed.
+      const unreaching = () =>
+        void stacks.unreachManagement().catch((error) => {
+          if (!(error instanceof NotConnected))
+            log.warn(`Taking management's agents@1 off agents: ${messageOf(error)}`);
+        });
+      ctx.slots.grants.onBind(unreaching);
+      ctx.slots.bindings.onBind(unreaching);
       // An agent provider exposed to it says what its agents hold of themselves: an agent made
       // before its creatable gave one holds it from then on.
       ctx.onExposed(owns);
       // And a unit provider exposed to it may serve newer skills than were copied here.
       ctx.onExposed(() => void refreshing());
+      // And a capability provider exposed to it, or no longer, changes what is on offer.
+      ctx.onExposed(readOffers);
       // And an agent provider exposed to it anew, as at management's start, is given its agents'
       // lists.
       let providersNow = new Set<string>();
@@ -732,14 +787,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         madeBy: (connection) => records.connections[connection]?.madeBy,
         log: (entry) => activity.add(entry),
       });
+      /** Calls an agent's control tools make as the agent, once their own checks are done. */
+      const byControl = new WeakSet<object>();
       /**
-       * Those who call management: the person. An agent comes through its control unit instead,
-       * except to the methods `open` names, which answer whoever is bound to them.
+       * Those who call management: the person, or another program. An agent comes through its
+       * control's tools instead, which call these as it.
        */
       const personOnly = <E extends { implement(handlers: never): void }>(
         exported: E,
         name: keyof typeof personHandlers,
-        open: string[] = [],
       ) => ({
         implement(handlers: Parameters<E["implement"]>[0]) {
           const held = handlers as Record<string, Handler>;
@@ -750,7 +806,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
                 method,
                 async (input: unknown, context: { caller: string }) => {
                   if (
-                    !open.includes(method) &&
+                    !byControl.has(context) &&
                     (records.agents[context.caller] || creating.has(context.caller))
                   )
                     throw new Refused(
@@ -806,9 +862,33 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         },
       });
 
+      /** Control's own three tools, which list, mount and unmount on the agent and those it made. */
+      const offers = createOffers({
+        holds: (agent) => {
+          const record = records.agents[agent];
+          return record !== undefined && holdsControl(record, options.actorId);
+        },
+        makerOf: (agent) => {
+          const record = records.agents[agent];
+          return record ? record.parent?.agent : false;
+        },
+        handler:
+          (method) =>
+          async (input, { caller }) => {
+            const handler = answering[method];
+            if (!handler) throw new Refused("unimplemented", `agents has no ${method}.`);
+            const context = { caller };
+            byControl.add(context);
+            return handler(input, context);
+          },
+      });
+
       ctx.exports.tools.implement({
-        list: async (_, { caller }) => ({ tools: await control.list(caller) }),
-        call: ({ name, arguments: input }, { caller }) => control.call(caller, name, input),
+        list: async (_, { caller }) => ({
+          tools: [...(await control.list(caller)), ...offers.list(caller)],
+        }),
+        call: ({ name, arguments: input }, { caller }) =>
+          offers.has(name) ? offers.call(caller, name, input) : control.call(caller, name, input),
         // A control call leaves nothing running.
         stop: () => ({}),
       });
@@ -849,12 +929,15 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         stop: () => ({}),
       });
 
-      personOnly(ctx.exports.agents, "agents", [
-        "get",
-        "capabilities",
-        "mount",
-        "unmount",
-      ]).implement({
+      /** `agents@1` as it answers, a change kept in the control log: what control's tools call. */
+      let answering: Record<string, Handler> = {};
+      const agentsAnswering = {
+        implement(handlers: Parameters<typeof ctx.exports.agents.implement>[0]) {
+          answering = handlers as Record<string, Handler>;
+          ctx.exports.agents.implement(handlers);
+        },
+      };
+      personOnly(agentsAnswering, "agents").implement({
         capabilities: async () => ({ capabilities: await withControl(await offered()) }),
         creatable: async () => ({
           creatables: (
