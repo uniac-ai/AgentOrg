@@ -63,11 +63,13 @@ export {
   AuditEntry,
   Binding,
   ExportEntry,
+  HUB,
   hubActors,
   hubAudit,
   hubBindings,
   hubExports,
   hubGrants,
+  PERSON,
   SlotName,
 } from "./hub.js";
 export { kv } from "./kv.js";

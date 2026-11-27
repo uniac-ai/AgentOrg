@@ -13,7 +13,15 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { hubActors, hubAudit, hubBindings, hubExports, hubGrants } from "@agentorg/interfaces";
+import {
+  HUB,
+  hubActors,
+  hubAudit,
+  hubBindings,
+  hubExports,
+  hubGrants,
+  PERSON,
+} from "@agentorg/interfaces";
 import {
   compareInterfaces,
   type DescribedInterface,
@@ -23,10 +31,8 @@ import {
   Refused,
 } from "@agentorg/sdk";
 
-/** The built-in Actor that exports management. */
-export const HUB = "hub";
-/** The person's Actor, created at first start with every `hub.*` binding. */
-export const PERSON = "person";
+export { HUB, PERSON };
+
 /** The hub's exports, each the authority for its own part of management. */
 const HUB_EXPORTS = {
   actors: hubActors,
