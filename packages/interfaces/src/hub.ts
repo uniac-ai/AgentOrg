@@ -6,6 +6,11 @@ import { z } from "zod";
  * called like any other, so a program bound to them can do anything the person can.
  */
 
+/** The built-in Actor that exports management. */
+export const HUB = "hub";
+/** The person's Actor, created at first start with every `hub.*` binding. */
+export const PERSON = "person";
+
 const Hash = z.string().regex(/^sha256-[0-9a-f]{64}$/);
 export const Id = z.string().min(1).max(128);
 /** A slot or export: `name`, or `module.name`. */
