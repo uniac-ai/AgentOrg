@@ -25,12 +25,21 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Computer } from "@agentorg/computer-sdk";
 import { HubState, PERSON } from "@agentorg/hub";
-import { agents } from "@agentorg/interfaces";
+import {
+  agents,
+  ROOTS_MAX,
+  SettingsRoot,
+  SKILL_FILE_MAX,
+  SkillName,
+  SkillPath,
+} from "@agentorg/interfaces";
+import { defineInterface, describeInterface, event, method } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { AgentPlugin } from "assistant/plugins";
 import { completed, fakeOpenAI, type Script } from "chatgpt/fake-openai";
 import type { Context } from "cordis";
 import WebSocket from "ws";
+import { z } from "zod";
 import { startGateway } from "../src/gateway.ts";
 import { type App, type ProgramsOptions, startApp } from "../src/index.ts";
 import { closePackageActors, FIRST_CONTROL, startPrograms } from "../src/programs.ts";
@@ -426,40 +435,44 @@ const MANAGEMENTS = [
   "control__capability_mount",
   "control__capability_unmount",
 ];
+/** A skill of the person's, as `skills.add` takes it. */
+const REVIEW = {
+  files: {
+    "SKILL.md": "---\nname: review\ndescription: Review a change.\n---\n\nRead the diff.\n",
+  },
+};
+/** One agent of a home's: its id and the person's slot to its conversation. */
+type Holder = { agent: string; slot: string };
 
 /**
- * A home with one agent holding a skill and an AgentOrg control unit, signed in to the stand-in
- * model, stopped once its first turn has ended: each model request's offered functions are kept
- * in `asked`, and every one is answered with nothing.
+ * The stand-in model, signed in to: each request's offered functions and its input, kept in
+ * `asked`, and every one answered with nothing.
  */
-async function holdingSkillAndControl(t: test.TestContext) {
+async function signedIn(t: test.TestContext) {
   const fake = await fakeOpenAI();
-  const asked: string[][] = [];
+  const asked: { tools: string[]; input: string }[] = [];
   const fetch = async (request: Request) => {
     if (!request.url.endsWith("/responses")) return fake.handle(request);
-    const body = (await request.clone().json()) as { tools?: { name: string }[] };
-    asked.push((body.tools ?? []).map((one) => one.name));
+    const body = (await request.clone().json()) as { tools?: { name: string }[]; input?: unknown };
+    asked.push({
+      tools: (body.tools ?? []).map((one) => one.name),
+      input: JSON.stringify(body.input ?? []),
+    });
     fake.script({ events: [completed([])] });
     return fake.handle(request);
   };
   const s = await open(t, undefined, fetch);
   const { person, ran } = await s.start();
-  const management = ran?.management as string;
   const { authorizeUrl } = await person.call<{ authorizeUrl: string }>("login", "start", {
     redirectUri: "http://127.0.0.1:4321/oauth/chatgpt",
   });
   await person.call("login", "complete", { callbackUrl: await fake.authorize(authorizeUrl) });
-  const agent = await createAssistant(person, "Holder");
-  await person.call("skills", "add", {
-    files: {
-      "SKILL.md": "---\nname: review\ndescription: Review a change.\n---\n\nRead the diff.\n",
-    },
-  });
-  await person.call("agents", "expose", { agent, skill: "review" });
-  await person.call("agents", "addUnit", {
-    agent,
-    unit: { provider: management, unit: "control", values: { templates: ["assistant"] } },
-  });
+  await person.call("skills", "add", REVIEW);
+  return { s, fetch, asked, person, management: ran?.management as string };
+}
+
+/** The person's slot to an agent's conversation, once it answers. */
+async function chatOf(person: Person, agent: string) {
   const slot = await chatSlot(person, agent);
   await until(
     () =>
@@ -469,36 +482,57 @@ async function holdingSkillAndControl(t: test.TestContext) {
       ),
     "the chat to be exposed",
   );
-  // Running as it was made, its first request offers all four.
-  await person.call(slot, "send", { text: "Hi!" });
-  await until(() => asked.length >= 1, "the agent to be asked");
-  await until(
-    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
-    "the turn to end",
-  );
-  for (const name of MANAGEMENTS) assert.ok(asked[0]?.includes(name), name);
-  await s.stop();
-  asked.length = 0;
-  return { s, fetch, asked, agent, slot, management };
+  return slot;
 }
 
 /**
- * Send the agent a message as early as the person's calls reach its chat on a start under way,
- * and wait for its first model request: whether it was sent before management was connected and
- * before the app's start completed, and the functions that request offered.
+ * A home with `count` agents, each holding a skill and an AgentOrg control unit, signed in to the
+ * stand-in model, stopped once the first one's first turn has ended, which offers all four.
+ */
+async function holdingSkillAndControl(t: test.TestContext, count = 1) {
+  const { s, fetch, asked, person, management } = await signedIn(t);
+  const holders: Holder[] = [];
+  for (let i = 1; i <= count; i++) {
+    const agent = await createAssistant(person, `Holder ${i}`);
+    await person.call("agents", "expose", { agent, skill: "review" });
+    await person.call("agents", "addUnit", {
+      agent,
+      unit: { provider: management, unit: "control", values: { templates: ["assistant"] } },
+    });
+    holders.push({ agent, slot: await chatOf(person, agent) });
+  }
+  const [first] = holders as [Holder];
+  await person.call(first.slot, "send", { text: "Hi!" });
+  await until(() => asked.length >= 1, "the agent to be asked");
+  await until(
+    async () => (await person.call<{ state: string }>(first.slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  for (const name of MANAGEMENTS) assert.ok(asked[0]?.tools.includes(name), name);
+  await s.stop();
+  asked.length = 0;
+  return { s, fetch, asked, management, holders, ...first };
+}
+type Held = Awaited<ReturnType<typeof holdingSkillAndControl>>;
+
+/**
+ * Send an agent a message as early as the person's calls reach its chat, and wait for the first
+ * model request with it: whether it was sent before management was connected and before the
+ * app's start completed, and the functions that request offered.
  */
 async function sentAsEarlyAsItCan(
   app: App,
-  home: string,
-  held: Awaited<ReturnType<typeof holdingSkillAndControl>>,
+  person: Person,
+  held: Pick<Held, "asked" | "management">,
+  to: Holder,
 ) {
   let started = false;
   void app.firstRun.then(() => {
     started = true;
   });
-  const person = personOf(app, home);
+  const text = `Hi again, ${to.agent}!`;
   for (let i = 0; ; i++) {
-    const sent = await person.call(held.slot, "send", { text: "Hi again!" }).then(
+    const sent = await person.call(to.slot, "send", { text }).then(
       () => true,
       () => false,
     );
@@ -507,32 +541,51 @@ async function sentAsEarlyAsItCan(
     await delay(2);
   }
   const early = { beforeManagement: !app.hub.connected(held.management), beforeStart: !started };
-  await until(() => held.asked.length >= 1, "the agent to be asked");
+  const first = () => held.asked.find((one) => one.input.includes(text));
+  await until(() => first() !== undefined, "the agent to be asked");
   await until(
-    async () => (await person.call<{ state: string }>(held.slot, "state")).state === "idle",
+    async () => (await person.call<{ state: string }>(to.slot, "state")).state === "idle",
     "the turn to end",
   );
-  return { person, early, offered: held.asked[0] ?? [] };
+  return { early, offered: first()?.tools ?? [] };
 }
+const offersAll = (offered: string[]) => {
+  for (const name of MANAGEMENTS) assert.ok(offered.includes(name), `${name}: ${offered}`);
+};
 
-test("a message sent as early as the agent's chat takes it while the app starts is answered by a first request that offers management's skill and control functions", async (t) => {
-  const held = await holdingSkillAndControl(t);
+/** The app on a home already made, its start under way, and the person reaching it from then. */
+async function started(t: test.TestContext, held: Held) {
   const app = await startApp({
     home: held.s.home,
     defaultPort: 0,
     firstRun: { log: () => {}, computer: { path: "" }, fetch: held.fetch, assistant: false },
   });
-  let person: Person | undefined;
+  const person = personOf(app, held.s.home);
   t.after(async () => {
-    await person?.close();
+    await person.close();
     await app.close();
   });
-  const sent = await sentAsEarlyAsItCan(app, held.s.home, held);
-  person = sent.person;
+  return { app, person };
+}
+
+test("a message sent as early as the agent's chat takes it while the app starts is answered by a first request that offers management's skill and control functions", async (t) => {
+  const held = await holdingSkillAndControl(t);
+  const { app, person } = await started(t, held);
+  const sent = await sentAsEarlyAsItCan(app, person, held, held);
   assert.ok(sent.early.beforeStart, "sent before the app's start completed");
-  for (const name of MANAGEMENTS)
-    assert.ok(sent.offered.includes(name), `${name}: ${sent.offered}`);
+  offersAll(sent.offered);
 });
+
+/** Take off each provider's exposures to management, as the Hub does when their contract changes. */
+function unexposeProviders(hub: HubState, management: string) {
+  for (const b of hub.bindings(management))
+    if (
+      b.consumer === management &&
+      b.exposed &&
+      (b.export === "provider" || b.export === "capabilities")
+    )
+      hub.unexpose(PERSON, management, b.slot);
+}
 
 test("the same right after an upgrade-style start, its bindings there before management, whose providers are exposed to it again slowly", async (t) => {
   const held = await holdingSkillAndControl(t);
@@ -541,15 +594,7 @@ test("the same right after an upgrade-style start, its bindings there before man
   // management. The agent's own slots, to management's tools at settings and control, stay.
   const hub = HubState.open(held.s.home);
   try {
-    const gone = hub
-      .bindings(management)
-      .filter(
-        (b) =>
-          b.consumer === management &&
-          b.exposed &&
-          (b.export === "provider" || b.export === "capabilities"),
-      );
-    for (const b of gone) hub.unexpose(PERSON, management, b.slot);
+    unexposeProviders(hub, management);
     const agentSlots = hub
       .bindings(held.agent)
       .filter((b) => b.consumer === held.agent && b.provider === management)
@@ -586,16 +631,146 @@ test("the same right after an upgrade-style start, its bindings there before man
         },
       ),
   });
-  let person: Person | undefined;
+  const person = personOf(app, held.s.home);
   t.after(async () => {
-    await person?.close();
+    await person.close();
     await app.close();
   });
-  const sent = await sentAsEarlyAsItCan(app, held.s.home, held);
-  person = sent.person;
+  const sent = await sentAsEarlyAsItCan(app, person, held, held);
   assert.ok(sent.early.beforeManagement, "sent before management was connected");
-  for (const name of MANAGEMENTS)
-    assert.ok(sent.offered.includes(name), `${name}: ${sent.offered}`);
+  offersAll(sent.offered);
+});
+
+/**
+ * `agent.settings@2` as a release before defined it, as management's tests keep it: what its
+ * agents declared at their `settings` slot, bound to management's export of the same name. The
+ * contract is gone from this release.
+ */
+const OLD_SETTINGS = describeInterface(
+  defineInterface({
+    name: "agent.settings",
+    major: 2,
+    kind: "rpc",
+    methods: {
+      get: method({
+        input: z.object({}),
+        output: z.object({ mounted: z.array(SettingsRoot).max(ROOTS_MAX) }),
+      }),
+      skill: method({
+        input: z.object({ name: SkillName, path: SkillPath.optional() }),
+        output: z.object({ text: z.string().max(SKILL_FILE_MAX) }),
+      }),
+    },
+    events: { changed: event(z.object({})) },
+  }),
+);
+
+/**
+ * The home as 0.0.41 left it, for each agent: its own settings slot bound to management's
+ * agent.settings, the agents@1 it gave one holding control at agents, its control unit's tools at
+ * control, and no skill tools at settings; and the providers' exposures to management gone, as
+ * the Hub drops them when the agent provider's contract changes. The packed smoke reads the same
+ * bindings off homes 0.0.10 to 0.0.41 made.
+ */
+function asLeftBy0041(held: Held) {
+  const { management } = held;
+  const declared = (actor: string) => {
+    const db = new DatabaseSync(join(held.s.home, "hub.db"), { readOnly: true });
+    try {
+      const rows = db
+        .prepare("SELECT side, name, iface FROM declarations WHERE actor = ? AND dynamic = 0")
+        .all(actor) as { side: string; name: string; iface: string }[];
+      const of = (side: string) =>
+        Object.fromEntries(
+          rows.filter((one) => one.side === side).map((one) => [one.name, JSON.parse(one.iface)]),
+        );
+      return { slots: of("slot"), exports: of("export") };
+    } finally {
+      db.close();
+    }
+  };
+  const managements = declared(management);
+  const agents = held.holders.map(({ agent }) => ({ agent, ...declared(agent) }));
+  const hub = HubState.open(held.s.home);
+  try {
+    unexposeProviders(hub, management);
+    hub.declareExternal(management, {
+      ...managements,
+      exports: { ...managements.exports, settings: OLD_SETTINGS },
+    });
+    for (const { agent, slots, exports } of agents) {
+      hub.unexpose(PERSON, agent, "settings");
+      hub.declareExternal(agent, { slots: { ...slots, settings: OLD_SETTINGS }, exports });
+      hub.bind(PERSON, {
+        consumer: agent,
+        slot: "settings",
+        provider: management,
+        export: "settings",
+      });
+      hub.expose(PERSON, { provider: management, export: "agents", to: agent, as: "agents" });
+      const line = (b: { slot: string; interface: string; provider: string; export: string }) =>
+        `${b.slot} ${b.interface} ${b.provider === management ? "management" : "other"} ${b.export}`;
+      assert.deepEqual(
+        hub
+          .bindings(agent)
+          .filter((b) => b.consumer === agent && b.provider === management)
+          .map(line)
+          .sort(),
+        [
+          "agents agents@1 management agents",
+          "control tools@1 management tools",
+          "settings agent.settings@2 management settings",
+        ],
+      );
+    }
+  } finally {
+    hub.close();
+  }
+}
+
+test("on a home as 0.0.41 left it, the agent declaring its own settings slot, a message sent as early as its chat takes it is answered by a first request that offers management's skill and control functions", async (t) => {
+  const held = await holdingSkillAndControl(t);
+  asLeftBy0041(held);
+  const { app, person } = await started(t, held);
+  offersAll((await sentAsEarlyAsItCan(app, person, held, held)).offered);
+});
+
+test("on a home as 0.0.41 left it with twenty such agents, a message sent as early as each of the last three made can take it is answered by a first request that offers the four", async (t) => {
+  const held = await holdingSkillAndControl(t, 20);
+  asLeftBy0041(held);
+  const { app, person } = await started(t, held);
+  const sent = await Promise.all(
+    held.holders.slice(-3).map((to) => sentAsEarlyAsItCan(app, person, held, to)),
+  );
+  for (const one of sent) offersAll(one.offered);
+});
+
+test("a message sent the moment agents.create answers, to an agent made with a skill and an AgentOrg control unit, is answered by a first request that offers the four", async (t) => {
+  const { person, asked, management } = await signedIn(t);
+  const { creatables } = await person.call<{ creatables: { provider: string; id: string }[] }>(
+    "agents",
+    "creatable",
+  );
+  const [assistant] = creatables as [{ provider: string; id: string }];
+  const { agent } = await person.call<{ agent: string }>("agents", "create", {
+    stack: {
+      base: { provider: assistant.provider, creatable: assistant.id },
+      units: [
+        { provider: management, unit: "skill", values: { skill: "review" } },
+        { provider: management, unit: "control", values: { templates: ["assistant"] } },
+      ],
+    },
+    name: "Newcomer",
+  });
+  const slot = await chatSlot(person, agent);
+  await person.call(slot, "send", { text: "Hi, new one!" });
+  const first = () => asked.find((one) => one.input.includes("Hi, new one!"));
+  await until(() => first() !== undefined, "the agent to be asked");
+  await until(
+    async () => (await person.call<{ state: string }>(slot, "state")).state === "idle",
+    "the turn to end",
+  );
+  offersAll(first()?.tools ?? []);
 });
 
 test("an agent given Memory keeps a line it writes, and is told it at its next turn and after the app starts again", async (t) => {

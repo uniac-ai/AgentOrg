@@ -12,7 +12,8 @@
 #   connection's tools among others), whose two chats must become one conversation with the
 #   person, the one last written in, which takes a message;
 # - 0.0.10 to 0.0.41: an agent with an AgentOrg control unit that must still run, bound as it was,
-#   whose conversation takes a message, and whose unit's skill is this build's.
+#   whose conversation takes a message as soon as the agent is back, whose first request offers
+#   management's skill tool and control's three, and whose unit's skill is this build's.
 # Bound as it was, but that this build gives an agent, at the slot its settings were bound at,
 # management's skill tools in their place, and takes off the agents@1 that 0.0.39 to 0.0.41 gave
 # an agent with a control unit beside its tools: its control is those tools now.
@@ -698,16 +699,44 @@ for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0
   done
   stop_app
   start_on "$agentorg" "$homev" "$work/up-$v.log" --port 0
-  # The person keeps the conversation's slot, which answers once the agent is back.
+  # The person keeps the conversation's slot, which takes a message as soon as the agent is back:
+  # the first message this build's agent hears.
   back=""
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 300); do
     [ "$(chat_slot "$agentorg" "$homev")" = "$slot" ] &&
-      "$agentorg" call "$slot" history '{}' --home "$homev" >/dev/null 2>&1 && { back=1; break; }
+      "$agentorg" call "$slot" send '{"text":"And on this build."}' --home "$homev" >/dev/null 2>&1 &&
+      { back=1; break; }
     kill -0 "$pid" 2>/dev/null || { cat "$work/up-$v.log" >&2; exit 1; }
-    sleep 0.5
+    sleep 0.2
   done
   [ -n "$back" ] ||
     { echo "The person lost the $v agent's conversation on this build" >&2; cat "$work/up-$v.log" >&2; exit 1; }
+  # Its turn's request, the first on this build, offers management's skill tool and control's three.
+  # No model is signed in here, so the turn ends there: what its request offered is what the parts
+  # of the agent say they added to its latest request, read once the turn has ended.
+  for _ in $(seq 1 60); do
+    "$agentorg" call "$slot" state '{}' --home "$homev" 2>/dev/null |
+      node -e 'process.exit(JSON.parse(require("fs").readFileSync(0, "utf8")).state === "idle" ? 0 : 1)' &&
+      break
+    sleep 0.5
+  done
+  "$agentorg" call agents get "{\"agent\":\"$elder\"}" --home "$homev" >"$work/get-$v.json"
+  node -e '
+    const { composition = [] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const offered = new Set(composition.flatMap((part) => part.added?.functions ?? []));
+    const missing = [
+      "settings__skill",
+      "control__capability_list",
+      "control__capability_mount",
+      "control__capability_unmount",
+    ].filter((name) => !offered.has(name));
+    if (missing.length) {
+      console.error(`Its first request on this build offered no ${missing.join(", ")}`);
+      process.exit(1);
+    }
+    console.log(`${process.argv[2]}'"'"'s agent was offered management'"'"'s skill and control tools at its first request`);
+  ' "$work/get-$v.json" "$v" ||
+    { cat "$work/get-$v.json" >&2; cat "$work/up-$v.log" >&2; exit 1; }
   # The skill is brought up to date as management starts, beside the agent coming back.
   for _ in $(seq 1 60); do
     cmp -s "$skill" "$work/delegating-now.md" && break
@@ -720,7 +749,6 @@ for v in 0.0.10 0.0.11 0.0.12 0.0.13 0.0.14 0.0.15 0.0.16 0.0.17 0.0.18 0.0.19 0
   else
     echo "This build brought $v's delegating skill up to date"
   fi
-  "$agentorg" call "$slot" send '{"text":"And on this build."}' --home "$homev" >/dev/null
   "$agentorg" call "$slot" history '{}' --home "$homev" >"$work/history-$v.json"
   "$agentorg" call agents list --home "$homev" >"$work/agents-$v.json"
   node -e '
