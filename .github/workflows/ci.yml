@@ -28,8 +28,8 @@ jobs:
         run: npm run check
       - name: Imports stay in their module
         run: node scripts/check-imports.mjs && node --test scripts/check-imports.test.mjs
-      # The runner carries shellcheck. get.sh is the line a person pastes on a Mac; install.sh is
-      # what it runs from a release.
+      # The runner carries shellcheck. get.sh hands on to the install page; install.sh is the
+      # script the page serves from a release.
       - name: Check get.sh and install.sh
         run: shellcheck get.sh install.sh
       # The published 0.0.5 the smoke starts sandboxes its Actors in a user namespace, which stock
