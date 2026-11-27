@@ -38,7 +38,7 @@ export function startEngine(
     instructions(): string;
     /**
      * The tree of what is mounted on it, as its host was last given it: none before the first,
-     * when no turn goes on. With no `mounted`, its host gives none.
+     * which a turn waits for. With no `mounted`, its host gives none.
      */
     mounted?(): z.infer<typeof SettingsRoot>[] | undefined;
     /**
@@ -74,10 +74,6 @@ export function startEngine(
     else ctx.log.info("Everything is offered to the model again.");
   };
   /**
-   * What a turn says and offers, and to which model, read afresh for each: none of it outlives it.
-   * `leftOut` is what it couldn't offer, and why.
-   */
-  /**
    * Read the tree it was last given and hold the plugins it names, as one step: one at a time, in
    * the order asked, each reading only once the one before has held. So no hold applies a tree
    * older than one already held. With no tree given, it reads nothing and holds what it holds.
@@ -96,14 +92,46 @@ export function startEngine(
     reading = done.catch(() => {});
     return done;
   };
-  const request = async (conversation?: Conversed) => {
+  /** Counts its stops and closes: a turn asked for before one was cut by it. */
+  let cuts = 0;
+  /** The turns waiting for its host's first tree, each with how to end its wait. */
+  const waiting = new Set<() => void>();
+  /**
+   * Settles once its host has given a tree, at once if it has: or is refused once a stop or a
+   * close since `at` cut the turn that waits.
+   */
+  const treeGiven = (at: number) =>
+    new Promise<void>((resolve, reject) => {
+      const end = () => {
+        waiting.delete(end);
+        if (at !== cuts) reject(new Refused("cancelled", "The turn was stopped."));
+        else resolve();
+      };
+      if (at !== cuts || options.mounted?.()) end();
+      else waiting.add(end);
+    });
+  /** End each wait for a tree: one was given, or its turn was cut. */
+  const endWaits = () => {
+    for (const end of [...waiting]) end();
+  };
+  /**
+   * What a turn says and offers, and to which model, read afresh for each: none of it outlives it.
+   * `leftOut` is what it couldn't offer, and why. With `waits`, one asked for before its host gave
+   * a tree waits for it, as a turn cut off by a restart does; without, it is refused.
+   */
+  const request = async (conversation?: Conversed, waits = false) => {
+    const at = cuts;
     await options.ready;
     // It holds what its tree names and reads what it gives in one step, which no other change
     // comes between: a turn is never behind the tree it was last given.
-    const read = options.mounted ? await readAndHold() : undefined;
+    let read = options.mounted ? await readAndHold() : undefined;
     // Its host gives a tree, and none has come yet: no turn runs without its instructions.
-    if (options.mounted && !read)
-      throw new Refused("not_connected", "What is mounted on it hasn't been given to it yet.");
+    while (options.mounted && !read) {
+      if (!waits)
+        throw new Refused("not_connected", "What is mounted on it hasn't been given to it yet.");
+      await treeGiven(at);
+      read = await readAndHold();
+    }
     // What its capabilities read once a turn, then what they give. For a conversation's own loop,
     // they are passed the conversation, so a pass can tell whose it is.
     await plugins.turn(conversation);
@@ -162,7 +190,8 @@ export function startEngine(
     store,
     stopped: options.stopped ?? false,
     model,
-    request: (conversation) => relayed(request(conversation)),
+    // A turn asked for before its host gave a tree waits for it.
+    request: (conversation) => relayed(request(conversation, true)),
     // Each request its loops make, passed through every capability's passes: what they change of
     // its input is sent.
     pass: (input, conversation) =>
@@ -221,7 +250,7 @@ export function startEngine(
     for (const slot of ctx.exposed())
       if (listsTools(slot.described) && !heard.has(slot)) heard.set(slot, slot.on("changed", look));
     if (!ctx.slots.model.bound) return;
-    // Refused while no tree is given, as a turn's own request would be.
+    // Refused while no tree is given: they are looked for again once one is.
     const { leftOut } = await request();
     if (leftOut.some((one) => one.reason === "not_connected")) return;
     await chats.resume();
@@ -255,13 +284,14 @@ export function startEngine(
    * It holds the plugins its tree names each time it is given one, with no turn to wait for: a
    * plugin may have work of its own between turns. One it can't hold it runs without, as its host
    * says, and it is tried again at the next hold. Turns cut off wait for a tree, so they are
-   * looked for again.
+   * looked for again; and turns that wait for one go on.
    */
   const holdNamed = async () => {
     try {
       await readAndHold();
     } finally {
       look();
+      endWaits();
     }
   };
   // A tree given before it started, as to an agent that joins again, it holds once what every
@@ -309,7 +339,11 @@ export function startEngine(
     /** Stop the agent: its turns are cut and none starts until `start`. Its conversations stay readable. */
     async stop() {
       done();
-      await chats.stop();
+      const stopping = chats.stop();
+      // A turn waiting for its tree is cut with the rest.
+      cuts++;
+      endWaits();
+      await stopping;
       // Said last, once its turns were cut.
       plugins.life("stopped");
     },
@@ -320,7 +354,10 @@ export function startEngine(
      */
     close() {
       done();
-      return chats.close();
+      const closing = chats.close();
+      cuts++;
+      endWaits();
+      return closing;
     },
     /** Settles when every piece of work's latest turn has written all it will. */
     async settled() {

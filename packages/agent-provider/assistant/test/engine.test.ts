@@ -765,10 +765,91 @@ test("an agent's own words past the limit are cut to it, so the whole request is
   assert.ok(String(s.whole[0]?.instructions).length <= 200_000);
 });
 
-test("with no tree given yet by a host that gives one, the turn ends rather than run without its instructions", async () => {
-  const s = await setup(undefined, undefined, () => undefined);
-  assert.equal((await s.turn("hello"))?.code, "not_connected");
+/** Give the engine time to do what it would: a turn that would fail or run has done so by then. */
+async function aWhile() {
+  for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+/** Whether `doing` has settled, failing rather than hanging when it never does. */
+async function settles(doing: Promise<unknown>, what: string) {
+  let done = false;
+  void doing.then(() => {
+    done = true;
+  });
+  await until(() => done, what);
+  await doing;
+}
+
+test("a message sent before the agent's first tree waits for it, working, and is answered once it is given", async () => {
+  // The agent is back before management has given its host what is mounted on it.
+  let tree: z.input<typeof SettingsRoot>[] | undefined;
+  const s = await setup(undefined, undefined, () => tree);
+  const from = s.actor.emitted.length;
+  await s.chat("send", { text: "hello" });
+  await aWhile();
+  // Its turn doesn't fail, and runs nothing without its instructions: the agent is working.
+  const { conversations } = (await s.chat("list")) as { conversations: { problem?: object }[] };
+  assert.deepEqual(conversations[0]?.problem, undefined);
   assert.equal(s.requests.length, 0);
+  assert.deepEqual(s.statuses(from), [{ state: "working" }]);
+  assert.deepEqual(await s.actor.call("chat", "state", {}), { state: "working" });
+  assert.deepEqual(s.messages(), ["user: hello"]);
+
+  tree = treeOf("Be kind.", []);
+  await s.host.hold();
+  assert.equal(await s.ended(from), undefined);
+  assert.equal(s.requests[0]?.instructions, "Be kind.");
+  assert.deepEqual(s.messages(), ["user: hello", "assistant: ok"]);
+  await s.host.settled();
+});
+
+test("a turn waiting for the agent's first tree is stopped as any turn is, and one cut by a close goes on once the next is given it", async () => {
+  const values = new Map<string, unknown>();
+  let tree: z.input<typeof SettingsRoot>[] | undefined;
+  const s = await setup(values, undefined, () => tree);
+  const from = s.actor.emitted.length;
+  const { messageId } = (await s.chat("send", { text: "hello" })) as { messageId: string };
+  await aWhile();
+  assert.deepEqual(s.statuses(from), [{ state: "working" }]);
+  // Stopped by the person: the turn ends with no answer and no problem, and the message is closed.
+  await settles(s.host.stop(), "the stop");
+  await settles(s.host.settled(), "the stopped turn to settle");
+  assert.deepEqual(s.statuses(from), [{ state: "working" }, { state: "idle" }]);
+  assert.equal(s.requests.length, 0);
+  const progress = s.actor.emitted
+    .slice(from)
+    .filter((e) => e.event === "progress" && e.to === PERSON)
+    .map((e) => e.payload as { id: string; state: string });
+  assert.deepEqual(progress, [{ with: PERSON, id: messageId, state: "closed" }]);
+  const { conversations } = (await s.chat("list")) as { conversations: { problem?: object }[] };
+  assert.equal(conversations[0]?.problem, undefined);
+
+  // Started again, still with no tree: a message waits again, and a close cuts it as a restart
+  // does, leaving it to go on.
+  s.host.start();
+  await s.chat("send", { text: "Still there?" });
+  await aWhile();
+  assert.equal(s.requests.length, 0);
+  await settles(s.host.close(), "the close");
+  await settles(s.host.settled(), "the closed turn to settle");
+
+  // The next engine is given its tree, and goes on with it.
+  const again = await setup(values, undefined, () => tree);
+  await aWhile();
+  assert.equal(again.requests.length, 0);
+  tree = treeOf("Be kind.", []);
+  await again.host.hold();
+  assert.equal(await again.ended(0), undefined);
+  assert.equal(again.requests[0]?.instructions, "Be kind.");
+  assert.deepEqual(
+    again.requests[0]?.input.map((item) => item.content),
+    [
+      "hello",
+      "Still there?",
+      "This turn was cut off by a restart. Check what is already done before you repeat anything, then go on.",
+    ],
+  );
+  assert.deepEqual(again.messages(), ["assistant: ok"]);
+  await again.host.settled();
 });
 
 test("with no tree from its host, the instructions are the host's", async () => {
