@@ -402,6 +402,33 @@ test("a turn the provider's restart cut off goes on once the agent is given what
   assert.deepEqual(await s.texts(), ["user: a long one", "assistant: ok"]);
 });
 
+test("a message sent before the agent is given what is mounted on it waits for that, working, and goes on once it is; a stop ends the wait", async (t) => {
+  const s = await setup(t);
+  const { agent } = await s.create();
+  // Back from a restart, it answers its conversation before management can reach the provider.
+  await s.restart();
+  await until(() => s.caller.slots.chat.bound && s.hub.connected(agent), "the agent to be back");
+  await s.talk.send({ text: "hello" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(s.requests.length, 0);
+  assert.deepEqual(await s.talk.state({}), { state: "working" });
+  assert.equal((await s.talk.list({})).conversations[0]?.problem, undefined);
+  assert.deepEqual(await s.standing({ agent }), { state: "running" });
+  // Stopped while it waits, as any turn is: the agent is idle, and its message stays.
+  await s.agents.stop({ agent });
+  assert.deepEqual(await s.talk.state({}), { state: "idle" });
+  assert.deepEqual(await s.standing({ agent }), { state: "stopped" });
+  await s.agents.start({ agent });
+  // Started again, still with no list, a message waits again, and goes on once it is given.
+  await s.talk.send({ text: "and now?" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(s.requests.length, 0);
+  await s.give(agent);
+  await until(async () => (await s.texts()).at(-1) === "assistant: ok", "its reply");
+  assert.deepEqual(await s.texts(), ["user: hello", "user: and now?", "assistant: ok"]);
+  assert.equal(s.requests.length, 1);
+});
+
 test("a stopped agent whose connection ended is down until it is stopped or started again", async (t) => {
   const s = await setup(t);
   const { agent } = await s.create();
