@@ -293,7 +293,22 @@ export async function startPrograms(
       hubBinding("grants"),
       hubBinding("bindings"),
     ]);
-    // Management outlasts the providers at the end and is up before they're connected to it.
+    // Each provider is connected to management before management starts, so it has them from its
+    // first moment: on the first start after a provider's export changed its contract, the Hub
+    // has dropped what was exposed of it. One still there is given back as it is.
+    for (const provider of [agents, mcp, computer])
+      if (provider)
+        await attempt("connecting a provider to management", () =>
+          call("grants", "expose", { provider, export: "provider", to: actorId }),
+        );
+    // The agents' executor, the computer connector and the MCP provider make capabilities too:
+    // management mounts them through each.
+    for (const provider of [agents, computer, mcp])
+      if (provider)
+        await attempt("connecting a provider's capabilities to management", () =>
+          call("grants", "expose", { provider, export: "capabilities", to: actorId }),
+        );
+    // Management outlasts the providers at the end.
     const running = await startManager({
       hubUrl,
       actorId,
@@ -319,21 +334,6 @@ export async function startPrograms(
     });
     return actorId;
   });
-
-  if (management) {
-    for (const provider of [agents, mcp, computer])
-      if (provider)
-        await attempt("connecting a provider to management", () =>
-          call("grants", "expose", { provider, export: "provider", to: management }),
-        );
-    // The agents' executor, the computer connector and the MCP provider make capabilities too:
-    // management mounts them through each.
-    for (const provider of [agents, computer, mcp])
-      if (provider)
-        await attempt("connecting a provider's capabilities to management", () =>
-          call("grants", "expose", { provider, export: "capabilities", to: management }),
-        );
-  }
 
   /**
    * The first Assistant, on a home with no agents: once AgentOrg Mac's service answers, its parts

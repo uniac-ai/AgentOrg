@@ -21,6 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Computer } from "@agentorg/computer-sdk";
 import { HubState, PERSON } from "@agentorg/hub";
@@ -30,8 +31,9 @@ import type { AgentPlugin } from "assistant/plugins";
 import { completed, fakeOpenAI, type Script } from "chatgpt/fake-openai";
 import type { Context } from "cordis";
 import WebSocket from "ws";
+import { startGateway } from "../src/gateway.ts";
 import { type App, type ProgramsOptions, startApp } from "../src/index.ts";
-import { FIRST_CONTROL } from "../src/programs.ts";
+import { closePackageActors, FIRST_CONTROL, startPrograms } from "../src/programs.ts";
 
 type Reply = {
   id?: number;
@@ -352,6 +354,69 @@ test("an agent is made through agents, and the person reaches its chat, across a
     (await person.call<{ agents: { name: string }[] }>("agents", "list")).agents[0]?.name,
     "Scout",
   );
+});
+
+test("on a home whose providers are no longer exposed to management, as after an upgrade, management's first answer has its agents' provider", async (t) => {
+  const s = await open(t);
+  const { person, ran } = await s.start();
+  const management = ran?.management as string;
+  const agent = await createAssistant(person, "Scout");
+  await s.stop();
+  // What the Hub drops as a provider's export changes its contract: each provider's exposures to
+  // management.
+  const hub = HubState.open(s.home);
+  try {
+    const gone = hub
+      .bindings(management)
+      .filter(
+        (b) =>
+          b.consumer === management &&
+          b.exposed &&
+          (b.export === "provider" || b.export === "capabilities"),
+      );
+    assert.equal(gone.filter((b) => b.export === "provider").length, 3);
+    for (const b of gone) hub.unexpose(PERSON, management, b.slot);
+  } finally {
+    hub.close();
+  }
+
+  // Each exposure to management takes a moment, as a busy Hub's may: management, started before
+  // them, would be up that long without its providers. It is asked from the start until it answers.
+  const app = await startGateway({
+    home: s.home,
+    defaultPort: 0,
+    closePackageActors,
+    startPrograms: (side, given) =>
+      startPrograms(
+        {
+          async call(slot, method, input) {
+            if (
+              slot === "grants" &&
+              method === "expose" &&
+              (input as { to?: string }).to === management
+            )
+              await delay(300);
+            return side.call(slot, method, input);
+          },
+        },
+        { ...given, log: () => {}, computer: { path: "" }, assistant: false },
+      ),
+  });
+  const again = personOf(app, s.home);
+  t.after(async () => {
+    await again.close();
+    await app.close();
+  });
+  type Listed = { agents: { agent: string; status: { state: string; detail?: string } }[] };
+  let first: Listed | undefined;
+  await until(async () => {
+    first = await again.call<Listed>("agents", "list").catch(() => undefined);
+    return first !== undefined;
+  }, "management to answer");
+  const status = first?.agents.find((one) => one.agent === agent)?.status;
+  assert.ok(status);
+  assert.notEqual(status.state, "down", status.detail);
+  assert.equal((await app.firstRun)?.management, management);
 });
 
 test("an agent given Memory keeps a line it writes, and is told it at its next turn and after the app starts again", async (t) => {
