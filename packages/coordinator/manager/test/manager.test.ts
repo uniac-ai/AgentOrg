@@ -1603,6 +1603,50 @@ test("an agent's provider is given what is mounted on it: once it is made, when 
   await each();
 });
 
+test("an agent's list its provider didn't take is given again once the provider may take it, with nothing more mounted on the agent", async (t) => {
+  const s = await setup(t);
+  const make = async (name: string) =>
+    (await s.calls.agents.create({ stack: { base: s.base, units: [] }, name })).agent;
+  const [a, b] = [await make("A"), await make("B")];
+  const given = (agent: string, skill: string) =>
+    JSON.stringify(s.given.lists.findLast((one) => one.agent === agent)?.mounted ?? []).includes(
+      `The ${skill} skill.`,
+    );
+  /**
+   * A skill is exposed to A while its provider, connected and exposed to management, takes no
+   * list: A's provider is left without its newest list, and it then takes lists again.
+   */
+  const untaken = async (skill: string) => {
+    await s.calls.skills.add({ files: { "SKILL.md": SKILL(skill) } });
+    s.script.fail = "mounted";
+    await s.calls.agents.expose({ agent: a, skill });
+    delete s.script.fail;
+    assert.equal(given(a, skill), false);
+  };
+
+  // Its provider answers the person reading the agents: it is given A's list.
+  await untaken("first");
+  await s.calls.agents.list({});
+  await until(() => given(a, "first"));
+
+  // Its provider takes another agent's list: it is given A's too.
+  await untaken("second");
+  await s.calls.agents.expose({ agent: b, skill: "second" });
+  assert.ok(given(b, "second"));
+  await until(() => given(a, "second"));
+
+  // Another Actor comes on the Hub, nothing to do with A or its provider: A's list is given.
+  await untaken("third");
+  const other = s.hub.state.createActor(PERSON, { name: "Other" });
+  const client = await connect({
+    hubUrl: s.hubUrl,
+    actorId: other.actorId,
+    credential: other.credential as string,
+  });
+  t.after(() => client.close());
+  await until(() => given(a, "third"));
+});
+
 test("removing an agent takes its units last first, and leaves what it was given", async (t) => {
   const s = await setup(t);
   const search = await s.picked();
