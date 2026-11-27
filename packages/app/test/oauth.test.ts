@@ -3,7 +3,7 @@ import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { Refused } from "@agentorg/sdk";
-import { oauthRoute } from "../src/index.ts";
+import { oauthRoute } from "../src/oauth.ts";
 
 /** A request to the route, as a browser coming back from ChatGPT would make it. */
 function get(origin: string, path: string, method = "GET") {
