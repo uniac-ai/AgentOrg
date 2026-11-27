@@ -27,7 +27,7 @@
       "packages/agent-provider/chatgpt",
       "packages/agent-provider/memory"
     ],
-    "capability": ["packages/computer"],
+    "capability": ["packages/capability/computer"],
     "all-in-one": [
       "packages/app/package.json",
       "packages/app/src/app.ts",
@@ -46,7 +46,7 @@
     "@agentorg/computer-sdk": "capability"
   },
   "crossings in src": {
-    "packages/computer/src/provider.ts": {
+    "packages/capability/computer/src/provider.ts": {
       "coordinator": "runs @agentorg/mcp's Connection to answer tools@1 for each computer's MCP endpoint, and its parseConnection to check a remote computer's address"
     },
     "packages/sdk/src/cli.ts": {
@@ -66,7 +66,7 @@
     "packages/agent-provider/chatgpt/test/session-version.test.ts": {
       "coordinator": "stands up a real Hub to test against"
     },
-    "packages/computer/test/provider.test.ts": {
+    "packages/capability/computer/test/provider.test.ts": {
       "coordinator": "stands up a real Hub to test against"
     },
     "packages/shell/scripts/build.js": {

@@ -294,7 +294,7 @@ cp "${served}/\${url##*/}" "$out"`,
 
 test("AgentOrg names one AgentComputer version: the SDK's pins, the program's development pins and mac-app.json's", () => {
   const read = (...path: string[]) => JSON.parse(readFileSync(join(root, ...path), "utf8"));
-  const connector = read("packages", "computer", "package.json");
+  const connector = read("packages", "capability", "computer", "package.json");
   const cli = read("packages", "app", "package.json");
   const sdk = connector.dependencies["@agentorg/computer-sdk"];
   assert.match(sdk, /^\d+\.\d+\.\d+$/);
