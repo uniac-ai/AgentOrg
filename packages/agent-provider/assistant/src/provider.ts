@@ -4,11 +4,13 @@
  * conversations can be read, and runs no turn until it is started. Each agent's conversations and model choice are kept
  * in the provider's private folder.
  *
- * It is also a capability provider for its own agents (`capability.provider@1`, as
- * `capabilities`): it offers the capabilities it carries that it is given definitions of. What an
- * agent holds is what its settings name: management keeps what was mounted, and names it there
- * before it asks, so this provider's `mount` has the agent hold its settings now and answers from
- * what it then holds. It keeps no list of its own.
+ * Management gives it what is mounted on each agent (`agent.provider@2`'s `mounted`), and it has
+ * the agent hold that, keeping only the last list of each, in memory: management gives every list
+ * again when this provider is back. It is also a capability provider for its own agents
+ * (`capability.provider@1`, as `capabilities`): it offers the capabilities it carries that it is
+ * given definitions of. What an agent holds is what its list names: management keeps what was
+ * mounted, and gives the agent its list naming it before it asks, so this provider's `mount`
+ * answers from what the agent holds then. It keeps no list of its own.
  */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -23,6 +25,7 @@ import {
   HELD_MAX,
   hubActors,
   llmSession,
+  type SettingsRoot,
   tools,
 } from "@agentorg/interfaces";
 import { type Log, NotConnected, Refused } from "@agentorg/sdk";
@@ -114,13 +117,15 @@ interface Held {
   engine?: ReturnType<typeof startEngine>;
   /** The plugins it holds, loaded in its own context while it is open. */
   plugins?: AgentContext;
+  /** What is mounted on it, as management last gave it: none until it does. */
+  mounted?: z.infer<typeof SettingsRoot>[];
   /** What is being done to it: one thing at a time. */
   queue: Promise<unknown>;
 }
 
 const quiet: Log = { info() {}, warn() {}, error() {} };
 
-/** What a status's detail may hold, as agent.provider@1 says. */
+/** What a status's detail may hold, as agent.provider@2 says. */
 const DETAIL_MAX = 2000;
 /**
  * What a running agent's status says of a plugin it runs without: one sentence, which and why;
@@ -149,7 +154,7 @@ export const withoutOf = (without: Without[]) => {
   return detail || undefined;
 };
 
-/** Run the bundled agent provider as an Actor exporting `agent.provider@1` as `provider`. */
+/** Run the bundled agent provider as an Actor exporting `agent.provider@2` as `provider`. */
 export async function startAgentProvider(options: AgentProviderOptions): Promise<AgentProvider> {
   const log = options.log ?? quiet;
   const { hubUrl, dir } = options;
@@ -238,7 +243,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     let plugins: AgentPlugins | undefined;
     const store = createLocalStore(folderOf(agent));
     try {
-      // Its context: it holds the plugins its settings name once its engine reads them.
+      // Its context: it holds the plugins its list names once its engine reads it.
       const context = await host.open(agent, { store, provides: ["hub", "model"] });
       plugins = context;
       /**
@@ -284,6 +289,7 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
             engine = startEngine(ctx, {
               store,
               instructions: () => ASSISTANT_INSTRUCTIONS,
+              mounted: () => one.mounted,
               self: options.actorId,
               ready: mounted,
               stopped,
@@ -373,11 +379,12 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
     log,
     start(ctx) {
       /**
-       * What the agent holds of its root `name` once it has held what its settings name now: one
-       * it couldn't mount says why; one its settings don't name, it doesn't hold.
+       * What the agent holds of its root `name` now, as its list last named: one it couldn't mount
+       * says why; one its list doesn't name, it doesn't hold.
        */
-      const holding = async (one: Held, agent: string, name: string) => {
-        await engineOf(agent).hold();
+      const holding = (one: Held, agent: string, name: string) => {
+        // Off its channel, it can't say.
+        engineOf(agent);
         return one.plugins?.list().find((held) => held.name === name && !held.parent);
       };
       ctx.exports.capabilities.implement({
@@ -394,11 +401,11 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           inTurn(agent, async (one) => {
             if (!offers.some((offer) => offer.id === name))
               throw new Refused("unknown", `This provider offers no ${name}.`);
-            const held = await holding(one, agent, name);
+            const held = holding(one, agent, name);
             if (!held)
               throw new Refused(
                 "state",
-                `Its settings don't name ${name}: it is mounted through management, which keeps what is mounted.`,
+                `What is mounted on it doesn't name ${name}: it is mounted through management, which keeps what is mounted.`,
               );
             if (held.state === "failed")
               return {
@@ -408,9 +415,9 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
           }),
         unmount: ({ agent, mounted }) =>
           inTurn(agent, async (one) => {
-            const held = await holding(one, agent, mounted);
+            const held = holding(one, agent, mounted);
             if (held && held.state !== "failed")
-              throw new Refused("state", `Its settings still name ${mounted}.`);
+              throw new Refused("state", `What is mounted on it still names ${mounted}.`);
             return {};
           }),
       });
@@ -440,8 +447,15 @@ export async function startAgentProvider(options: AgentProviderOptions): Promise
             await rm(folderOf(agent), { recursive: true, force: true });
             throw error;
           }
-          return { agent, settings: "settings", chat: "chat" };
+          return { agent, chat: "chat" };
         },
+        // Kept in memory only, and held: an agent off its channel holds it when it joins again.
+        mounted: ({ agent, mounted }) =>
+          inTurn(agent, async (one) => {
+            one.mounted = mounted;
+            if (one.channel && one.engine) await one.engine.hold();
+            return {};
+          }),
         status: async ({ agent }) => {
           // Why it is down; or, running, what it runs without; and what it holds while it is open.
           const { state, detail, without, plugins } = held(agent);

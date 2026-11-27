@@ -1,12 +1,22 @@
 /**
  * The engine: the looper bound to one agent. Its conversations are the looper's threads, its model
  * is the agent's `model` slot, and what a request says and offers is what the agent's capabilities
- * give: those every agent has, and those the tree its `settings` give names. Its host says where
- * the records are kept and what the agent is told when no `settings` is bound.
+ * give: those every agent has, and those the tree of what is mounted on it names, as its host was
+ * last given it. Its host says where the records are kept and what the agent is told when it
+ * gives no tree.
  */
-import type { agentSettings2, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
+import type {
+  agentSettings2,
+  capability,
+  chat,
+  kv,
+  llmSession,
+  SettingsRoot,
+  tools,
+} from "@agentorg/interfaces";
 import { type Conversed, type Model, type Part, Refusal } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
+import type { z } from "zod";
 import { WORDS } from "./capabilities/instructions.js";
 import { createChats } from "./chats.js";
 import type { Model as AgentModel } from "./connector.js";
@@ -32,11 +42,16 @@ export function startEngine(
   ctx: Host,
   options: {
     store: Slot<typeof kv>["call"];
-    /** What the agent is told while no `settings` is bound. */
+    /** What the agent is told when its host gives no tree. */
     instructions(): string;
     /**
-     * Its executor's own id: of the tree its settings give, it holds the roots that name it as
-     * their provider, and management's own, which name none.
+     * The tree of what is mounted on it, as its host was last given it: none before the first,
+     * when no turn goes on. With no `mounted`, its host gives none.
+     */
+    mounted?(): z.infer<typeof SettingsRoot>[] | undefined;
+    /**
+     * Its executor's own id: of the tree, it holds the roots that name it as their provider, and
+     * management's own, which name none.
      */
     self?: string;
     /** Settles once the capabilities every agent has are mounted: no turn goes on before. */
@@ -44,7 +59,7 @@ export function startEngine(
     /** Whether it starts stopped, as it was left. */
     stopped?: boolean;
     /**
-     * Its plugins, each with a part inside it: it holds those its settings name, of those its host
+     * Its plugins, each with a part inside it: it holds those its tree names, of those its host
      * carries. None by default.
      */
     plugins?: AgentPlugins;
@@ -71,16 +86,15 @@ export function startEngine(
    * `leftOut` is what it couldn't offer, and why.
    */
   /**
-   * Read its settings and hold the plugins they name, as one step: one at a time, in the order
-   * asked, each reading only once the one before has held. So no hold applies settings older than
-   * one already held, as a read over a slow channel otherwise could, after a later read named a
-   * capability just mounted. With no settings bound, it reads nothing and holds what it holds.
+   * Read the tree it was last given and hold the plugins it names, as one step: one at a time, in
+   * the order asked, each reading only once the one before has held. So no hold applies a tree
+   * older than one already held. With no tree given, it reads nothing and holds what it holds.
    */
   let reading: Promise<unknown> = Promise.resolve();
   const readAndHold = () => {
     const done = reading.then(async () => {
-      if (!ctx.slots.settings.bound) return undefined;
-      const { mounted } = await ctx.slots.settings.call.get({});
+      const mounted = options.mounted?.();
+      if (!mounted) return undefined;
       const named = mounted
         .filter(({ provider }) => provider === undefined || provider === options.self)
         .map(({ capability, arguments: settings }) => ({ name: capability, settings }));
@@ -92,9 +106,12 @@ export function startEngine(
   };
   const request = async (conversation?: Conversed) => {
     await options.ready;
-    // It holds what its settings name and reads what they give in one step, which no other change
-    // comes between: a turn is never behind its settings, whether or not it heard them change.
-    const read = ctx.slots.settings.bound ? await readAndHold() : undefined;
+    // It holds what its tree names and reads what it gives in one step, which no other change
+    // comes between: a turn is never behind the tree it was last given.
+    const read = options.mounted ? await readAndHold() : undefined;
+    // Its host gives a tree, and none has come yet: no turn runs without its instructions.
+    if (options.mounted && !read)
+      throw new Refused("not_connected", "What is mounted on it hasn't been given to it yet.");
     // What its capabilities read once a turn, then what they give. For a conversation's own loop,
     // they are passed the conversation, so a pass can tell whose it is.
     await plugins.turn(conversation);
@@ -105,7 +122,7 @@ export function startEngine(
       input: [],
       leftOut: [],
     });
-    // With no settings bound, it is told its host's words, first.
+    // With no tree from its host, it is told its host's words, first.
     const instructions: Part[] = read
       ? given.instructions
       : [
@@ -199,8 +216,8 @@ export function startEngine(
     chats.retrying(requestId, { attempt, of, at }),
   );
   /**
-   * The turns that were cut off when the agent last ran go on once the model is bound, the
-   * settings answer, and no tools slot is away. As the agent starts, what it is bound to may not
+   * The turns that were cut off when the agent last ran go on once the model is bound, its tree
+   * is given, and no tools slot is away. As the agent starts, what it is bound to may not
    * be running yet, so this is looked at again whenever that may have changed: a slot's provider
    * is back, a tools slot is made or gone, or one says its tools changed. A tools slot that stays
    * away holds them back; a message in a conversation starts a turn anyway.
@@ -212,7 +229,7 @@ export function startEngine(
     for (const slot of ctx.exposed())
       if (listsTools(slot.described) && !heard.has(slot)) heard.set(slot, slot.on("changed", look));
     if (!ctx.slots.model.bound) return;
-    // Refused while the settings can't answer, as a turn's own request would be.
+    // Refused while no tree is given, as a turn's own request would be.
     const { leftOut } = await request();
     if (leftOut.some((one) => one.reason === "not_connected")) return;
     await chats.resume();
@@ -243,23 +260,27 @@ export function startEngine(
     })();
   };
   /**
-   * It holds the plugins its settings name from when its settings are bound, and again when they
-   * say they changed, with no turn to wait for: a plugin may have work of its own between turns.
-   * One it can't hold it runs without, as its host says, and it is tried again at the next hold.
+   * It holds the plugins its tree names each time it is given one, with no turn to wait for: a
+   * plugin may have work of its own between turns. One it can't hold it runs without, as its host
+   * says, and it is tried again at the next hold. Turns cut off wait for a tree, so they are
+   * looked for again.
    */
   const holdNamed = async () => {
-    await readAndHold();
+    try {
+      await readAndHold();
+    } finally {
+      look();
+    }
   };
-  const hold = () =>
-    void holdNamed().catch((error: unknown) =>
-      ctx.log.warn("Its settings couldn't be read for its plugins.", {
-        error: String(error),
-      }),
-    );
-  ctx.slots.settings.onBind(hold);
-  ctx.slots.settings.on("changed", hold);
+  // A tree given before it started, as to an agent that joins again, it holds once what every
+  // agent has is mounted.
+  if (options.mounted?.())
+    void Promise.resolve(options.ready)
+      .then(holdNamed)
+      .catch((error: unknown) =>
+        ctx.log.warn("It couldn't hold the plugins its tree names.", { error: String(error) }),
+      );
   ctx.slots.model.onBind(look);
-  ctx.slots.settings.onBind(look);
   ctx.onExposed(look);
   serveWork(ctx.exports, chats);
   // Each caller has its own conversation with the agent: the Hub names who calls.
@@ -271,8 +292,8 @@ export function startEngine(
   });
   return {
     /**
-     * Hold the plugins its settings name now, and settle once it does: what a caller that has just
-     * changed them waits for. Its settings unbound, it holds what it holds.
+     * Hold the plugins the tree it was last given names, and settle once it does: what its host,
+     * just given one, waits for. With no tree given, it holds what it holds.
      */
     hold: holdNamed,
     /** The model chosen for it, if one is: the provider's default if none. */

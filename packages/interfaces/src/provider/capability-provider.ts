@@ -4,6 +4,7 @@ import { Id, SlotName } from "../base/names.js";
 import { CapabilityId, FactRow, Surface, View } from "../exposure/views.js";
 import { HeldCapability } from "./agent-provider.js";
 import { ConnectionTarget } from "./connection.js";
+import { Arguments } from "./mounted.js";
 import { SKILL_FILE_MAX, SkillName, SkillPath } from "./skills.js";
 
 /**
@@ -14,8 +15,6 @@ import { SKILL_FILE_MAX, SkillName, SkillPath } from "./skills.js";
  * capability comes back after a restart with it.
  */
 export const ArgumentsSchema = z.object({ type: z.literal("object") }).catchall(z.json());
-/** The arguments a capability is mounted with, by property, as its `arguments` schema describes. */
-export const Arguments = z.record(z.string().min(1).max(64), z.json());
 /**
  * A problem with the arguments given: at `path`, a JSON Pointer into them (`/token`), or, with
  * none, with the whole.

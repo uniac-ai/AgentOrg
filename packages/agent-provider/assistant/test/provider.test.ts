@@ -19,7 +19,7 @@ import {
   type SettingsRoot,
   tools,
 } from "@agentorg/interfaces";
-import { NotConnected, Refused } from "@agentorg/sdk";
+import { Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
 import type { Context } from "cordis";
 import type { z } from "zod";
@@ -50,6 +50,11 @@ async function until(condition: () => boolean | Promise<boolean>, what: string) 
 }
 /** The worker's reply, sent to the newest message. */
 const say = (content: string) => [sendOf(content)];
+/** What management gives an agent of the Assistant template: its words, and no skill. */
+const fresh = (text = "You are an assistant in AgentOrg."): Root[] => [
+  { mounted: "instructions", capability: "instructions", arguments: { text } },
+  { mounted: "skills", capability: "skills", arguments: { skills: [] } },
+];
 
 /** `plugins` are those the provider carries. */
 async function setup(
@@ -164,10 +169,21 @@ async function setup(
     "the caller's bindings",
   );
   const agents = caller.slots.agents.call;
+  /** Give the provider what is mounted on `agent`, as management does, once it can be reached. */
+  const give = (agent: string, mounted: Root[] = fresh()) =>
+    until(
+      () =>
+        agents.mounted({ agent, mounted }).then(
+          () => true,
+          () => false,
+        ),
+      "the list to be given",
+    );
 
-  /** Make an Assistant and connect the caller to its chat. */
+  /** Make an Assistant, give it its list as management does, and connect the caller to its chat. */
   const create = async (name = "Scout") => {
     const answer = await agents.create({ creatable: "assistant", name, answers: {} });
+    await give(answer.agent);
     hub.state.bind(PERSON, {
       consumer: asks.actorId,
       slot: "chat",
@@ -208,6 +224,7 @@ async function setup(
     person,
     join_,
     agents,
+    give,
     create,
     talk,
     one,
@@ -242,8 +259,8 @@ test("it offers Assistant, and refuses what it doesn't have", async (t) => {
 
 test("an Assistant is made running, bound to the model, with no store and nothing of its own to call", async (t) => {
   const s = await setup(t);
-  const { agent, settings, chat: chatName } = await s.create();
-  assert.deepEqual([settings, chatName], ["settings", "chat"]);
+  const { agent, chat: chatName } = await s.create();
+  assert.equal(chatName, "chat");
   assert.deepEqual(await s.standing({ agent }), { state: "running" });
   // A provider that isn't a manager gave the agent its own binding to the model.
   assert.deepEqual(
@@ -361,9 +378,9 @@ test("a provider restart brings running agents back, and leaves stopped ones sto
   assert.deepEqual(await s.texts(), ["user: remember this", "assistant: ok"]);
 });
 
-test("a turn the provider's restart cut off goes on when it is back", async (t) => {
+test("a turn the provider's restart cut off goes on once the agent is given what is mounted on it again", async (t) => {
   const s = await setup(t);
-  await s.create();
+  const { agent } = await s.create();
   let release = () => {};
   s.gates.push(
     new Promise<void>((resolve) => {
@@ -374,6 +391,11 @@ test("a turn the provider's restart cut off goes on when it is back", async (t) 
   await until(() => s.requests.length === 1, "the request");
   await s.restart();
   release();
+  // Back, it holds nothing of what is mounted on it: the turn waits for management to give it.
+  await until(() => s.caller.slots.agents.bound && s.hub.connected(agent), "the agent to be back");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(s.requests.length, 1);
+  await s.give(agent);
   await until(() => s.requests.length === 2, "the turn to go on");
   assert.match(String(s.requests[1]?.input.at(-1)?.content), /cut off by a restart/);
   await until(async () => (await s.texts()).at(-1) === "assistant: ok", "its reply");
@@ -429,10 +451,19 @@ You act only through your tools, and your tools are exactly the connections the 
 Before you promise to do something, check that one of your tools does it. A connection you are given later shows up as new tools at your next turn; until then, don't say you can use it.
 Keep replies short and plain.`;
 
-test("settings and an exposed tools@1 reach the agent as they do any engine", async (t) => {
+test("what is mounted, settings and an exposed tools@1 reach the agent as they do any engine", async (t) => {
   const s = await setup(t);
-  const { agent, settings } = await s.create();
-  let instructions = "You keep the docs.";
+  const { agent } = await s.create();
+  const give = (instructions: string) =>
+    s.give(agent, [
+      ...fresh(instructions).slice(0, 1),
+      {
+        mounted: "skills",
+        capability: "skills",
+        arguments: { skills: [{ name: "review", description: "Review a change." }] },
+      },
+    ]);
+  await give("You keep the docs.");
   const made = s.hub.state.createActor(PERSON, { name: "Management" });
   const management = await s.join_(
     connect({
@@ -443,16 +474,10 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
     }),
   );
   management.exports.settings.implement({
-    get: async () => ({
-      mounted: [
-        { mounted: "instructions", capability: "instructions", arguments: { text: instructions } },
-        {
-          mounted: "skills",
-          capability: "skills",
-          arguments: { skills: [{ name: "review", description: "Review a change." }] },
-        },
-      ] as Root[],
-    }),
+    // What is mounted comes to its provider; the agent reads only its skills here.
+    get: async () => {
+      throw new Refused("unimplemented", "Not read.");
+    },
     skill: async () => ({ text: "# Review" }),
   });
   management.exports.tools.implement({
@@ -462,7 +487,7 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
   });
   s.hub.state.bind(PERSON, {
     consumer: agent,
-    slot: settings,
+    slot: "settings",
     provider: made.actorId,
     export: "settings",
   });
@@ -476,7 +501,7 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
     ["settings__skill", "lookup__search"],
   );
   // An agent made when the template said more keeps those words, and is told the template's now.
-  instructions = `${EARLIER}\n\nWhat you are for: docs.`;
+  await give(`${EARLIER}\n\nWhat you are for: docs.`);
   const request = await s.turn("and now?");
   assert.ok(
     request.instructions.startsWith("You are an assistant in AgentOrg.\n\nWhat you are for: docs."),
@@ -484,77 +509,52 @@ test("settings and an exposed tools@1 reach the agent as they do any engine", as
 });
 
 /**
- * A stand-in for management's settings, bound to `agent` at `slot`: its tree names the plugins
- * `names` gives when asked, each as a root of the agent's executor with the arguments `settings`
- * has for it, and `changed` tells the agent they changed.
+ * What management gives `agent`: its words as made, no skill, and each plugin `names` gives as its
+ * executor's, with the arguments `settings` has for it; given now, and again with `changed`.
  */
-async function settingsOf(
+async function mountedOf(
   s: Awaited<ReturnType<typeof setup>>,
   agent: string,
-  slot: string,
   names: () => string[],
   settings: Record<string, Record<string, string>> = {},
 ) {
-  const made = s.hub.state.createActor(PERSON, { name: "Management" });
-  const management = await s.join_(
-    connect({
-      hubUrl: s.hubUrl,
-      actorId: made.actorId,
-      credential: made.credential as string,
-      exports: { settings: agentSettings2 },
-    }),
-  );
-  management.exports.settings.implement({
-    get: async () => ({
-      mounted: [
-        {
-          mounted: "instructions",
-          capability: "instructions",
-          arguments: { text: "You keep the docs." },
-        },
-        { mounted: "skills", capability: "skills", arguments: { skills: [] } },
-        ...names().map((name) => ({
-          mounted: name,
-          capability: name,
-          arguments: settings[name] ?? {},
-          provider: s.made.actorId,
-        })),
-      ] as Root[],
-    }),
-    skill: async () => {
-      throw new Refused("unknown", "No skill is exposed.");
-    },
-  });
-  s.hub.state.bind(PERSON, { consumer: agent, slot, provider: made.actorId, export: "settings" });
-  return { changed: () => management.exports.settings.emit("changed", {}, { to: agent }) };
+  const changed = () =>
+    s.give(agent, [
+      ...fresh(),
+      ...names().map((name) => ({
+        mounted: name,
+        capability: name,
+        arguments: settings[name] ?? {},
+        provider: s.made.actorId,
+      })),
+    ]);
+  await changed();
+  return { changed };
 }
 const offered = (request: Request) => request.tools?.map((tool) => tool.name) ?? [];
 
-test("an agent holds the plugins its settings name, of those its provider carries: from when its settings are bound, at each turn, and when told they changed, with no restart", async (t) => {
+test("an agent holds the plugins its list names, of those its provider carries: once it is given, and given again, with no restart", async (t) => {
   const said: string[] = [];
   const s = await setup(t, [saying("notes", said), saying("search", said)]);
-  const { agent, settings } = await s.create();
+  const { agent } = await s.create();
   let names = ["notes"];
-  const management = await settingsOf(s, agent, settings, () => names, { notes: { as: "mine" } });
-  // Bound, with no message sent: what its settings name is loaded, with its settings.
-  await until(() => said.includes("notes loaded as mine"), "the plugin its settings name");
-  // Not told of a change, it still reads its settings for each turn: a turn is never behind
-  // them, and what stays named stays loaded.
+  const management = await mountedOf(s, agent, () => names, { notes: { as: "mine" } });
+  // Given, with no message sent: what its list names is loaded, with its settings, as it answers.
+  assert.deepEqual(said, ["notes loaded as mine"]);
+  // Given another, what stays named stays loaded, and a turn offers what it names.
   names = ["notes", "search"];
+  await management.changed();
   assert.deepEqual(offered(await s.turn("hello")), ["notes__do", "search__do"]);
   assert.deepEqual(said, ["notes loaded as mine", "search loaded"]);
-  // Told they changed, with no message sent, it unloads what is no longer named, and stays up.
+  // Given another, with no message sent, it unloads what is no longer named, and stays up.
   names = ["search"];
-  await until(() => {
-    management.changed();
-    return said.includes("notes unloaded");
-  }, "the change to be heard");
+  await management.changed();
   assert.deepEqual(said, ["notes loaded as mine", "search loaded", "notes unloaded"]);
   assert.deepEqual(await s.standing({ agent }), { state: "running" });
   assert.deepEqual(offered(await s.turn("and now?")), ["search__do"]);
 });
 
-test("a plugin its settings name that it can't hold, not carried or not loading, it runs without: it holds the others, says which and why while running, and holds it at a later turn once it can", async (t) => {
+test("a plugin its list names that it can't hold, not carried or not loading, it runs without: it holds the others, says which and why while running, and holds it at a later turn once it can", async (t) => {
   const said: string[] = [];
   let room = false;
   const roomy: AgentPlugin = {
@@ -566,9 +566,9 @@ test("a plugin its settings name that it can't hold, not carried or not loading,
     },
   };
   const s = await setup(t, [saying("notes", said), roomy]);
-  const { agent, settings } = await s.create();
+  const { agent } = await s.create();
   let names = ["notes"];
-  const management = await settingsOf(s, agent, settings, () => names);
+  const management = await mountedOf(s, agent, () => names);
   const running = (detail?: string) =>
     until(
       async () =>
@@ -576,11 +576,11 @@ test("a plugin its settings name that it can't hold, not carried or not loading,
         JSON.stringify({ state: "running", ...(detail ? { detail } : {}) }),
       `the agent to be running${detail ? `: ${detail}` : ""}`,
     );
-  await until(() => said.includes("notes loaded"), "the plugin its settings name");
-  // Told its settings changed, and they name one its provider doesn't carry and one that doesn't
-  // load: it runs on without both, keeps what it holds, and says each, with why.
+  await until(() => said.includes("notes loaded"), "the plugin its list names");
+  // Given a list that names one its provider doesn't carry and one that doesn't load: it runs on
+  // without both, keeps what it holds, and says each, with why.
   names = ["notes", "memory", "roomy"];
-  management.changed();
+  await management.changed();
   const both =
     "It runs without memory: this provider doesn't carry it.\nIt runs without roomy: no room.";
   await running(both);
@@ -592,13 +592,15 @@ test("a plugin its settings name that it can't hold, not carried or not loading,
   await running("It runs without memory: this provider doesn't carry it.");
   // No longer named, the status says nothing more.
   names = ["notes", "roomy"];
+  await management.changed();
   await s.turn("again?");
   await running();
   assert.deepEqual(said, ["notes loaded", "roomy loaded"]);
-  // Back after a restart, with settings that name one it can't hold now, it says so before any
-  // turn: what it holds as it joins the Hub is said.
+  // Back after a restart and given its list again, naming one it can't hold now, it says so
+  // before any turn.
   room = false;
   await s.restart();
+  await management.changed();
   await running("It runs without roomy: no room.");
 });
 
@@ -625,12 +627,12 @@ test("what a running agent's status says of the plugins it runs without: a sente
   assert.equal(withoutOf([long, short])?.length, 2000);
 });
 
-test("an agent that joins the Hub again unloads the plugins it held before, and holds what its settings name afresh", async (t) => {
+test("an agent that joins the Hub again unloads the plugins it held before, and holds what its last list names afresh", async (t) => {
   const said: string[] = [];
   const s = await setup(t, [saying("notes", said)]);
-  const { agent, settings } = await s.create();
-  await settingsOf(s, agent, settings, () => ["notes"]);
-  await until(() => said.includes("notes loaded"), "the plugin its settings name");
+  const { agent } = await s.create();
+  await mountedOf(s, agent, () => ["notes"]);
+  await until(() => said.includes("notes loaded"), "the plugin its list names");
   // Another channel for the same Actor takes its place, then goes: its connection has ended.
   const { credential } = JSON.parse(readFileSync(join(s.dir, "agents.json"), "utf8"))[agent];
   const other = await connect({
@@ -712,7 +714,7 @@ test("the local store answers as kv@1: JSON values, ordered keys, pages", async 
   assert.deepEqual(await store.get({ key: "other" }), {});
 });
 
-test("it offers the capabilities it carries, mounts one its agent's settings name, and says in the agent's status what it holds", async (t) => {
+test("it offers the capabilities it carries, mounts one its agent's list names, and says in the agent's status what it holds", async (t) => {
   const said: string[] = [];
   let room = true;
   const roomy: AgentPlugin = {
@@ -734,13 +736,14 @@ test("it offers the capabilities it carries, mounts one its agent's settings nam
     (await s.capabilities.capabilities({})).capabilities.map(({ id }) => id),
     ["notes", "roomy"],
   );
-  const { agent, settings } = await s.create();
+  const { agent } = await s.create();
   let names: string[] = [];
-  const management = await settingsOf(s, agent, settings, () => names);
+  const management = await mountedOf(s, agent, () => names);
   const mount = (capability: string) => s.capabilities.mount({ agent, capability, arguments: {} });
-  // Not named by its settings: management keeps what is mounted, and names it there first.
+  // Not named by its list: management keeps what is mounted, and gives a list naming it first.
   await assert.rejects(mount("notes"), refused("state"));
   names = ["notes"];
+  await management.changed();
   assert.deepEqual(await mount("notes"), { mounted: "notes" });
   assert.ok(said.includes("notes loaded"));
   const held = async () =>
@@ -749,7 +752,7 @@ test("it offers the capabilities it carries, mounts one its agent's settings nam
       state,
       ...(parent ? { parent } : {}),
     }));
-  // What every agent holds, then its instructions and skills, which its settings name first.
+  // What every agent holds, then its instructions and skills, which its list names first.
   const bundled = [
     "agent",
     "store",
@@ -765,6 +768,7 @@ test("it offers the capabilities it carries, mounts one its agent's settings nam
   // One that can't be mounted is said with why, and nothing is mounted.
   room = false;
   names = ["notes", "roomy"];
+  await management.changed();
   assert.deepEqual(await mount("roomy"), { problems: [{ message: "No room." }] });
   assert.deepEqual((await s.agents.status({ agent })).mounted?.at(-1), {
     name: "roomy",
@@ -772,10 +776,10 @@ test("it offers the capabilities it carries, mounts one its agent's settings nam
     state: "failed",
     detail: "No room.",
   });
-  // Unmounted once its settings no longer name it; refused while they still do.
+  // Unmounted once its list no longer names it; refused while it still does.
   await assert.rejects(s.capabilities.unmount({ agent, mounted: "notes" }), refused("state"));
   names = [];
-  management.changed();
+  await management.changed();
   assert.deepEqual(await s.capabilities.unmount({ agent, mounted: "notes" }), {});
   assert.ok(said.includes("notes unloaded"));
   assert.deepEqual(await held(), bundled);
@@ -799,9 +803,9 @@ test("a capability asks the agent's model with its own words, under the agent's 
     },
   };
   const s = await setup(t, [asker]);
-  const { agent, settings } = await s.create();
+  const { agent } = await s.create();
   let names = ["asker"];
-  const management = await settingsOf(s, agent, settings, () => names);
+  const management = await mountedOf(s, agent, () => names);
   await until(() => asking.length > 0, "the asker to be held");
   await s.agents.setModel({ agent, model: "gpt-b" });
   const question = {
@@ -838,7 +842,7 @@ test("a capability asks the agent's model with its own words, under the agent's 
   await until(() => s.requests.length > from + 2, "the third question");
   const third = (s.requests.at(-1) as { requestId: string }).requestId;
   names = [];
-  management.changed();
+  await management.changed();
   await until(() => s.cancelled.includes(third), "the question to be cancelled with its asker");
 });
 
@@ -859,8 +863,8 @@ test("a capability's pass is told whose conversation a request is for, and what 
     },
   };
   const s = await setup(t, [whose]);
-  const { agent, settings } = await s.create();
-  await settingsOf(s, agent, settings, () => ["whose"]);
+  const { agent } = await s.create();
+  await mountedOf(s, agent, () => ["whose"]);
   await until(
     async () =>
       ((await s.agents.status({ agent })).mounted ?? []).some(({ name }) => name === "whose"),

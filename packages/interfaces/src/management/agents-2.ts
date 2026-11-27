@@ -3,7 +3,8 @@ import { z } from "zod";
 import { Id } from "../base/names.js";
 import { CapabilityId } from "../exposure/views.js";
 import { AgentStatus, HELD_MAX, HeldCapability } from "../provider/agent-provider.js";
-import { Arguments, CapabilityDefinition, Mounting } from "../provider/capability-provider.js";
+import { CapabilityDefinition, Mounting } from "../provider/capability-provider.js";
+import { Arguments } from "../provider/mounted.js";
 import {
   ActorName,
   Avatar,

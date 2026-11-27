@@ -157,7 +157,9 @@ function withoutLater(parsed: unknown) {
  * Run management as an Actor exporting `agents@1`, `connections@1`, `skills@1` and, as `settings`,
  * `agent.settings@2`. It keeps only what the Hub can't know. A provider is connected by exposing
  * its export to this Actor: the Hub's slots are the list of them, and what is exposed to an agent
- * is the Hub's bindings. No status is stored, and no secret reaches it to keep.
+ * is the Hub's bindings. No status is stored, and no secret reaches it to keep. Each agent's
+ * provider is given what is mounted on the agent, with `agent.provider@2`'s `mounted`: when it is
+ * made, whenever that changes, and whenever the provider is there anew.
  */
 export async function startManager(options: ManagerOptions): Promise<Manager> {
   const log = options.log ?? quiet;
@@ -259,7 +261,6 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             .map((actor) => [actor.actorId, actor]),
         );
       const nameOf = async (actor: string) => (await hub.actors.get({ actorId: actor })).name;
-      const changed = (agent: string) => ctx.exports.settings.emit("changed", {}, { to: agent });
       /** What every one of these answers; one that doesn't is logged and left out. */
       const fromEach = async <T, R>(list: T[], read: (one: T) => Promise<R>) =>
         (await Promise.allSettled(list.map(read))).flatMap((result) => {
@@ -298,6 +299,66 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             }
           : {};
       const settingsOf = (agent: string) => creating.get(agent) ?? recordOf(agent);
+      /**
+       * What is mounted on an agent now, as its settings answer it and its provider is given it:
+       * the tree, with the words management tells it of itself and the skills exposed to it.
+       */
+      const listOf = (agent: string) => {
+        const record = settingsOf(agent);
+        const { instructions, purpose, parent, skills: names } = record;
+        // A message from its maker says it is from its id: this says whose that is, while the
+        // maker is here. Its name is the maker's own words, kept to one line.
+        const maker = parent && records.agents[parent.agent] ? parent : undefined;
+        const told = [
+          instructions,
+          ...(purpose ? [`What you are for: ${purpose}`] : []),
+          ...(maker
+            ? [
+                `You were made by the agent ${JSON.stringify(maker.name.replace(/\s+/g, " ").trim())} (${maker.agent}). Its messages to you say they are from ${maker.agent}.`,
+              ]
+            : []),
+        ].join("\n\n");
+        const exposed = names.flatMap((name) => library.entry(name) ?? []);
+        return treeOf(record, options.actorId, told, exposed);
+      };
+      /** Each agent's giving now, so each is given its list after the one before has answered. */
+      const giving = new Map<string, Promise<void>>();
+      /**
+       * Give an agent's provider what is mounted on the agent now, and settle once it has answered:
+       * the list is made as it goes, so the last given is the newest. A provider that isn't there,
+       * or doesn't answer, is given every list when it is there again: that is logged, and
+       * nothing fails for it.
+       */
+      const give = (agent: string) => {
+        const done = (giving.get(agent) ?? Promise.resolve()).then(async () => {
+          const record = creating.get(agent) ?? records.agents[agent];
+          const provider = agentProviders().find((one) => one.actor === record?.provider);
+          if (!provider) return;
+          try {
+            await provider.call.mounted({ agent, mounted: listOf(agent) });
+          } catch (error) {
+            log.warn(`Giving an agent what is mounted on it: ${messageOf(error)}`, { agent });
+          }
+        });
+        giving.set(agent, done);
+        void done.then(() => {
+          if (giving.get(agent) === done) giving.delete(agent);
+        });
+        return done;
+      };
+      /** Give every agent of `actor`, or of every agent provider there now, its list. */
+      const giveAll = (actor?: string) => {
+        for (const [agent, record] of Object.entries(records.agents))
+          if (actor === undefined || record.provider === actor) void give(agent);
+      };
+      /**
+       * What is mounted on the agent changed: it is told so, and its provider is given its list.
+       * It settles once the provider has answered.
+       */
+      const changed = (agent: string) => {
+        ctx.exports.settings.emit("changed", {}, { to: agent });
+        return give(agent);
+      };
       const originOf = (connection: string) => {
         const origin = records.connections[connection];
         if (!origin) throw new Refused("unknown", `Management has no connection ${connection}.`);
@@ -367,17 +428,20 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           log.warn(`Removing ${what}: ${messageOf(error)}`);
           await hub.actors.close({ actorId: what });
         });
+      /** Delete a skill, and settle once each agent it was exposed to has been given that. */
       const dropSkill = (name: string) => {
         library.remove(name);
         delete records.copies[name];
         records.uncopied = records.uncopied.filter((one) => one !== name);
+        const told: Promise<void>[] = [];
         for (const [agent, record] of Object.entries(records.agents))
           if (record.skills.includes(name)) {
             record.skills = record.skills.filter((skill) => skill !== name);
             for (const unit of record.units)
               unit.skills = unit.skills.filter((skill) => skill !== name);
-            changed(agent);
+            told.push(changed(agent));
           }
+        return Promise.all(told);
       };
 
       const stacks = createStacks({
@@ -395,6 +459,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         openActors: open,
         nameOf,
         changed,
+        give,
+        listOf,
         fromEach,
         exposeConnection,
         reachPerson: async (provider, exported) =>
@@ -419,6 +485,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
         serial: stacks.serial,
         providers: capabilityProviders,
         changed,
+        give,
         wire: (agent, record, root, made, skillOf) =>
           stacks.wireMade(agent, record, root, made, skillOf),
         unwire: (agent, record, root) => stacks.unwireMade(agent, record, root),
@@ -493,6 +560,12 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             for (const [name, author] of Object.entries(kept))
               if (author === agent) delete kept[name];
           save();
+          // Those it made are told of it no more.
+          await Promise.all(
+            Object.entries(records.agents).flatMap(([made, one]) =>
+              one.parent?.agent === agent ? [give(made)] : [],
+            ),
+          );
           return {};
         });
       /**
@@ -569,6 +642,8 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             return void (await stacks.reachAgents((reached) => reached === actor));
           // A unit provider that is back may serve newer skills than were copied here.
           if (actor && unitProviders().some((one) => one.actor === actor)) void refreshing();
+          // An agent provider that is back holds nothing of what is mounted on its agents.
+          giveAll(actor);
           await Promise.all([
             stacks.holdOwns(actor),
             stacks.reachHeld(actor),
@@ -588,6 +663,14 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       ctx.onExposed(owns);
       // And a unit provider exposed to it may serve newer skills than were copied here.
       ctx.onExposed(() => void refreshing());
+      // And an agent provider exposed to it anew, as at management's start, is given its agents'
+      // lists.
+      let providersNow = new Set<string>();
+      ctx.onExposed(() => {
+        const now = new Set(agentProviders().map(({ actor }) => actor));
+        for (const actor of now) if (!providersNow.has(actor)) giveAll(actor);
+        providersNow = now;
+      });
       /** The person's own handlers, which an agent's control tools call after their checks. */
       const personHandlers: Partial<
         Record<"agents" | "connections" | "skills", Record<string, Handler>>
@@ -708,24 +791,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       });
 
       ctx.exports.settings.implement({
-        get: (_, { caller }) => {
-          const record = settingsOf(caller);
-          const { instructions, purpose, parent, skills: names } = record;
-          // A message from its maker says it is from its id: this says whose that is, while the
-          // maker is here. Its name is the maker's own words, kept to one line.
-          const maker = parent && records.agents[parent.agent] ? parent : undefined;
-          const told = [
-            instructions,
-            ...(purpose ? [`What you are for: ${purpose}`] : []),
-            ...(maker
-              ? [
-                  `You were made by the agent ${JSON.stringify(maker.name.replace(/\s+/g, " ").trim())} (${maker.agent}). Its messages to you say they are from ${maker.agent}.`,
-                ]
-              : []),
-          ].join("\n\n");
-          const exposed = names.flatMap((name) => library.entry(name) ?? []);
-          return { mounted: treeOf(record, options.actorId, told, exposed) };
-        },
+        get: (_, { caller }) => ({ mounted: listOf(caller) }),
         skill: ({ name, path: file }, { caller }) => {
           const text = settingsOf(caller).skills.includes(name)
             ? library.read(name, file)
@@ -876,7 +942,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             if (!record.skills.includes(input.skill)) {
               record.skills.push(input.skill);
               save();
-              changed(input.agent);
+              await changed(input.agent);
             }
             return {};
           }),
@@ -892,7 +958,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
             if (record.skills.includes(input.skill)) {
               record.skills = record.skills.filter((skill) => skill !== input.skill);
               save();
-              changed(input.agent);
+              await changed(input.agent);
             }
             return {};
           }),
@@ -1240,7 +1306,7 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
       });
 
       personOnly(ctx.exports.skills, "skills").implement({
-        add: (input, { caller }) => {
+        add: async (input, { caller }) => {
           const agent = agentOf(caller);
           if (agent) {
             // An agent writes a skill of its own: it can't read a folder, or replace one there is.
@@ -1274,8 +1340,11 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
           // Replaced by the person, it's the person's.
           delete records.authors.skills[added.name];
           save();
-          for (const [agent, record] of Object.entries(records.agents))
-            if (record.skills.includes(added.name)) changed(agent);
+          await Promise.all(
+            Object.entries(records.agents).flatMap(([agent, record]) =>
+              record.skills.includes(added.name) ? [changed(agent)] : [],
+            ),
+          );
           return added;
         },
         list: (_, { caller }) => ({
@@ -1293,13 +1362,14 @@ export async function startManager(options: ManagerOptions): Promise<Manager> {
               .map(([agent]) => agent),
           };
         },
-        remove: ({ name }, { caller }) => {
+        remove: async ({ name }, { caller }) => {
           const agent = agentOf(caller);
           if (!library.has(name) || (agent && records.authors.skills[name] !== agent))
             throw new Refused("unknown", `Management has no skill ${name}.`);
-          dropSkill(name);
+          const told = dropSkill(name);
           delete records.authors.skills[name];
           save();
+          await told;
           return {};
         },
       });

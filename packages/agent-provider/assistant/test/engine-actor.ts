@@ -1,9 +1,18 @@
 // The engine as the tests host it: an Actor with a store slot in place of a provider's own files,
 // holding what an executor gives every agent: its connections, and its instructions and skills
-// from the tree its settings give.
-import { agentSettings2, capability, chat, kv, llmSession, tools } from "@agentorg/interfaces";
+// from the tree it is given.
+import {
+  agentSettings2,
+  capability,
+  chat,
+  kv,
+  llmSession,
+  type SettingsRoot,
+  tools,
+} from "@agentorg/interfaces";
 import { defineActor } from "@agentorg/sdk";
 import type { Context } from "cordis";
+import type { z } from "zod";
 import type { KvStore } from "../src/bundled.ts";
 import { connections } from "../src/capabilities/connections.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
@@ -12,7 +21,7 @@ import { type AgentHub, model } from "../src/connector.ts";
 import { startEngine } from "../src/engine.ts";
 import { type AgentContext, type AgentPlugins, createPluginHost } from "../src/plugins.ts";
 
-/** What the agent is told while no `settings` is bound. */
+/** What the agent is told when it is given no tree. */
 export const INSTRUCTIONS = "You are the agent under test.";
 /** What its template gave before `INSTRUCTIONS`. */
 export const EARLIER =
@@ -24,9 +33,13 @@ export const SELF = "act_executor";
 export const engines: ReturnType<typeof startEngine>[] = [];
 /**
  * The plugins the next engine started holds, as a test sets them, beside what an executor gives
- * every agent; by default, only that.
+ * every agent; by default, only that. And the tree of what is mounted on it, as its host was last
+ * given it; by default, it is given none.
  */
-export const given: { plugins?: AgentContext } = {};
+export const given: {
+  plugins?: AgentContext;
+  mounted?: () => z.input<typeof SettingsRoot>[] | undefined;
+} = {};
 
 const quiet = { info() {}, warn() {}, error() {} };
 
@@ -83,9 +96,11 @@ export default defineActor({
     let engine: ReturnType<typeof startEngine> | undefined;
     const chosen = async () => engine?.chosen();
     const agent = everyAgent(ctx as unknown as AgentHub, store, chosen, given.plugins);
+    const { mounted } = given;
     engine = startEngine(ctx, {
       store,
       instructions: () => INSTRUCTIONS,
+      ...(mounted ? { mounted: mounted as () => z.infer<typeof SettingsRoot>[] | undefined } : {}),
       self: SELF,
       ...agent,
     });

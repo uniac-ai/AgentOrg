@@ -22,13 +22,14 @@ import {
   HELD_MAX,
   HeldCapability,
 } from "../provider/agent-provider.js";
-import { Arguments, CapabilityDefinition, Mounting } from "../provider/capability-provider.js";
+import { CapabilityDefinition, Mounting } from "../provider/capability-provider.js";
 import {
   ConnectionSecrets,
   ConnectionState,
   ConnectionStatus,
   ConnectionTarget,
 } from "../provider/connection.js";
+import { Arguments } from "../provider/mounted.js";
 import { CapabilityPlugin } from "../provider/plugins.js";
 import { SKILL_FILE_MAX, SkillName, SkillPath } from "../provider/skills.js";
 import { Problem, ResultKind, Unit } from "../provider/unit-provider.js";
