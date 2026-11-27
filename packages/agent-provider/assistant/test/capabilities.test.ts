@@ -4,6 +4,7 @@ import { chat, tools } from "@agentorg/interfaces";
 import { describeInterface, NotConnected } from "@agentorg/sdk";
 import type { Context } from "cordis";
 import { connections } from "../src/capabilities/connections.ts";
+import { control } from "../src/capabilities/control.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
 import { skills } from "../src/capabilities/skills.ts";
 import type { AgentHub } from "../src/connector.ts";
@@ -247,5 +248,46 @@ test("instructions and skills tell the agent's words first, then what each skill
     none.functions.map(({ slot, name }) => `${slot}__${name}`),
     ["files__read"],
   );
+  await plugins.close();
+});
+
+test("while management can't answer at settings and control, its four tools aren't offered and each slot is left out as not connected; the skills are still named, and the four come back with it", async () => {
+  let down = true;
+  const listing = (names: string[]) => async () => {
+    if (down) throw new NotConnected("management");
+    return { tools: names.map((name) => ({ name, inputSchema: { type: "object" } })) };
+  };
+  const hub = hubOf([
+    toolsSlot("settings", listing(["skill"])),
+    toolsSlot("control", listing(["capability_list", "capability_mount", "capability_unmount"])),
+  ]);
+  const plugins = await createPluginHost(log, [skills(), control()]).open("agent", {
+    store: memory(),
+    provides: ["hub"],
+  });
+  await plugins.mount(connector(hub));
+  await plugins.mount(connections());
+  await plugins.hold([{ name: "skills", settings: { skills: [REVIEW] } }, { name: "control" }]);
+  await plugins.turn();
+  const away = plugins.pass(fresh());
+  assert.deepEqual(away.functions, []);
+  assert.deepEqual(away.leftOut, [
+    { slot: "settings", reason: "not_connected" },
+    { slot: "control", reason: "not_connected" },
+  ]);
+  assert.deepEqual(owners(away), ["skills"]);
+  down = false;
+  await plugins.turn();
+  const back = plugins.pass(fresh());
+  assert.deepEqual(
+    back.functions.map(({ slot, name }) => `${slot}__${name}`),
+    [
+      "settings__skill",
+      "control__capability_list",
+      "control__capability_mount",
+      "control__capability_unmount",
+    ],
+  );
+  assert.deepEqual(back.leftOut, []);
   await plugins.close();
 });
