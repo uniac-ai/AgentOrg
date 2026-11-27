@@ -1,0 +1,92 @@
+{
+  "modules": {
+    "core": ["packages/wire", "packages/sdk", "packages/interfaces"],
+    "person": [
+      "packages/shell",
+      "packages/sdk/src/cli.ts",
+      "packages/sdk/src/person-commands.ts",
+      "packages/hub/test/cli.test.ts"
+    ],
+    "coordinator": [
+      "packages/hub",
+      "packages/manager",
+      "packages/mcp",
+      "packages/app/src/gateway.ts",
+      "packages/app/src/api.ts",
+      "packages/app/src/live.ts",
+      "packages/app/src/notes.ts",
+      "packages/app/src/oauth.ts",
+      "packages/app/src/signin.ts",
+      "packages/app/static",
+      "packages/app/test/gateway.test.ts",
+      "packages/app/test/api.test.ts",
+      "packages/app/test/oauth.test.ts"
+    ],
+    "agent provider": [
+      "packages/assistant",
+      "packages/looper",
+      "packages/chatgpt",
+      "packages/memory"
+    ],
+    "capability": ["packages/computer"],
+    "all-in-one": [
+      "packages/app/package.json",
+      "packages/app/src/cli.ts",
+      "packages/app/src/programs.ts",
+      "packages/app/src/index.ts",
+      "packages/app/src/installed.ts",
+      "packages/app/src/service.ts",
+      "packages/app/src/updates.ts",
+      "packages/app/scripts/pack.js",
+      "packages/app/test"
+    ]
+  },
+  "outside names": {
+    "@agentorg/computer": "capability",
+    "@agentorg/computer-sdk": "capability"
+  },
+  "crossings in src": {
+    "packages/app/src/gateway.ts": {
+      "all-in-one": "closes the package Actors an earlier release ran and starts the programs, from programs.ts",
+      "person": "resolves @agentorg/shell's package.json to find the frontend build it carries"
+    },
+    "packages/computer/src/provider.ts": {
+      "coordinator": "runs @agentorg/mcp's Connection to answer tools@1 for each computer's MCP endpoint, and its parseConnection to check a remote computer's address"
+    },
+    "packages/sdk/src/cli.ts": {
+      "coordinator": "loads @agentorg/hub by name to run a Hub for `agentorg hub`"
+    }
+  },
+  "crossings in tests and scripts": {
+    "packages/app/test/api.test.ts": {
+      "all-in-one": "takes serveSocket from the package's index.ts, which re-exports it from api.ts"
+    },
+    "packages/app/test/gateway.test.ts": {
+      "all-in-one": "takes startApp and SignIn from the package's index.ts, which re-exports them from gateway.ts and signin.ts"
+    },
+    "packages/app/test/oauth.test.ts": {
+      "all-in-one": "takes oauthRoute from the package's index.ts, which re-exports it from oauth.ts"
+    },
+    "packages/assistant/test/provider.test.ts": {
+      "coordinator": "stands up a real Hub to test against"
+    },
+    "packages/assistant/test/run-path.test.ts": {
+      "coordinator": "stands up a real Hub to test against"
+    },
+    "packages/chatgpt/test/program.test.ts": {
+      "coordinator": "stands up a real Hub to test against"
+    },
+    "packages/chatgpt/test/session-version.test.ts": {
+      "coordinator": "stands up a real Hub to test against"
+    },
+    "packages/computer/test/provider.test.ts": {
+      "coordinator": "stands up a real Hub to test against"
+    },
+    "packages/shell/scripts/build.js": {
+      "all-in-one": "reads the cli's package.json for its version, which it writes into dist/frontend.json as the release the frontend comes with"
+    },
+    "packages/shell/test/frontend.test.ts": {
+      "all-in-one": "reads the cli's package.json for its version, to check that dist/frontend.json names the same release"
+    }
+  }
+}
