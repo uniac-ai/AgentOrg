@@ -5926,8 +5926,13 @@ test("control kept mounted with no arguments, as 0.0.39 left it, is still held a
     });
   });
   // Held: its settings name it, and what it can mount, management lists it, and it reaches
-  // management's tools at control, which answer it.
-  const roots = (await settingsRead(s.agentChannel(agent))).mounted;
+  // management's tools at control, which answer it. The list that says what it can mount comes
+  // once management has read what is on offer.
+  let roots: Root[] = [];
+  await until(async () => {
+    roots = (await settingsRead(s.agentChannel(agent))).mounted;
+    return roots.some((one) => one.capability === "offered");
+  });
   assert.deepEqual(
     roots.filter((one) => one.capability === "control"),
     [{ mounted: "mnt_0039", capability: "control", arguments: {}, provider: s.agentActor.actorId }],
