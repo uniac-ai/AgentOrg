@@ -45,6 +45,7 @@ const BUNDLED = [
   "coordinator/manager",
   "agent-provider/chatgpt",
   "agent-provider/looper",
+  "agent-provider/summary",
   "agent-provider/assistant",
   "agent-provider/memory",
   "capability/computer",

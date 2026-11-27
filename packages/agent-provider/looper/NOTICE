@@ -1,9 +1,9 @@
 @agentorg/looper
 
-Its compaction is adapted from pi (https://github.com/badlogic/pi-mono): the
-summarization prompts are pi's, used as written, and the way a conversation is written out for a
-summary, the cut that keeps the latest steps, the split turn's summary and the files carried from
-one summary to the next follow pi's. pi is under the MIT License:
+Its compaction follows pi (https://github.com/badlogic/pi-mono): the cut that keeps the latest
+steps, the files carried from one summary to the next, and the message a summary is sent to the
+model in are pi's. The summary is written by what the looper's host gives; @agentorg/summary's,
+adapted from pi too, has its own notice. pi is under the MIT License:
 
 MIT License
 

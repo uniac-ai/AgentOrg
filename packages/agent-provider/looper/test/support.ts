@@ -1,6 +1,7 @@
 import {
   type Card,
   type CardAnswer,
+  type Compacted,
   type Conversed,
   createLooper,
   Entry,
@@ -11,12 +12,44 @@ import {
   type Picture,
   Refusal,
   type Summarize,
-  summarize,
+  type ToCompact,
   type Tool,
   textOf,
 } from "../src/index.ts";
 import { LAST_ACTIVE } from "../src/main.ts";
 import type { Part } from "../src/told.ts";
+
+/** What a stand-in summarizer was given: what to summarize and the host's files; and what it gave. */
+export interface Given {
+  compacting: ToCompact;
+  files: FilesOf | undefined;
+  compacted?: Compacted;
+}
+
+/**
+ * What writes summaries in these tests unless one says otherwise, keeping in `given` what it was
+ * given: one request to the work's model, with fixed words, whose answer is the summary, with the
+ * files the host names for the calls it summarizes. These tests are of what the loop does with a
+ * summary; how one is written is the summary package's.
+ */
+export const standIn =
+  (given: Given[] = []): Summarize =>
+  async (ask, compacting, files) => {
+    const one: Given = { compacting, files };
+    given.push(one);
+    const named = [...compacting.history, ...compacting.prefix].flatMap((item) =>
+      item.type === "function_call" ? [files?.(item)] : [],
+    );
+    const read = named.flatMap((paths) => paths?.read ?? []);
+    const changed = named.flatMap((paths) => paths?.changed ?? []);
+    one.compacted = {
+      summary: await ask("Summarize the conversation.", "Summarize the conversation."),
+      upTo: compacting.upTo,
+      ...(read.length > 0 ? { read } : {}),
+      ...(changed.length > 0 ? { changed } : {}),
+    };
+    return one.compacted;
+  };
 
 /**
  * A looper whose model answers a worker's request only when the test says so, naming the request by
@@ -79,7 +112,7 @@ export function looperWith(
     summarizing?: (text: string) => OutputItem[] | Promise<OutputItem[]>;
     /** The files a call read and changed. */
     files?: FilesOf;
-    /** What summarizes a work's earlier steps: by default, the looper's own. */
+    /** What summarizes a work's earlier steps: by default, `standIn`, keeping `given`. */
     summarizer?: () => Summarize | undefined;
     /**
      * What the host tells each request's model, before the looper's own words: as words, as parts,
@@ -144,6 +177,8 @@ export function looperWith(
   const talks: { instructions: string; tools: string[]; input: string[] }[] = [];
   /** Each request for a summary, as the model got it: what it was told, and the one message. */
   const summaries: { instructions: string; text: string }[] = [];
+  /** What the stand-in summarizer was given each time, when it is the one summarizing. */
+  const given: Given[] = [];
   /** The requests still out, each by the last thing said to it and the first. */
   const open: {
     text: string;
@@ -378,7 +413,7 @@ export function looperWith(
     ...(options.stopGroup === undefined ? {} : { stopGroup: options.stopGroup }),
     ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
     ...(options.files === undefined ? {} : { files: options.files }),
-    summarizer: options.summarizer ?? (() => summarize),
+    summarizer: options.summarizer ?? (() => standIn(given)),
     ...(options.conversations === undefined ? {} : { conversations: options.conversations }),
     ...(options.pass === undefined ? {} : { pass: options.pass }),
     log: { info() {}, warn: (message) => void warnings.push(message), error() {} },
@@ -414,6 +449,7 @@ export function looperWith(
     raw,
     told,
     summaries,
+    given,
     routed,
     mains,
     mainRaw,
