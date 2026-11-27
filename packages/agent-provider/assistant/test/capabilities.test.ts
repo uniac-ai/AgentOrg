@@ -175,7 +175,7 @@ test("connections lists every exposed tools@1 slot once a turn, offers the agent
 const EARLIER = "You are an agent, as its template once said.";
 const REVIEW = { name: "review", description: "Review a change." };
 
-test("instructions and skills tell the agent's words first, then what each skill always says, as it came with them, then the skills' names, and offer the function that reads them once, in its place, through the tools at settings", async () => {
+test("instructions and skills tell the agent's words first, then what each skill always says, as it came with them, then the skills' names; the function that reads them is the tools at settings', which connections offers", async () => {
   const asked: unknown[] = [];
   const listed = [{ name: "skill", inputSchema: { type: "object" } }];
   const hub = hubOf([
@@ -225,13 +225,13 @@ test("instructions and skills tell the agent's words first, then what each skill
       ],
     ],
   );
-  // Offered before the other connections, and not again with the tools at settings.
+  // Offered once, as the tools at settings list it, in their place among the connections.
   assert.deepEqual(
     passed.functions.map(({ slot, name }) => `${slot}__${name}`),
-    ["settings__skill", "files__read"],
+    ["files__read", "settings__skill"],
   );
   assert.deepEqual(passed.leftOut, []);
-  const read = passed.functions[0];
+  const read = passed.functions[1];
   assert.deepEqual(await read?.run({ name: "review" }, "g1"), { output: "# Review", ok: true });
   assert.deepEqual(asked, [{ name: "skill", arguments: { name: "review" }, group: "g1" }]);
   // With no skills, nothing of them, and nothing to read them with but what settings lists.
@@ -247,17 +247,5 @@ test("instructions and skills tell the agent's words first, then what each skill
     none.functions.map(({ slot, name }) => `${slot}__${name}`),
     ["files__read"],
   );
-  await plugins.close();
-});
-
-test("the function that reads a skill says it can't while nothing is exposed at settings", async () => {
-  const plugins = await createPluginHost(log, [skills()]).open("agent", {
-    store: memory(),
-    provides: ["hub"],
-  });
-  await plugins.mount(connector(hubOf([])));
-  await plugins.hold([{ name: "skills", settings: { skills: [REVIEW] } }]);
-  const [read] = plugins.pass(fresh()).functions;
-  await assert.rejects(read?.run({ name: "review" }, "g1") ?? Promise.resolve(), NotConnected);
   await plugins.close();
 });

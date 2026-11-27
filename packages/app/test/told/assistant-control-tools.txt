@@ -1,100 +1,6 @@
 [
   {
     "type": "function",
-    "name": "settings__skill",
-    "description": "Read a skill: its SKILL.md, or with path a file in its folder.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "The skill's name, as your instructions list it."
-        },
-        "path": {
-          "type": "string",
-          "description": "A file in the skill's folder, relative to it."
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "additionalProperties": false
-    },
-    "strict": false
-  },
-  {
-    "type": "function",
-    "name": "control__capability_list",
-    "description": "List the capabilities you can mount, each with its provider, id, title, description and the arguments it takes, and what is mounted now on you, or on an agent you made.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "agent": {
-          "type": "string",
-          "description": "The id of an agent you made; leave it out for yourself."
-        }
-      },
-      "additionalProperties": false
-    },
-    "strict": false
-  },
-  {
-    "type": "function",
-    "name": "control__capability_mount",
-    "description": "Mount a capability capability_list gives on yourself, or on an agent you made, with the arguments it takes. It takes effect from your next message.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "agent": {
-          "type": "string",
-          "description": "The id of an agent you made; leave it out for yourself."
-        },
-        "provider": {
-          "type": "string",
-          "description": "Its provider, as capability_list gives it."
-        },
-        "capability": {
-          "type": "string",
-          "description": "Its id, as capability_list gives it."
-        },
-        "arguments": {
-          "type": "object",
-          "description": "The arguments it takes."
-        }
-      },
-      "required": [
-        "provider",
-        "capability"
-      ],
-      "additionalProperties": false
-    },
-    "strict": false
-  },
-  {
-    "type": "function",
-    "name": "control__capability_unmount",
-    "description": "Take a capability off yourself, or off an agent you made, by the id capability_list gives it under mounted.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "agent": {
-          "type": "string",
-          "description": "The id of an agent you made; leave it out for yourself."
-        },
-        "mounted": {
-          "type": "string",
-          "description": "Its id under mounted."
-        }
-      },
-      "required": [
-        "mounted"
-      ],
-      "additionalProperties": false
-    },
-    "strict": false
-  },
-  {
-    "type": "function",
     "name": "memory__edit",
     "description": "Add a line to your memory, or replace or remove one by its id.",
     "parameters": {
@@ -119,6 +25,29 @@
       },
       "required": [
         "action"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "settings__skill",
+    "description": "Read a skill: its SKILL.md, or with path a file in its folder.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The skill's name, as your instructions list it."
+        },
+        "path": {
+          "type": "string",
+          "description": "A file in the skill's folder, relative to it."
+        }
+      },
+      "required": [
+        "name"
       ],
       "additionalProperties": false
     },
@@ -313,6 +242,77 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
       "properties": {},
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__capability_list",
+    "description": "List the capabilities you can mount, each with its provider, id, title, description and the arguments it takes, and what is mounted now on you, or on an agent you made.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of an agent you made; leave it out for yourself."
+        }
+      },
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__capability_mount",
+    "description": "Mount a capability capability_list gives on yourself, or on an agent you made, with the arguments it takes. It takes effect from your next message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of an agent you made; leave it out for yourself."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Its provider, as capability_list gives it."
+        },
+        "capability": {
+          "type": "string",
+          "description": "Its id, as capability_list gives it."
+        },
+        "arguments": {
+          "type": "object",
+          "description": "The arguments it takes."
+        }
+      },
+      "required": [
+        "provider",
+        "capability"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
+  },
+  {
+    "type": "function",
+    "name": "control__capability_unmount",
+    "description": "Take a capability off yourself, or off an agent you made, by the id capability_list gives it under mounted.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of an agent you made; leave it out for yourself."
+        },
+        "mounted": {
+          "type": "string",
+          "description": "Its id under mounted."
+        }
+      },
+      "required": [
+        "mounted"
+      ],
       "additionalProperties": false
     },
     "strict": false

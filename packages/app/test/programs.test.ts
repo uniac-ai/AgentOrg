@@ -1901,7 +1901,9 @@ test("the person's get and the agent's capability_list give one tree of what the
   assert.equal(parts.get("nest-child")?.kind, undefined);
   // What the plugin gave the model is its own, offered under its capability's name.
   assert.deepEqual(parts.get("nest-watcher-#")?.added?.functions, ["nest__look"]);
-  assert.ok(parts.get("control")?.added?.functions.includes("control__capability_list"));
+  // Control's are management's tools at control, which connections offers: control adds none.
+  assert.ok(parts.get("connections")?.added?.functions.includes("control__capability_list"));
+  assert.deepEqual(parts.get("control")?.added?.functions, []);
 });
 
 test("a computer mounted on agents@2 gives the agent and the person what the same answers give as a unit, through management: its capability's title, slots, surfaces and views, its skills, its connection and the same functions, and its terminal opens live; unmounted, all of it goes", async (t) => {
