@@ -147,6 +147,11 @@ jobs:
   # published by hand, from this release's tarball, and passes without publishing. If it fails
   # after the GitHub release is made, re-run it alone, with "Re-run failed jobs": it uses the same
   # run's files. Re-running every job fails at the GitHub release, which is there already.
+  #
+  # The `npm` environment lets only the tags its rules list deploy, and sdk-v* must be one of them.
+  # Without that rule, GitHub fails this job before any step, saying the tag is not allowed to
+  # deploy to `npm` due to environment protection rules. The GitHub release is made by then: once
+  # the rule is added, "Re-run failed jobs" runs publish alone.
   publish:
     needs: [build, github-release]
     runs-on: ubuntu-latest
