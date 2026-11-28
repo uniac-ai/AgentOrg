@@ -132,6 +132,7 @@ test(
     assert.deepEqual([seen.list, seen.card, seen.bar], [[0, 0, 800, 900], null, [0, 0, 300, 900]]);
     await page.close();
     page = await open(gateway, 800, 900, "#/chat/a-reviewer");
+    await opened(page);
     seen = await frame(page);
     assert.deepEqual(
       [seen.list, seen.card, seen.bar, seen.corners],
@@ -687,6 +688,7 @@ test(
   "on a phone there is no card: the conversation runs to the window's edges above the row of places, with no line, corners or shadow, and the row along the foot is on the ground under its 1 px line",
   withGateway(async (gateway) => {
     const page = await open(gateway, 390, 844, "#/chat/a-reviewer");
+    await opened(page);
     // The plan's notice has a row of its own above the page until it is dismissed.
     const notice = page.getByRole("status").filter({ hasText: "ChatGPT plan" });
     await notice.getByRole("button", { name: "Dismiss" }).click();
