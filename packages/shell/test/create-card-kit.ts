@@ -103,6 +103,30 @@ export const watched = (page: Page) =>
     ).seen;
     return { card: [...card], widths: [...widths] };
   });
+/**
+ * Listens for the window's width growing by its own transition; what it gives back says how, once
+ * the window is at its width: "grew" if the transition ended or was cut after it had moved (the
+ * page's own timer cuts a slow one short, which still grew), else why it was a jump. Events are
+ * sent as a frame begins, so none heard by the second look, a frame later, means it never started.
+ */
+export const listen = async (page: Page) => {
+  const heard = await panel(page).evaluateHandle((window_: HTMLElement) => {
+    const heard: { how?: string } = {};
+    for (const type of ["transitionrun", "transitionend", "transitioncancel"] as const)
+      window_.addEventListener(type, (event) => {
+        if (event.target !== window_ || event.propertyName !== "width") return;
+        const moved = type === "transitionend" || event.elapsedTime > 0;
+        heard.how = type === "transitionrun" ? "" : moved ? "grew" : "was cut before it moved";
+      });
+    return heard;
+  });
+  const look = (heard: { how?: string }) => {
+    const how = heard.how;
+    heard.how ??= "never started";
+    return how;
+  };
+  return async () => (await page.waitForFunction(look, heard)).jsonValue();
+};
 
 /** The page's sizes the window is looked at in: its widths, then three of them on short pages. */
 export const WIDTHS = [
