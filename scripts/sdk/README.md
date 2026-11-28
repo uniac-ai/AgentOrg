@@ -19,6 +19,8 @@ join a coordinator and answer them.
 - Node 22.15 or later.
 - zod, at the one exact version the package depends on. A contract's hash is computed from zod's
   JSON Schema output, so another zod could give the same contract another hash.
+- In TypeScript, `lib: dom` or `@types/node`, for the `URL` and `ReadableStream` types zod's and
+  the package's declarations use.
 
 ## Source
 
