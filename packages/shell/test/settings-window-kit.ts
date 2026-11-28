@@ -45,6 +45,26 @@ export const place = (page: Page, name: string) =>
 /** A window has finished opening: nothing in it is measured before. */
 export const opened = (window: Locator) =>
   window.evaluate((e) => Promise.all(e.getAnimations().map((moving) => moving.finished)));
+/**
+ * A window opened over another has finished opening and is the one that hears keys. The dialog
+ * library hands the keys over after it draws the window: the drawing that does puts the window
+ * itself within the pointer's reach, and the keys move in a message the page posts to itself as
+ * that drawing ends. So this waits on a message of its own, posted after that one and so behind
+ * it in the same queue. Not on a timer: a timer is another queue, and can fire before the keys
+ * have moved.
+ */
+export const openedOver = async (window: Locator) => {
+  await opened(window);
+  await window.and(window.page().locator('[style*="pointer-events: auto"]')).waitFor();
+  await window.evaluate(
+    () =>
+      new Promise((arrived) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = arrived;
+        port2.postMessage(null);
+      }),
+  );
+};
 export const openSettings = async (page: Page) => {
   await place(page, "Settings").click();
   await opened(settings(page));

@@ -10,6 +10,7 @@ import {
   marked,
   open,
   opened,
+  openedOver,
   openSettings,
   place,
   settings,
@@ -43,7 +44,7 @@ test(
       // It does what it did: it opens its window over Settings.
       await button.click();
       const over = page.getByRole("dialog", { name: opens });
-      await opened(over);
+      await openedOver(over);
       await page.keyboard.press("Escape");
       await over.waitFor({ state: "detached" });
       await settings(page).waitFor();
@@ -81,7 +82,7 @@ test(
     // Its adding form opens over it.
     await page.goto(`${gateway.url}/#/mcps/add`);
     const form = page.getByRole("dialog", { name: "Connect an MCP" });
-    await opened(form);
+    await openedOver(form);
     assert.match(page.url(), /#\/chat$/);
     await page.keyboard.press("Escape");
     await form.waitFor({ state: "detached" });
