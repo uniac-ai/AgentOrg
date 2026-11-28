@@ -1,8 +1,7 @@
 /**
  * What the agent is connected to, offered to its model: every `tools@1` slot exposed to it, each
  * function as `<slot>__<name>`, and the conversations of the agents it talks to. A slot's tools
- * are listed once a turn; one that can't answer is left out, and says why, until it can. A tool
- * another capability already offers through its slot, in its own place, isn't offered again.
+ * are listed once a turn; one that can't answer is left out, and says why, until it can.
  */
 import type { Context } from "cordis";
 import { agentTools } from "../agents.js";
@@ -47,12 +46,7 @@ export const connections = (): Capability => ({
     );
     ctx.context.pass(
       (request) => {
-        const offered = new Set(request.functions.map(({ slot, name }) => `${slot}/${name}`));
-        request.functions.push(
-          ...listed
-            .flatMap((one) => one.candidates)
-            .filter(({ slot, name }) => !offered.has(`${slot}/${name}`)),
-        );
+        request.functions.push(...listed.flatMap((one) => one.candidates));
         request.leftOut.push(...listed.flatMap((one) => one.leftOut));
       },
       { order: CONNECTIONS_ORDER },

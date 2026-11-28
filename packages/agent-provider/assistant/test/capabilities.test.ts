@@ -4,6 +4,7 @@ import { chat, tools } from "@agentorg/interfaces";
 import { describeInterface, NotConnected } from "@agentorg/sdk";
 import type { Context } from "cordis";
 import { connections } from "../src/capabilities/connections.ts";
+import { control } from "../src/capabilities/control.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
 import { skills } from "../src/capabilities/skills.ts";
 import type { AgentHub } from "../src/connector.ts";
@@ -175,7 +176,7 @@ test("connections lists every exposed tools@1 slot once a turn, offers the agent
 const EARLIER = "You are an agent, as its template once said.";
 const REVIEW = { name: "review", description: "Review a change." };
 
-test("instructions and skills tell the agent's words first, then what each skill always says, as it came with them, then the skills' names, and offer the function that reads them once, in its place, through the tools at settings", async () => {
+test("instructions and skills tell the agent's words first, then what each skill always says, as it came with them, then the skills' names; the function that reads them is the tools at settings', which connections offers", async () => {
   const asked: unknown[] = [];
   const listed = [{ name: "skill", inputSchema: { type: "object" } }];
   const hub = hubOf([
@@ -225,13 +226,13 @@ test("instructions and skills tell the agent's words first, then what each skill
       ],
     ],
   );
-  // Offered before the other connections, and not again with the tools at settings.
+  // Offered once, as the tools at settings list it, in their place among the connections.
   assert.deepEqual(
     passed.functions.map(({ slot, name }) => `${slot}__${name}`),
-    ["settings__skill", "files__read"],
+    ["files__read", "settings__skill"],
   );
   assert.deepEqual(passed.leftOut, []);
-  const read = passed.functions[0];
+  const read = passed.functions[1];
   assert.deepEqual(await read?.run({ name: "review" }, "g1"), { output: "# Review", ok: true });
   assert.deepEqual(asked, [{ name: "skill", arguments: { name: "review" }, group: "g1" }]);
   // With no skills, nothing of them, and nothing to read them with but what settings lists.
@@ -250,14 +251,43 @@ test("instructions and skills tell the agent's words first, then what each skill
   await plugins.close();
 });
 
-test("the function that reads a skill says it can't while nothing is exposed at settings", async () => {
-  const plugins = await createPluginHost(log, [skills()]).open("agent", {
+test("while management can't answer at settings and control, its four tools aren't offered and each slot is left out as not connected; the skills are still named, and the four come back with it", async () => {
+  let down = true;
+  const listing = (names: string[]) => async () => {
+    if (down) throw new NotConnected("management");
+    return { tools: names.map((name) => ({ name, inputSchema: { type: "object" } })) };
+  };
+  const hub = hubOf([
+    toolsSlot("settings", listing(["skill"])),
+    toolsSlot("control", listing(["capability_list", "capability_mount", "capability_unmount"])),
+  ]);
+  const plugins = await createPluginHost(log, [skills(), control()]).open("agent", {
     store: memory(),
     provides: ["hub"],
   });
-  await plugins.mount(connector(hubOf([])));
-  await plugins.hold([{ name: "skills", settings: { skills: [REVIEW] } }]);
-  const [read] = plugins.pass(fresh()).functions;
-  await assert.rejects(read?.run({ name: "review" }, "g1") ?? Promise.resolve(), NotConnected);
+  await plugins.mount(connector(hub));
+  await plugins.mount(connections());
+  await plugins.hold([{ name: "skills", settings: { skills: [REVIEW] } }, { name: "control" }]);
+  await plugins.turn();
+  const away = plugins.pass(fresh());
+  assert.deepEqual(away.functions, []);
+  assert.deepEqual(away.leftOut, [
+    { slot: "settings", reason: "not_connected" },
+    { slot: "control", reason: "not_connected" },
+  ]);
+  assert.deepEqual(owners(away), ["skills"]);
+  down = false;
+  await plugins.turn();
+  const back = plugins.pass(fresh());
+  assert.deepEqual(
+    back.functions.map(({ slot, name }) => `${slot}__${name}`),
+    [
+      "settings__skill",
+      "control__capability_list",
+      "control__capability_mount",
+      "control__capability_unmount",
+    ],
+  );
+  assert.deepEqual(back.leftOut, []);
   await plugins.close();
 });

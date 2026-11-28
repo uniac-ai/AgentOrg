@@ -30,7 +30,7 @@ import {
   type unitProvider,
   View,
 } from "@agentorg/interfaces";
-import { type Log, Refused, type Slot } from "@agentorg/sdk";
+import { type Log, NotConnected, OutcomeUnknown, Refused, type Slot } from "@agentorg/sdk";
 import { z } from "zod";
 import {
   AGENTS_EXPORT,
@@ -1750,6 +1750,60 @@ export function createStacks(parts: StackParts) {
     }
   };
   /**
+   * Before an agent is given its list: management's tools exposed to it where it reads them, so
+   * the turn its list lets run lists them. Its skill tools at `settings`, and its tools at
+   * `control` while it holds control. `false` while it can't have them yet, and its list is owed:
+   * an agent of a release before declares its own `settings` slot until it is back without it,
+   * and management may not reach the Hub yet. A slot it can't have for another reason, such as
+   * another connection there, is logged, and its list given without it.
+   */
+  const reachTools = async (agent: string, record: TheAgent): Promise<boolean> => {
+    const later = (error: unknown) =>
+      error instanceof NotConnected ||
+      error instanceof OutcomeUnknown ||
+      (error instanceof Refused && error.code === "not_connected");
+    try {
+      await hub.grants.expose({
+        provider: self,
+        export: SKILL_TOOLS_EXPORT,
+        to: agent,
+        as: SKILLS_SLOT,
+      });
+    } catch (error) {
+      if (later(error)) return false;
+      // Its own slot, of a release before, is there unbound once management starts without the
+      // export it was bound to: it goes when the agent is back. Anything else exposed there stays.
+      if (error instanceof Refused && error.code === "conflict")
+        try {
+          const { bindings } = await hub.bindings.list({ actor: agent });
+          if (
+            !bindings.some(
+              (one) => one.consumer === agent && one.slot === SKILLS_SLOT && one.exposed,
+            )
+          )
+            return false;
+        } catch (asking) {
+          if (later(asking)) return false;
+        }
+      if (!alreadyGone(error))
+        log.warn(`Giving an agent its list without management's skill tools: ${messageOf(error)}`, {
+          agent,
+        });
+    }
+    if (holdsControl(record, self))
+      try {
+        await parts.exposeConnection(agent, self, AGENTS_SLOT);
+      } catch (error) {
+        if (later(error)) return false;
+        if (!alreadyGone(error))
+          log.warn(
+            `Giving an agent its list without management's tools at control: ${messageOf(error)}`,
+            { agent },
+          );
+      }
+    return true;
+  };
+  /**
    * Make the person's slots to what agents hold again, where the Hub has dropped one, as it
    * does when an Actor stops offering its export or offers it as another interface. Nothing
    * changes where they are there. `actor` is the one that came back; with none, every one is
@@ -1913,6 +1967,7 @@ export function createStacks(parts: StackParts) {
     reachHeld,
     reachControl,
     unreachControl,
+    reachTools,
     /**
      * Have every agent, or only `actor` if it is one, reach management's skill tools: one kept
      * before they were exposed, too. Nothing changes where they are there.

@@ -1,15 +1,13 @@
 /**
- * What the skills exposed to this agent add to a request: each named in its instructions, and one
- * tool to read them, which management exposes to it at `settings`. A skill's text is read only when
- * the model asks for it, but for its `ALWAYS.md`, which comes with the list of what is mounted on
- * the agent and every request is told while the skill is exposed (see the README).
+ * What the skills exposed to this agent add to a request: each named in its instructions. A skill's
+ * text is read only when the model asks for it, with the one tool management exposes to the agent
+ * at `settings`, but for its `ALWAYS.md`, which comes with the list of what is mounted on the agent
+ * and every request is told while the skill is exposed (see the README).
  */
 import type { SkillEntry } from "@agentorg/interfaces";
 import { FRAME, type Part } from "@agentorg/looper";
-import { NotConnected } from "@agentorg/sdk";
 import type { z } from "zod";
-import type { AgentHub } from "./connector.js";
-import { type Candidate, type LeftOut, listsTools, runThrough } from "./tools.js";
+import type { LeftOut } from "./tools.js";
 
 /**
  * The longest the agent's own instructions may be: what a request can carry, less room for what
@@ -77,30 +75,4 @@ export function instructionsWith(
   return named === 0
     ? { parts: [own, ...kept], leftOut }
     : { parts: [own, ...kept, { owner: "skills", text }], leftOut };
-}
-
-/**
- * The one way the model reads a skill: its `SKILL.md`, or a file of its folder by `path`. It runs
- * through the `tools@1` exposed to the agent at `settings` as the call runs.
- */
-export function skillTool(hub: Pick<AgentHub, "exposed">): Candidate {
-  return {
-    slot: SLOT,
-    name: "skill",
-    description: "Read a skill: its SKILL.md, or with path a file in its folder.",
-    parameters: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "The skill's name, as your instructions list it." },
-        path: { type: "string", description: "A file in the skill's folder, relative to it." },
-      },
-      required: ["name"],
-      additionalProperties: false,
-    },
-    run: async (args, group) => {
-      const slot = hub.exposed().find((one) => one.slot === SLOT && listsTools(one.described));
-      if (!slot) throw new NotConnected(SLOT);
-      return runThrough(slot, "skill")(args, group);
-    },
-  };
 }

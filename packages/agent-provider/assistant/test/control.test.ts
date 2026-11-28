@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { tools } from "@agentorg/interfaces";
-import { describeInterface, Refused } from "@agentorg/sdk";
+import { describeInterface } from "@agentorg/sdk";
 import type { Context } from "cordis";
+import { connections } from "../src/capabilities/connections.ts";
 import { control } from "../src/capabilities/control.ts";
 import { OFFERED_MAX, offered } from "../src/capabilities/offered.ts";
 import { type AgentHub, type Model, model } from "../src/connector.ts";
 import { type Capability, createPluginHost } from "../src/plugins.ts";
-import type { Candidate } from "../src/tools.ts";
 
 /** A kv store in memory, as an agent's own store answers. */
 function memory() {
@@ -32,17 +32,18 @@ const WORDS = `## Capabilities
 A capability gives you more to do and know, from your next message.
 - memory (Memory, mounted): It remembers what you tell it to.`;
 
-/** Management's tools at `control`, as a stand-in: what it was asked, and how it answers each. */
+/** The three tools management lists at `control` to an agent holding control, by name. */
+const THREE = ["capability_list", "capability_mount", "capability_unmount"];
+
+/** Management's tools at `control`, as a stand-in: what it was asked, and how it answers. */
 function management() {
   const asked: unknown[] = [];
   const call = {
-    list: async () => ({ tools: [] }),
+    list: async () => ({
+      tools: THREE.map((name) => ({ name, inputSchema: { type: "object" } })),
+    }),
     call: async (input: { name: string }) => {
       asked.push(input);
-      if (input.name === "capability_mount")
-        throw new Refused("needs_key", "GitHub needs a key, which you don't hold.");
-      if (input.name === "capability_unmount")
-        return { output: "It ran and failed.", failed: true };
       return { output: JSON.stringify({ capabilities: [] }) };
     },
     stop: async () => ({}),
@@ -52,7 +53,7 @@ function management() {
 
 /**
  * An agent holding control, with what else it holds, and `reached` as management's tools at
- * `control` if it is given: what each request is told of what it can mount, and its functions.
+ * `control` if it is given: what each request is told of what it can mount.
  */
 async function holding(reached?: object, others: Capability[] = []) {
   const exposed = reached
@@ -82,54 +83,29 @@ async function holding(reached?: object, others: Capability[] = []) {
       .pass({ instructions: [], functions: [], input: [], leftOut: [] })
       .instructions.filter(({ owner }) => owner.endsWith("/capabilities"))
       .map(({ text }) => text);
-  const functions = () =>
-    new Map<string, Candidate>(plugins.tools().map((one) => [`${one.slot}__${one.name}`, one]));
-  return { plugins, told, functions };
+  return { plugins, told };
 }
 
-test("control offers its three functions and runs each through management's tools at control: what each answers, fails or is refused is told as before; with none there, management can't be reached", async () => {
+test("control offers no function of its own: its three are management's tools at control, which connections offers once, and a call runs through that slot", async () => {
   const { asked, call } = management();
-  const { plugins, functions } = await holding(call);
+  const { plugins } = await holding(call);
+  await plugins.mount(connections());
   await plugins.hold([{ name: "control" }]);
-  const held = functions();
+  assert.deepEqual(plugins.tools(), []);
+  await plugins.turn();
+  const { functions } = plugins.pass({ instructions: [], functions: [], input: [], leftOut: [] });
   assert.deepEqual(
-    [...held.keys()],
-    ["control__capability_list", "control__capability_mount", "control__capability_unmount"],
+    functions.map(({ slot, name }) => `${slot}__${name}`),
+    THREE.map((name) => `control__${name}`),
   );
-  assert.deepEqual(held.get("control__capability_mount")?.parameters.required, [
-    "provider",
-    "capability",
-  ]);
-  const run = (name: string, input: object) =>
-    (held.get(`control__${name}`) as Candidate).run(input, "group");
-  assert.deepEqual(await run("capability_list", { agent: "act_kid" }), {
+  assert.deepEqual(await functions[0]?.run({ agent: "act_kid" }, "group"), {
     output: JSON.stringify({ capabilities: [] }),
     ok: true,
   });
   assert.deepEqual(asked, [
     { name: "capability_list", arguments: { agent: "act_kid" }, group: "group" },
   ]);
-  // What management refuses is told with its code; what ran and failed, as failed.
-  assert.deepEqual(await run("capability_mount", { provider: "p", capability: "github" }), {
-    output: "GitHub needs a key, which you don't hold.",
-    ok: false,
-    code: "needs_key",
-  });
-  assert.deepEqual(await run("capability_unmount", { mounted: "mnt_one" }), {
-    output: "It ran and failed.",
-    ok: false,
-    code: "failed",
-  });
   await plugins.close();
-
-  const away = await holding();
-  await away.plugins.hold([{ name: "control" }]);
-  assert.deepEqual(await away.functions().get("control__capability_list")?.run({}, "group"), {
-    output: "Management can't be reached now.",
-    ok: false,
-    code: "not_connected",
-  });
-  await away.plugins.close();
 });
 
 test("offered tells what management says the agent can mount as its own section, where control told it, and nothing when none is on offer; control tells nothing itself", async () => {
