@@ -38,9 +38,9 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build and test
         run: npm test
-      # The published @agentorg/sdk, packed from that build and installed alone in an empty folder:
-      # nothing of the person's command line, its four entry points, the 18 committed hashes, and
-      # its exact zod.
+      # The published @agentorg/sdk, packed from that build and installed alone in empty folders,
+      # once unpacked and once by npm: nothing of the person's command line, its four entry points,
+      # the 18 committed hashes, its exact zod, and a strict TypeScript consumer of it.
       - name: The contracts pack as @agentorg/sdk
         run: node --test scripts/sdk/pack.test.mjs
       - name: The packed package installs and runs
