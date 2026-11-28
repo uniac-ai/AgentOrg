@@ -10,6 +10,7 @@ import {
   close,
   create,
   ground,
+  listen,
   still,
   tab,
   token,
@@ -116,15 +117,12 @@ test(
       await boxOf(close(page)),
       await boxOf(edge(page)),
     ];
-    await watch(page);
+    const grew = await listen(page);
     await edge(page).click();
     assert.equal(await edge(page).getAttribute("aria-expanded"), "true");
     await wide(page, 800);
-    await page.waitForTimeout(100);
-    assert.ok(
-      (await watched(page)).widths.some((width) => width > 440 && width < 800),
-      "it grows, not jumps",
-    );
+    const how = await grew();
+    assert.equal(how, "grew", `it grows, not jumps: its width's transition ${how}`);
     // Both together in the page's middle: the name card has moved left by half of what opened.
     const [whole, now, shown] = [
       await boxOf(window_),
