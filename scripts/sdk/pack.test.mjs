@@ -2,9 +2,10 @@
 // tarball SDK_TARBALL names, and installs it alone in two empty folders:
 // - "unpacked": unpacked into node_modules/@agentorg/sdk beside a link to the workspace's zod,
 //   without npm or the network;
-// - "npm install": installed by npm, as a consumer installs it. `--prefer-offline` takes zod's
-//   tarball from npm's cache, which `npm ci` fills, and asks the registry only for zod's metadata,
-//   which `npm ci` doesn't cache: with `--offline`, npm would stop there.
+// - "npm install": installed by npm, as a consumer installs it. This one step needs the network.
+//   `--prefer-offline` takes zod's tarball from npm's cache, which `npm ci` fills, and asks the
+//   registry only for zod's metadata, which `npm ci` doesn't cache: with `--offline`, npm would
+//   stop there.
 // Each install must resolve the four entry points to one sdk and make the 18 committed hashes, and
 // a strict TypeScript consumer must type-check against the npm install. Run after
 // `npm run build`: `node --test scripts/sdk/pack.test.mjs`.

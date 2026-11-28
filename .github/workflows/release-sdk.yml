@@ -1,0 +1,191 @@
+name: Release @agentorg/sdk
+
+# Releases @agentorg/sdk, the contracts and the client a provider joins a coordinator with, from a
+# tag sdk-v<version>, apart from AgentOrg's own v* releases. scripts/sdk/pack.mjs packs it from
+# wire, interfaces and sdk, and scripts/sdk/package.json names its version and npm tag.
+#
+# The build packs it and tests that tarball. Then the tag's GitHub release: the tarball and its
+# SHA256SUMS, each attested, with the notes in release-notes/sdk-v<version>.md, never marked
+# latest. Last, npm, through Trusted Publishing: npm trusts this workflow, in the `npm`
+# environment, by its OIDC identity, so no token is stored anywhere, and the package carries a
+# provenance statement linking it to this repository and commit.
+#
+# The GitHub release comes before npm because npm takes a new package's first version only by
+# hand: it is published once, from the tarball on that release. Until npm has the package, the
+# publish job says so and passes without publishing.
+
+on:
+  push:
+    tags: ["sdk-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The GitHub release takes its notes from release-notes/sdk-v<version>.md, added in the
+      # release's PR. A tag without them, or with them empty, stops here, before anything is made.
+      - name: Check that the release has its notes
+        run: |
+          notes="release-notes/$GITHUB_REF_NAME.md"
+          [ -s "$notes" ] || {
+            echo "The release has no notes: add $notes in the release's PR, then move the tag: delete it and push it again." >&2
+            exit 1
+          }
+          echo "The release has its notes: $notes"
+      - id: version
+        name: Check that the tag names the package's version
+        run: |
+          version="${GITHUB_REF_NAME#sdk-v}"
+          named="$(node -p 'require("./scripts/sdk/package.json").version')"
+          [ "$version" = "$named" ] || {
+            echo "The tag names $version, but scripts/sdk/package.json's version is $named." >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # The npm tag it goes out under: scripts/sdk/package.json's publishConfig.tag. npm passes
+      # over publishConfig.tag in a tarball's package.json, so it is read here. Only latest or next
+      # is taken, and there is no default.
+      - id: tag
+        name: Read the npm tag
+        run: |
+          tag="$(node -p 'require("./scripts/sdk/package.json").publishConfig?.tag ?? ""')"
+          case "$tag" in latest | next) ;; *) echo "Not an npm tag this publishes under: \"$tag\"" >&2; exit 1 ;; esac
+          echo "Publishes under npm's $tag tag."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # No Actions cache: a release installs only from the lockfile, never from a cache that
+      # other workflow runs can write.
+      - name: Install
+        run: npm ci
+      # Only wire, sdk and interfaces: the pack takes them as built and checks each is built from
+      # its source, and its test reads nothing else built. In this order, since sdk takes wire's
+      # types and interfaces takes sdk's.
+      - name: Build
+        run: npm run build -w packages/wire -w packages/sdk -w packages/interfaces
+      # The tarball, in a folder of its own, under the name the release and npm take: the pack
+      # prints its path last.
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir sdk-release
+          packed="$(node scripts/sdk/pack.mjs sdk-release)"
+          printf '%s\n' "$packed"
+          tarball="$(tail -n 1 <<<"$packed")"
+          [ "$tarball" -ef "sdk-release/agentorg-sdk-$VERSION.tgz" ] || {
+            echo "The pack made $tarball, not sdk-release/agentorg-sdk-$VERSION.tgz." >&2
+            exit 1
+          }
+      # That tarball itself, as npm will have it: given SDK_TARBALL, the pack's test tests that file
+      # instead of packing its own.
+      - name: Test the tarball
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: SDK_TARBALL="$PWD/sdk-release/agentorg-sdk-$VERSION.tgz" node --test scripts/sdk/pack.test.mjs
+      - name: Write SHA256SUMS
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd sdk-release
+          sha256sum "agentorg-sdk-$VERSION.tgz" > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdk
+          path: |
+            sdk-release/agentorg-sdk-${{ steps.version.outputs.version }}.tgz
+            sdk-release/SHA256SUMS
+          if-no-files-found: error
+
+  # The tag's GitHub release, made before npm has the version, so the first version's tarball is
+  # there to publish by hand. Only this job may write to the repository, to make the release, and
+  # attest its files.
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # The tag, for its notes. Nothing here pushes, so the token isn't kept in the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk
+          path: release
+      # A provenance attestation for the tarball and for SHA256SUMS, linking each to this workflow
+      # run, the repository and the tag's commit: `gh attestation verify` checks one.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+      # The release itself, published and never marked latest, so AgentOrg's own releases keep
+      # that, with the notes and the two files.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "@agentorg/sdk $VERSION" \
+            --latest=false --notes-file "release-notes/$GITHUB_REF_NAME.md" \
+            "release/agentorg-sdk-$VERSION.tgz" release/SHA256SUMS
+
+  # npm, last. npm trusts a workflow only for a package it already has, so a new package's first
+  # version can't come from here: until npm has @agentorg/sdk, this job says the first version is
+  # published by hand, from this release's tarball, and passes without publishing. If it fails
+  # after the GitHub release is made, re-run it alone, with "Re-run failed jobs": it uses the same
+  # run's files. Re-running every job fails at the GitHub release, which is there already.
+  #
+  # The `npm` environment lets only the tags its rules list deploy, and sdk-v* must be one of them.
+  # Without that rule, GitHub fails this job before any step, saying the tag is not allowed to
+  # deploy to `npm` due to environment protection rules. The GitHub release is made by then: once
+  # the rule is added, "Re-run failed jobs" runs publish alone.
+  publish:
+    needs: [build, github-release]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Asked without a token: npm answers 200 for a package it has and 404 for a name it hasn't.
+      # Any other answer stops the job, so a registry fault never passes for a first version.
+      - id: known
+        name: Check that npm has the package
+        run: |
+          code="$(curl -sS --retry 3 -o /dev/null -w '%{http_code}' https://registry.npmjs.org/@agentorg%2fsdk)" || code="no answer"
+          case "$code" in
+          200) echo "known=true" >> "$GITHUB_OUTPUT" ;;
+          404)
+            echo "npm doesn't have @agentorg/sdk yet: its first version is published by hand, from this release's tarball."
+            echo "known=false" >> "$GITHUB_OUTPUT"
+            ;;
+          *) echo "Couldn't tell whether npm has @agentorg/sdk: the registry answered $code." >&2; exit 1 ;;
+          esac
+      - if: steps.known.outputs.known == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk
+      - if: steps.known.outputs.known == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Publish
+        if: steps.known.outputs.known == 'true'
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: npm publish "agentorg-sdk-$VERSION.tgz" --access public --provenance --tag "$TAG"
