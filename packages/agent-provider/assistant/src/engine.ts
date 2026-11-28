@@ -6,11 +6,10 @@
  * host says where the records are kept and what the agent is told when it gives no tree.
  */
 import type { capability, chat, kv, llmSession, SettingsRoot, tools } from "@agentorg/interfaces";
-import { type Conversed, type Model, type Part, Refusal } from "@agentorg/looper";
+import { type Conversed, type Model, type Part, Refusal, type Summarizer } from "@agentorg/looper";
 import { type Context, Refused, type Slot } from "@agentorg/sdk";
 import type { z } from "zod";
 import { WORDS } from "./capabilities/instructions.js";
-import type { Summarizer } from "./capabilities/summary.js";
 import { createChats } from "./chats.js";
 import type { Model as AgentModel } from "./connector.js";
 import { type AgentPlugins, NO_PLUGINS } from "./plugins.js";

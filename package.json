@@ -16,6 +16,7 @@
     "packages/capability/computer",
     "packages/agent-provider/chatgpt",
     "packages/agent-provider/looper",
+    "packages/agent-provider/summary",
     "packages/agent-provider/assistant",
     "packages/agent-provider/memory",
     "packages/shell",

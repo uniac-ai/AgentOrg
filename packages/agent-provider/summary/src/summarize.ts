@@ -1,0 +1,256 @@
+/**
+ * Compaction: when what a piece of work sends its model grows past the budget, its earlier steps
+ * are summarized by the work's own model into a checkpoint, and its latest steps stay word for
+ * word. Adapted from pi (https://github.com/badlogic/pi-mono, MIT; see NOTICE): its prompts are used
+ * as written, the conversation is written out for the summary as pi writes it, each later summary
+ * updates the one before, and the files read and changed are carried from one to the next.
+ */
+import { type Compacted, type FilesOf, head, type Item, type ToCompact } from "@agentorg/looper";
+
+/** A summary keeps at most this many characters. */
+const MAX_SUMMARY = 16_000;
+/** What a summary request is given of the conversation, at most, in characters. */
+export const SUMMARY_INPUT = 160_000;
+/** A compaction reads at most this many pieces of that size: past them the oldest are left out. */
+const PIECES = 8;
+/** A call's arguments and its output, written out for a summary, keep this many characters. */
+const CALL_CHARS = 2_000;
+/** Each list of files keeps its newest paths within this many characters. */
+const FILES_CHARS = 900;
+
+// pi's prompts, as written.
+const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
+
+const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+
+const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+
+const TURN_PREFIX_SUMMARIZATION_PROMPT = `The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
+
+Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
+
+## Original Request
+[What did the user ask for?]
+
+## Progress So Far
+- [Key decisions and work completed in these messages]
+
+## Context Needed to Continue
+- [Information from these messages needed to understand the later work]
+
+Only summarize information explicitly present above. Do not infer or recreate later messages.`;
+
+/** `text` cut to `CALL_CHARS`, saying how much more there was. */
+const cut = (text: string) =>
+  text.length > CALL_CHARS
+    ? `${head(text, CALL_CHARS)}\n\n[... ${text.length - CALL_CHARS} more characters truncated]`
+    : text;
+
+/**
+ * A conversation written out as text, so the model reads it as something to
+ * summarize and not to go on with: each call's arguments and output cut to `CALL_CHARS`. In
+ * pieces of whole parts, the oldest first, each at most `SUMMARY_INPUT` characters; a part longer
+ * than that is cut to fit one, and says so.
+ */
+export function serialize(items: Item[]): string[] {
+  const parts: string[] = [];
+  const calls: string[] = [];
+  const flush = () => {
+    if (calls.length > 0) parts.push(`[Assistant tool calls]: ${calls.splice(0).join("; ")}`);
+  };
+  for (const item of items) {
+    if (item.type === "function_call") {
+      calls.push(`${item.name}(${cut(argumentsOf(item.arguments))})`);
+      continue;
+    }
+    flush();
+    if (item.type === "message") {
+      if (item.content)
+        parts.push(`[${item.role === "user" ? "User" : "Assistant"}]: ${item.content}`);
+    } else if (item.output) parts.push(`[Tool result]: ${cut(item.output)}`);
+  }
+  flush();
+  const pieces: string[] = [];
+  let piece = "";
+  const fits = (part: string) => {
+    if (part.length <= SUMMARY_INPUT) return part;
+    const kept = head(part, SUMMARY_INPUT - 100);
+    return `${kept}\n\n[... ${part.length - kept.length} more characters truncated]`;
+  };
+  for (const part of parts.map(fits)) {
+    if (piece && piece.length + 2 + part.length > SUMMARY_INPUT) {
+      pieces.push(piece);
+      piece = "";
+    }
+    piece = piece ? `${piece}\n\n${part}` : part;
+  }
+  if (piece) pieces.push(piece);
+  return pieces;
+}
+/** A call's arguments as they are written out: `name=value` for each, or as they are if not an object. */
+function argumentsOf(args: string): string {
+  try {
+    const parsed: unknown = JSON.parse(args);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+      return Object.entries(parsed)
+        .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+        .join(", ");
+  } catch {}
+  return args;
+}
+
+/**
+ * The files the calls summarized read and changed, with those the previous compaction kept: one
+ * changed is not among those read, and each list keeps its newest that fit `FILES_CHARS`.
+ */
+function filesOf(compacting: ToCompact, files?: FilesOf) {
+  let read = compacting.previous?.read ?? [];
+  let changed = compacting.previous?.changed ?? [];
+  const newest = (list: string[], paths: string[] = []) => [
+    ...list.filter((path) => !paths.includes(path)),
+    ...paths,
+  ];
+  for (const item of [...compacting.history, ...compacting.prefix])
+    if (item.type === "function_call") {
+      const named = files?.(item);
+      read = newest(read, named?.read);
+      changed = newest(changed, named?.changed);
+    }
+  const kept = (list: string[]) => {
+    const out: string[] = [];
+    let left = FILES_CHARS;
+    for (const path of [...list].reverse())
+      if (path.length + 1 <= left) {
+        left -= path.length + 1;
+        out.unshift(path);
+      }
+    return out;
+  };
+  return { read: kept(read.filter((path) => !changed.includes(path))), changed: kept(changed) };
+}
+
+/**
+ * Summarize what `compacting` names, asking the work's model with `ask` (its instructions and one
+ * user message, no tools): the history a piece at a time, with the first prompt and then the
+ * update prompt, so nothing of it goes unread; and the newest piece of an exchange cut inside
+ * with the turn-prefix prompt, after it. Past `MAX_SUMMARY` the history gives way, so the
+ * exchange the latest steps belong to stays. It rejects when a summary comes back empty.
+ */
+export async function summarize(
+  ask: (instructions: string, text: string) => Promise<string>,
+  compacting: ToCompact,
+  files?: FilesOf,
+): Promise<Compacted> {
+  const { history, prefix, previous } = compacting;
+  const { read, changed } = filesOf(compacting, files);
+  const written = async (text: string) => {
+    const summary = (await ask(SUMMARIZATION_SYSTEM_PROMPT, text)).trim();
+    if (summary === "") throw new Error("The model gave no summary.");
+    return summary;
+  };
+  // What came before, a piece at a time, each updating the summary; and, for an exchange cut
+  // inside, its earlier pieces too, so its newest one is summarized apart.
+  const turn = serialize(prefix);
+  const newest = turn.pop();
+  const pieces = [...serialize(history), ...turn];
+  const gone = Math.max(0, pieces.length - PIECES);
+  const kept = pieces.slice(gone);
+  if (gone > 0) kept[0] = `[... ${gone} earlier pieces of the conversation left out]\n\n${kept[0]}`;
+  let summary = previous?.summary ?? "";
+  for (const piece of kept)
+    summary = head(
+      await written(
+        `<conversation>\n${piece}\n</conversation>\n\n${
+          summary ? `<previous-summary>\n${summary}\n</previous-summary>\n\n` : ""
+        }${summary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT}`,
+      ),
+      MAX_SUMMARY,
+    );
+  if (newest !== undefined) {
+    const part = head(
+      await written(
+        `# Conversation\n${newest}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`,
+      ),
+      MAX_SUMMARY,
+    );
+    const before = summary ? `\n\n---\n\n**Turn Context (split turn):**\n\n` : "";
+    const room = MAX_SUMMARY - part.length - before.length;
+    summary = room > 0 && summary ? `${head(summary, room)}${before}${part}` : part;
+  }
+  return {
+    summary: head(summary, MAX_SUMMARY),
+    upTo: compacting.upTo,
+    ...(read.length > 0 ? { read } : {}),
+    ...(changed.length > 0 ? { changed } : {}),
+  };
+}

@@ -29,13 +29,13 @@ import {
 } from "@agentorg/interfaces";
 import { type Log, NotConnected, Refused } from "@agentorg/sdk";
 import { connect } from "@agentorg/sdk/client";
+import { summary } from "@agentorg/summary";
 import { z } from "zod";
 import { connections } from "./capabilities/connections.js";
 import { control } from "./capabilities/control.js";
 import { instructions } from "./capabilities/instructions.js";
 import { offered } from "./capabilities/offered.js";
 import { skills } from "./capabilities/skills.js";
-import { summary } from "./capabilities/summary.js";
 import { type AgentHub, type Channel, connector, model } from "./connector.js";
 import { startEngine } from "./engine.js";
 import { createLocalStore } from "./local-store.js";

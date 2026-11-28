@@ -1,4 +1,4 @@
-export { type FilesOf, type Summarize, summarize } from "./compaction.js";
+export type { Compacted, FilesOf, Summarize, Summarizer, ToCompact } from "./compaction.js";
 export { ALONE, FRAME, FRAME_ALONE, OWN_FUNCTIONS } from "./loop.js";
 export {
   createLooper,
@@ -19,6 +19,7 @@ export {
   type Conversed,
   cut,
   cutInside,
+  head,
   Item,
   type Json,
   type Log,

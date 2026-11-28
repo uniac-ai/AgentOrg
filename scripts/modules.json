@@ -25,7 +25,8 @@
       "packages/agent-provider/assistant",
       "packages/agent-provider/looper",
       "packages/agent-provider/chatgpt",
-      "packages/agent-provider/memory"
+      "packages/agent-provider/memory",
+      "packages/agent-provider/summary"
     ],
     "capability": ["packages/capability/computer"],
     "all-in-one": [

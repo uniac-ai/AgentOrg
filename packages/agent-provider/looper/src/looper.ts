@@ -263,8 +263,8 @@ export function createLooper(options: {
   files?: FilesOf;
   /**
    * What summarizes a work's earlier steps once they are past the budget, read each time a summary
-   * is due (this package's own is `summarize`): with none, nothing is summarized, and what is over
-   * the budget is cut.
+   * is due (`@agentorg/summary`'s `summarize` is one): with none, nothing is summarized, and what
+   * is over the budget is cut.
    */
   summarizer?: () => Summarize | undefined;
   /**

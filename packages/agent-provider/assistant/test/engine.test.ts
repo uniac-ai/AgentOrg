@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chat, type SettingsRoot, tools } from "@agentorg/interfaces";
-import { capped, Entry, MAX_OUTPUT, REQUEST_BUDGET, textOf } from "@agentorg/looper";
+import {
+  capped,
+  Entry,
+  MAX_OUTPUT,
+  REQUEST_BUDGET,
+  type Summarizer,
+  textOf,
+} from "@agentorg/looper";
 import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "@agentorg/sdk";
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Context } from "cordis";
 import { z } from "zod";
-import type { Summarizer } from "../src/capabilities/summary.ts";
 import { AGENT_EVENTS, type AgentPlugin, createPluginHost, type Life } from "../src/plugins.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";

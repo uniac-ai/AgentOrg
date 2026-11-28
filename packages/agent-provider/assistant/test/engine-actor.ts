@@ -3,13 +3,13 @@
 // instructions and skills from the tree it is given.
 import { capability, chat, kv, llmSession, type SettingsRoot, tools } from "@agentorg/interfaces";
 import { defineActor } from "@agentorg/sdk";
+import { summary } from "@agentorg/summary";
 import type { Context } from "cordis";
 import type { z } from "zod";
 import type { KvStore } from "../src/bundled.ts";
 import { connections } from "../src/capabilities/connections.ts";
 import { instructions } from "../src/capabilities/instructions.ts";
 import { skills } from "../src/capabilities/skills.ts";
-import { summary } from "../src/capabilities/summary.ts";
 import { type AgentHub, model } from "../src/connector.ts";
 import { startEngine } from "../src/engine.ts";
 import { type AgentContext, type AgentPlugins, createPluginHost } from "../src/plugins.ts";

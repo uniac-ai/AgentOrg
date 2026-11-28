@@ -26,6 +26,7 @@
     "@agentorg/interfaces": "0.0.0",
     "@agentorg/looper": "0.0.0",
     "@agentorg/sdk": "0.0.0",
+    "@agentorg/summary": "0.0.0",
     "cordis": "4.0.0-rc.13",
     "zod": "^4.6.7"
   },

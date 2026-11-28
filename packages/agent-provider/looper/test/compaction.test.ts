@@ -1,16 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  COMPACTION_LINE,
-  SUMMARY_BEGINS,
-  SUMMARY_INPUT,
-  serialize,
-  summarize,
-} from "../src/compaction.ts";
+import { COMPACTION_LINE, SUMMARY_BEGINS } from "../src/compaction.ts";
 import { type Item, type OutputItem, Refusal, type Tool, type WorkEntry } from "../src/index.ts";
 import { HAND_BACK, NO_REPLY, SEND, STATUS } from "../src/loop.ts";
 import { INPUT_BUDGET, REQUEST_BUDGET } from "../src/record.ts";
-import { handsBack, idle, looperWith, says, sends, until } from "./support.ts";
+import { type Given, handsBack, idle, looperWith, says, sends, until } from "./support.ts";
 
 /** A tool that reads a file: each output is 25,000 characters, so twenty are over the least room. */
 const look: Tool = {
@@ -53,9 +47,19 @@ const SUMMARY = SUMMARY_BEGINS.slice(0, 30);
 /** The words of the message at `at` among a request's items. */
 const contentOf = (input: unknown[] | undefined, at: number) =>
   ((input ?? [])[at] as { content: string }).content;
+/** What a summary was given to summarize, oldest first. */
+const summarized = (one: Given | undefined) => [
+  ...(one?.compacting.history ?? []),
+  ...(one?.compacting.prefix ?? []),
+];
+/** The paths its calls name. */
+const pathsOf = (summarized: Item[]) =>
+  summarized.flatMap((item) =>
+    item.type === "function_call" ? [(JSON.parse(item.arguments) as { path: string }).path] : [],
+  );
 
 test("past the budget, a work's earlier steps are summarized once by its own model, and it is sent the opening message, the summary and its latest steps", async () => {
-  const { looper, asked, raw, summaries, answer, lives } = looperWith({
+  const { looper, asked, raw, summaries, given, answer, lives } = looperWith({
     tools: [look],
     instructions: FLOOR,
   });
@@ -66,15 +70,14 @@ test("past the budget, a work's earlier steps are summarized once by its own mod
   // One request for a summary, with no tools, of the exchange the cut falls in: the opening
   // message and the calls before the newest four, which stay.
   assert.equal(summaries.length, 1);
-  const [summary] = summaries;
-  assert.match(summary?.instructions ?? "", /^You are a context summarization assistant\./);
-  assert.match(
-    summary?.text ?? "",
-    /^# Conversation\n\[User\]: \[1\] Read every file\.\n\n\[Assistant tool calls\]: look\(path="f0\.ts"\)\n\n\[Tool result\]: x{2000}\n\n\[\.\.\. 23000 more characters truncated\]/,
-  );
-  assert.ok(summary?.text.includes('look(path="f15.ts")'));
-  assert.ok(!summary?.text.includes('look(path="f16.ts")'));
-  assert.ok(summary?.text.endsWith("Do not infer or recreate later messages."));
+  assert.equal(given.length, 1);
+  assert.deepEqual(items(summarized(given[0])), [
+    "[1] Read every file.",
+    ...Array.from({ length: 16 }, (_, i) => [
+      `function_call look-${i}`,
+      `function_call_output look-${i}`,
+    ]).flat(),
+  ]);
   assert.deepEqual(items(raw[1] ?? []), [
     "[1] Read every file.",
     SUMMARY,
@@ -102,7 +105,7 @@ test("past the budget, a work's earlier steps are summarized once by its own mod
 });
 
 test("each later summary updates the one before, and the files read and changed are carried", async () => {
-  const { looper, asked, raw, summaries, answer } = looperWith({
+  const { looper, asked, raw, summaries, given, answer } = looperWith({
     tools: [look, write],
     files,
     instructions: FLOOR,
@@ -117,20 +120,26 @@ test("each later summary updates the one before, and the files read and changed 
   answer(asked[1] as string, looks(19, 16));
   await until(() => asked.length === 3, "the request after more");
   assert.equal(summaries.length, 2);
-  // The calls since the first, but for the newest four, and the summary before.
-  const text = summaries[1]?.text ?? "";
-  assert.match(text, /^<conversation>\n\[Assistant tool calls\]: look\(path="f15\.ts"\)/);
-  assert.ok(text.includes('look(path="f30.ts")') && !text.includes('look(path="f31.ts")'));
-  assert.ok(
-    text.includes(
-      "</conversation>\n\n<previous-summary>\n## Goal\n- Summary 1.\n</previous-summary>\n\nThe messages above are NEW conversation messages to incorporate",
-    ),
+  // The second summary is given the first, as the record keeps it, and the host's files; it
+  // summarizes the calls since the first, but for the newest four.
+  const [first, second] = given;
+  assert.equal(given.length, 2);
+  assert.deepEqual(second?.compacting.previous, first?.compacted);
+  assert.equal(second?.files, files);
+  assert.deepEqual(
+    pathsOf(summarized(second)),
+    Array.from({ length: 16 }, (_, i) => `f${15 + i}.ts`),
   );
-  assert.ok(text.endsWith("Preserve exact file paths, function names, and error messages."));
-  const read = Array.from({ length: 31 }, (_, i) => `f${i}.ts`).filter((path) => path !== "f3.ts");
+  // Each summary is sent with the lists of files its summarizer gave back.
+  const paths = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `f${from + i}.ts`).join("\n");
+  assert.equal(
+    contentOf(raw[1], 1),
+    `${SUMMARY_BEGINS}:\n\n<summary>\n## Goal\n- Summary 1.\n\n<read-files>\n${paths(0, 14)}\n</read-files>\n\n<modified-files>\nf3.ts\n</modified-files>\n</summary>`,
+  );
   assert.equal(
     contentOf(raw[2], 1),
-    `${SUMMARY_BEGINS}:\n\n<summary>\n## Goal\n- Summary 2.\n\n<read-files>\n${read.join("\n")}\n</read-files>\n\n<modified-files>\nf3.ts\n</modified-files>\n</summary>`,
+    `${SUMMARY_BEGINS}:\n\n<summary>\n## Goal\n- Summary 2.\n\n<read-files>\n${paths(15, 30)}\n</read-files>\n</summary>`,
   );
   answer(asked[2] as string, sends("Read them all."));
   await looper.settled();
@@ -245,141 +254,6 @@ test("a turn stopped while its steps are summarized keeps nothing of the summary
   const { entries } = await looper.entries("a", undefined, 30);
   assert.ok(!entries.map(shown).includes(COMPACTION_LINE));
   assert.equal(looper.state("a").state, "idle");
-});
-
-/** A message of the person's, and a call that names a file. */
-const said = (content: string): Item => ({ type: "message", role: "user", content });
-const named = (name: string, path: string): Item => ({
-  type: "function_call",
-  callId: `${name}-${path}`,
-  name,
-  arguments: JSON.stringify({ path }),
-});
-
-test("a summary is asked for with the first or the update prompt for what came before, the turn-prefix prompt for an exchange cut inside, after it", async () => {
-  const asks: string[] = [];
-  const ask = async (_instructions: string, text: string) => {
-    asks.push(text);
-    return `summary ${asks.length}`;
-  };
-  const first = await summarize(
-    ask,
-    { history: [said("[1] the task"), named("look", "a.ts")], prefix: [], upTo: 2 },
-    files,
-  );
-  assert.ok(
-    asks[0]?.startsWith(
-      '<conversation>\n[User]: [1] the task\n\n[Assistant tool calls]: look(path="a.ts")\n</conversation>\n\nThe messages above are a conversation to summarize.',
-    ),
-  );
-  assert.ok(!asks[0]?.includes("<previous-summary>"));
-  assert.deepEqual(first, { summary: "summary 1", upTo: 2, read: ["a.ts"] });
-  const second = await summarize(
-    ask,
-    {
-      history: [named("write", "a.ts")],
-      prefix: [said("[3] go on"), named("look", "b.ts")],
-      previous: first,
-      upTo: 5,
-    },
-    files,
-  );
-  assert.match(
-    asks[1] ?? "",
-    /<previous-summary>\nsummary 1\n<\/previous-summary>\n\nThe messages above are NEW conversation messages/,
-  );
-  assert.ok(asks[2]?.startsWith("# Conversation\n[User]: [3] go on"));
-  assert.ok(asks[2]?.includes("\n\n# Instructions\nThe messages above are earlier context"));
-  // A file read and then changed is among those changed only.
-  assert.deepEqual(second, {
-    summary: "summary 2\n\n---\n\n**Turn Context (split turn):**\n\nsummary 3",
-    upTo: 5,
-    read: ["b.ts"],
-    changed: ["a.ts"],
-  });
-});
-
-test("a summary keeps 16,000 characters, the history giving way to the turn's part, and each file list its newest within 900", async () => {
-  const answers = ["h".repeat(16_000), "the turn"];
-  const ask = async () => answers.shift() as string;
-  const paths = Array.from({ length: 200 }, (_, i) => `src/file-${i}.ts`);
-  const result = await summarize(
-    ask,
-    {
-      history: [...paths, "x".repeat(1_000)].map((path) => named("look", path)),
-      prefix: [said("[9] go on")],
-      upTo: 9,
-    },
-    files,
-  );
-  assert.equal(result.summary.length, 16_000);
-  assert.ok(result.summary.startsWith("hhh"));
-  assert.ok(result.summary.endsWith("\n\n---\n\n**Turn Context (split turn):**\n\nthe turn"));
-  // A path too long for the list is left out, and the newest others stay.
-  const read = result.read ?? [];
-  assert.equal(read.at(-1), "src/file-199.ts");
-  assert.ok(read.length > 1 && read.join("\n").length < 900);
-  assert.ok(read.every((path) => path.length < 1_000));
-});
-
-test("a conversation is written out for a summary, each call's arguments and output cut, in pieces that leave nothing out", () => {
-  assert.deepEqual(
-    serialize([
-      said("[1] the task"),
-      {
-        type: "function_call",
-        callId: "c1",
-        name: "look",
-        arguments: JSON.stringify({ path: "a.ts", text: "y".repeat(3_000) }),
-      },
-      { type: "function_call_output", callId: "c1", output: "x".repeat(2_500) },
-      { type: "message", role: "assistant", content: "Read it." },
-    ]),
-    [
-      `[User]: [1] the task\n\n[Assistant tool calls]: look(path="a.ts", text="${"y".repeat(1_981)}\n\n[... 1020 more characters truncated])\n\n[Tool result]: ${"x".repeat(2_000)}\n\n[... 500 more characters truncated]\n\n[Assistant]: Read it.`,
-    ],
-  );
-  // Past its bound, in pieces of whole parts, the oldest first.
-  const long = serialize(
-    Array.from({ length: 200 }, (_, i) => said(`[${i}] ${"y".repeat(1_000)}`)),
-  );
-  assert.ok(long.length > 1 && long.every((piece) => piece.length <= SUMMARY_INPUT));
-  assert.ok(long[0]?.startsWith("[User]: [0] y"));
-  assert.ok(long.at(-1)?.endsWith(`[199] ${"y".repeat(1_000)}`));
-  assert.equal(long.join("\n\n").split("[User]: ").length - 1, 200);
-});
-
-test("a history past what one summary request reads is summarized a piece at a time, each updating the summary", async () => {
-  const asks: string[] = [];
-  const ask = async (_instructions: string, text: string) => {
-    asks.push(text);
-    return `summary ${asks.length}`;
-  };
-  const history = ["a", "b", "c"].map((name) => said(`[1] ${name.repeat(100_000)}`));
-  const result = await summarize(ask, { history, prefix: [], upTo: 3 });
-  assert.equal(asks.length, 3);
-  assert.ok(asks[0]?.startsWith("<conversation>\n[User]: [1] a"));
-  assert.ok(!asks[0]?.includes("<previous-summary>"));
-  assert.ok(asks[2]?.includes("<previous-summary>\nsummary 2\n</previous-summary>"));
-  assert.ok(asks[2]?.includes("The messages above are NEW conversation messages"));
-  assert.equal(result.summary, "summary 3");
-  // Each request stays within what one text of a model request can hold.
-  assert.ok(asks.every((text) => text.length < 200_000));
-  // With a summary before, the first piece updates it; a part longer than a piece is cut, and
-  // says so; and past eight pieces the oldest are left out, and the first read says so.
-  asks.length = 0;
-  const previous = { summary: "before", upTo: 0 };
-  const long = [said(`[1] ${"x".repeat(200_000)}`)];
-  await summarize(ask, { history: long, prefix: [], upTo: 1, previous });
-  assert.ok(asks[0]?.includes("<previous-summary>\nbefore\n</previous-summary>"));
-  assert.match(asks[0] ?? "", /\[\.\.\. \d+ more characters truncated\]/);
-  asks.length = 0;
-  const many = Array.from({ length: 10 }, (_, i) => said(`[${i}] ${"z".repeat(100_000)}`));
-  await summarize(ask, { history: many, prefix: [], upTo: 10 });
-  assert.equal(asks.length, 8);
-  assert.ok(
-    asks[0]?.startsWith("<conversation>\n[... 2 earlier pieces of the conversation left out]"),
-  );
 });
 
 test("a request that only decides whether to take a message makes no summary, though over the budget", async () => {
