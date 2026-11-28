@@ -4,7 +4,7 @@
  * - `store`: each capability's own keys in the agent's durable store, made with the store the
  *   executor keeps for the agent;
  * - `tools`: functions a capability gives the model, offered as `<capability>__<name>`, through a
- *   pass on `context`;
+ *   pass on `context`, each called with the conversation whose turn calls it;
  * - `prompt`: sections a capability adds to what the model is told, each named and ordered,
  *   through a pass on `context`.
  * Each service knows which capability calls it: in a service's method, Cordis gives the caller's
@@ -55,14 +55,16 @@ export class Tools extends Service {
   /**
    * Give the model a function until the capability goes, or until the function it gives is
    * called. A turn keeps the functions it was offered: a call that comes after is answered that
-   * the function is no longer held, and nothing of the capability runs.
+   * the function is no longer held, and nothing of the capability runs. Its `run` is given the
+   * call's input, the turn's group, and the conversation whose turn called it, none for a call no
+   * conversation makes.
    */
   register(tool: Omit<Candidate, "slot">): () => void {
     const { name: slot, ctx, part } = callerOf(this.kept.fibers, this);
     let held = true;
-    const run: Candidate["run"] = async (input, group) =>
+    const run: Candidate["run"] = async (input, group, loop) =>
       held
-        ? tool.run(input, group)
+        ? tool.run(input, group, loop)
         : { output: `The function ${slot}__${tool.name} is no longer held.`, ok: false };
     const gone = ctx.effect(() => {
       const key = Symbol(tool.name);

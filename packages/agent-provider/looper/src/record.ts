@@ -19,6 +19,7 @@ import {
   type Log,
   type Picture,
   type Progress,
+  Refusal,
   type Shown,
   type Store,
 } from "./types.js";
@@ -1116,6 +1117,24 @@ export function createThread(
       }
       return { messages, more: start > 0 };
     },
+    /**
+     * Its entries after the entry `after`, from its first when none is given, oldest first, as
+     * many as `limit`: each by its id and its words, as `textOf` shows them; and whether more
+     * follow. Refused `unknown` for an `after` it doesn't hold.
+     */
+    async read(after: string | undefined, limit: number) {
+      const all = (await load()).records;
+      const at = after === undefined ? -1 : all.findIndex(({ entry }) => entry.id === after);
+      if (after !== undefined && at === -1)
+        throw new Refusal("unknown", "There is no such entry in the conversation.");
+      const end = at + 1 + limit;
+      return {
+        entries: all
+          .slice(at + 1, end)
+          .map(({ entry }) => ({ id: entry.id, words: textOf(entry) })),
+        more: end < all.length,
+      };
+    },
   };
 }
 export type Thread = ReturnType<typeof createThread>;
@@ -1460,6 +1479,8 @@ export function createRecord(options: {
     return { sent, read, unread, compacted };
   };
 
+  /** The first and last entry it kept of its own since its turn last began. */
+  let turnKept: { first?: string; last?: string } = {};
   /** Keep an entry of its in `thread`, made once nothing waits there, from what the thread holds. */
   const keep = async (
     thread: string,
@@ -1486,11 +1507,22 @@ export function createRecord(options: {
       at.id,
     );
     await stored;
+    // Its own: neither what was said to it nor what the main loop said.
+    if (record.entry.role !== "user" && record.entry.main === undefined) {
+      turnKept.first ??= record.entry.id;
+      turnKept.last = record.entry.id;
+    }
     return { entry: record.entry, thread };
   };
 
   return {
     id,
+    /** A turn of it begins: what it keeps of its own is counted afresh. */
+    turnBegan() {
+      turnKept = {};
+    },
+    /** The first and last entry it kept of its own since its turn began; none if it kept none. */
+    turnKept: (): { first?: string; last?: string } => ({ ...turnKept }),
     /**
      * Keep a message of its in `thread`, one of those it follows, after any waiting there. `read`
      * is given for what came of a model request that had read it up to that place: when a user

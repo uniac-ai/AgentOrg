@@ -39,6 +39,7 @@ export {
   type Held,
   type Life,
   type Loop,
+  type Page,
   type Pass,
   type Request,
   type Turn,
@@ -119,6 +120,8 @@ export interface AgentPlugins {
   service?(name: string): unknown;
   /** The functions its latest request offered, by name: what each part's `added` lists of its own. */
   offered?(names: string[]): void;
+  /** How its capabilities read the agent's conversations through `record`: none until given. */
+  reads?(read: Host["read"]): void;
 }
 
 /** An agent's own context, as its executor holds it: what its engine reads, and more. */
@@ -192,6 +195,8 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
       /** The functions the latest request offered, once there was one. */
       let offeredNow: Set<string> | undefined;
       const turns: { owner: string; turn: Turn }[] = [];
+      /** How its conversations are read, once its engine gives it. */
+      let reader: Host["read"] | undefined;
       /** The plugins its settings named last, in the order they named them. */
       let namedOrder: string[] = [];
       /** Every capability its settings named last, whoever provides it. */
@@ -428,10 +433,14 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
           });
           return () => void gone();
         },
+        async read(loop, after, limit) {
+          if (!reader) throw new Error("The agent's conversations can't be read yet.");
+          return reader(loop, after, limit);
+        },
       };
 
       const services: Fiber[] = [];
-      const record = own.use(AgentRecord);
+      const record = own.use(AgentRecord, host);
       for (const fiber of [own.use(Capabilities, host), own.use(Passes, host), record]) {
         services.push(fiber);
         await fiber;
@@ -632,6 +641,9 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
         offered: (names) => {
           offeredNow = new Set(names);
         },
+        reads: (read) => {
+          reader = read;
+        },
         mount: (capability, args) =>
           inTurn(async () => {
             const { name } = capability;
@@ -680,6 +692,7 @@ export function createPluginHost(log: Log, carried: AgentPlugin<any>[] = []) {
             failed.clear();
             fibers.clear();
             said = undefined;
+            reader = undefined;
           }),
       };
     },

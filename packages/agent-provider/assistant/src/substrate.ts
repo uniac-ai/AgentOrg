@@ -8,8 +8,10 @@
  *   holds the capabilities. Once a turn, before its requests, a capability may read what its
  *   passes will give.
  * - `record`: what the agent's loops have seen and done. It says the agent's life as Cordis events
- *   (`AGENT_EVENTS`): a turn starting and ending, a record being summarized, the agent idle or
- *   stopped. Reading a loop's record and adding to it come with the first capability that reads it.
+ *   (`AGENT_EVENTS`): a turn starting and ending, with the entries the turn kept of its own and how
+ *   it ended, a record being summarized, the agent idle or stopped. A capability reads any of its
+ *   agent's conversations from its start, a page at a time, each entry by its id and its words.
+ *   Nothing adds to a record but the agent's loops.
  *
  * Nothing here gates: a capability mounts what it is given. What an agent may mount, and when a
  * person is asked, is the policy of the capability that offers it.
@@ -95,14 +97,24 @@ export type Turn = (loop: Loop | undefined) => Promise<void> | void;
 export type Life = "turnStarted" | "turnEnded" | "compacting" | "compacted" | "idle" | "stopped";
 
 /**
- * What is said with an event of the agent's life: one object, so more can be said later. Once the
- * looper tells them, a turn's end says how it ended and which entries were its own.
+ * What is said with an event of the agent's life: one object, so more can be said later. `work` is
+ * the piece of work whose life it is: for a conversation's own loop, the loop's id. A turn's end
+ * says how it ended, and the first and last entry of its own it had kept by then, by their ids
+ * as `record.read` gives them, none if it kept none: what was said to it is not its own. A call
+ * still running as a turn is stopped keeps its result after this is said.
  */
 export interface Heard {
   work?: string;
   how?: "answered" | "stopped" | "failed";
   first?: string;
   last?: string;
+}
+
+/** A page of a conversation's record: its entries, oldest first, and whether more follow them. */
+export interface Page {
+  /** Each entry by its id, and its words as the looper shows them: a call by its line. */
+  entries: { id: string; words: string }[];
+  more: boolean;
 }
 
 /** Each event of the agent's life, by the name a capability listens for with `ctx.on`. */
@@ -149,6 +161,8 @@ export interface Host {
   pass(owner: string, ctx: Context, pass: Pass, order: number): () => void;
   /** Add what the capability named reads once a turn, until the function it gives is called or it goes. */
   turn(owner: string, ctx: Context, turn: Turn): () => void;
+  /** A page of the record of the agent's conversation `loop`, after the entry `after`. */
+  read(loop: Loop, after: string | undefined, limit: number): Promise<Page>;
 }
 
 /** Where Cordis keeps, on a service as a capability reaches it, the context it was reached from. */
@@ -283,12 +297,30 @@ export class Passes extends Service {
   }
 }
 
+/** The most entries a page of a record gives, and how many when none is asked for. */
+const PAGE_MAX = 200;
+const PAGE = 50;
+
 /**
- * What the agent's loops have seen and done, as a capability reaches it. For now it is what the
- * agent's life is said through, so only that agent's capabilities hear it.
+ * What the agent's loops have seen and done, as a capability reaches it: what the agent's life is
+ * said through, so only that agent's capabilities hear it, and its conversations' records.
  */
 export class AgentRecord extends Service {
-  constructor(ctx: Context) {
+  private host: Host;
+  constructor(ctx: Context, host: Host) {
     super(ctx, "record");
+    this.host = host;
+  }
+  /**
+   * The record of one of the agent's conversations, by its loop, from its start: the entries
+   * after the entry `after`, from its first when none is given, oldest first, `limit` at most (50
+   * if none, never more than 200), each by its id and its words; and whether more follow. The
+   * next page is after the last entry's id. Refused `unknown` for a conversation its agent doesn't
+   * have, or an `after` its record doesn't hold. Called on the service, as `ctx.record.read(…)`.
+   */
+  read(loop: Loop, page: { after?: string; limit?: number } = {}): Promise<Page> {
+    callerOf(this.host.fibers, this);
+    const limit = Math.min(Math.max(1, Math.floor(page.limit ?? PAGE)), PAGE_MAX);
+    return this.host.read(loop, page.after, limit);
   }
 }

@@ -202,9 +202,17 @@ export interface LooperOut {
   /**
    * What happened in the life of the piece of work `work`: one of its turns started or ended, or
    * its record is about to be, or was, summarized. Said for whoever follows the agent's life; what
-   * hears it changes nothing here.
+   * hears it changes nothing here. A turn's end says how it ended, and the first and last entry
+   * of its own it had kept by then, none if it kept none: what it was told and what the main loop
+   * said are not its own.
    */
-  life?(event: { event: WorkLife; work: string }): void;
+  life?(event: {
+    event: WorkLife;
+    work: string;
+    how?: "answered" | "stopped" | "failed";
+    first?: string;
+    last?: string;
+  }): void;
 }
 
 /**
@@ -619,8 +627,19 @@ export function createLooper(options: {
           life: (event) => out.life?.({ event, work: id }),
           status(status) {
             const on = running(status);
-            if (on !== held.active)
-              out.life?.({ event: on ? "turnStarted" : "turnEnded", work: id });
+            if (on && !held.active) {
+              record.turnBegan();
+              out.life?.({ event: "turnStarted", work: id });
+            } else if (!on && held.active) {
+              // A turn the looper's closing cuts is stopped too, though it is gone on with.
+              const how =
+                status.state === "error"
+                  ? "failed"
+                  : held.loop.stopped() || closed
+                    ? "stopped"
+                    : "answered";
+              out.life?.({ event: "turnEnded", work: id, how, ...record.turnKept() });
+            }
             // A turn that starts is marked, but one that goes on from a cut-off has that mark
             // taken off: it goes on once. A turn that ends takes its mark off, but one cut by the
             // looper closing keeps it, for whoever opens the store next.
@@ -1799,6 +1818,12 @@ export function createLooper(options: {
     /** A thread's messages before `before`, oldest first, as many as fit `limit`. */
     page: (thread: string, before: string | undefined, limit: number) =>
       threadOf(thread).page(before, limit),
+    /**
+     * A thread's entries after the entry `after`, from its first when none is given, oldest
+     * first, as many as `limit`: each by its id and its words; and whether more follow.
+     */
+    read: (thread: string, after: string | undefined, limit: number) =>
+      threadOf(thread).read(after, limit),
     /**
      * Stop: every turn is cut, running or waiting, the main loop is cut too, and nothing starts
      * until `start`. A call already running finishes first, so this answers when nothing more will
