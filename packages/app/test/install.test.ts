@@ -124,7 +124,7 @@ test("install.sh says what it takes, and refuses an option it doesn't know or a 
   }
 });
 
-test("install.sh records the channel named, else the one recorded, else next for an install from before, else latest, and refuses another", async (t) => {
+test("install.sh records the channel named, else the one recorded, else next for an install from before, else latest, refuses another, and gives the install page's line for it", async (t) => {
   const app = join(mkdtempSync(join(tmpdir(), "agentorg-app-")), "AgentOrg.zip");
   t.after(() => rmSync(dirname(app), { recursive: true, force: true }));
   writeFileSync(app, "not a zip");
@@ -168,6 +168,21 @@ test("install.sh records the channel named, else the one recorded, else next for
     assert.equal(refused.code, 1);
     assert.equal(refused.stderr.replace(/ Run it without --update: .*/, "").trimEnd(), says);
     assert.equal(refused.channel, undefined, "no channel is recorded");
+  }
+  // The line it gives is the install page's for the channel it settled on.
+  const bare = "curl -fsSL https://agentorg.app/install.sh | bash";
+  const next = "curl -fsSL https://agentorg.app/next/install.sh | AGENTORG_CHANNEL=next bash";
+  for (const [machine, line] of [
+    [{}, bare],
+    [{ env: { AGENTORG_CHANNEL: "next" } }, next],
+    [{ account: recorded("next") }, next],
+  ] as const) {
+    const refused = await install(t, machine, "--app", app, "--update");
+    assert.equal(refused.code, 1);
+    assert.equal(
+      refused.stderr,
+      `AgentOrg isn't installed here by this script yet. Run it without --update: ${line}\n`,
+    );
   }
 });
 
@@ -367,15 +382,13 @@ test("with a sum pinned, the job carries AgentComputer's archive unchanged under
   assert.equal(readFileSync(join(carry.out, "SHA256SUMS"), "utf8"), `${sum}  ${carried}\n`);
 });
 
-const tagsAt = "https://registry.npmjs.org/-/package/@agentorg/cli/dist-tags";
-const download = "https://github.com/uniac-ai/AgentOrg/releases/download";
+const page = "https://agentorg.app";
 
 /**
- * get.sh, the line's script, with a stand-in curl first on the PATH: it answers npm's dist-tags as
- * `tag` sets them and the releases from `served/releases/v<version>/<file>`, fails as `curl -f`
- * does for anything else, and records each URL in `asked` and each call's options in `options`. The
- * release's install.sh is whatever a case serves; shasum is the Mac's own. `left` is what get.sh
- * left in its TMPDIR.
+ * get.sh, with a stand-in curl first on the PATH: it answers the install page from
+ * `served/<path>`, fails as `curl -f` does for anything else, and records each URL in `asked` and
+ * each call's options in `options`. Each install.sh served records its arguments' count and them in
+ * `ran`, and the channel it was given in `given`. `left` is what get.sh left in its TMPDIR.
  */
 function getter(t: test.TestContext) {
   const at = mkdtempSync(join(tmpdir(), "agentorg-get-"));
@@ -392,35 +405,27 @@ while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; http*) url="$1" ;; *)
 printf '%s\\n' "$url" >> "${join(at, "asked")}"
 printf '%s\\n' "$options" >> "${join(at, "options")}"
 case "$url" in
-${tagsAt}) file="${served}/dist-tags" ;;
-${download}/*) file="${served}/releases/\${url#${download}/}" ;;
+${page}/*) file="${served}/\${url#${page}/}" ;;
 *) exit 6 ;;
 esac
 [ -f "$file" ] || exit 22
 cp "$file" "$out"
+[ ! -f "$file.cut" ] || exit 18
 `,
   );
   chmodSync(join(bin, "curl"), 0o755);
   const ran = join(at, "ran");
-  const tags: Record<string, string> = {};
-  /** npm's dist-tags, flat as it answers them, with `channel` naming `version`. */
-  const tag = (channel: string, version: string) => {
-    tags[channel] = version;
-    writeFileSync(join(served, "dist-tags"), JSON.stringify(tags));
-  };
   const given = join(at, "given");
+  const script = `printf '%s\\n' "$#" "$@" > '${ran}'\nprintf '%s' "\${AGENTORG_CHANNEL-none}" > '${given}'\nexit 3\n`;
   /**
-   * A release whose install.sh records its arguments' count and them in `ran`, and the channel it
-   * was given in `given`, and SHA256SUMS as `sums` writes it.
+   * The page's install.sh at `path`, after the page's address; `cut`, its first line only, with
+   * the connection dropped after it.
    */
-  const release = (version: string, sums = (sum: string) => `${sum}  install.sh\n`) => {
-    const folder = join(served, "releases", `v${version}`);
-    mkdirSync(folder, { recursive: true });
-    const script = `printf '%s\\n' "$#" "$@" > '${ran}'\nprintf '%s' "\${AGENTORG_CHANNEL-none}" > '${given}'\nexit 3\n`;
-    writeFileSync(join(folder, "install.sh"), script);
-    const sum = createHash("sha256").update(script).digest("hex");
-    writeFileSync(join(folder, "SHA256SUMS"), sums(sum));
-    return { folder, sum };
+  const serve = (path: string, cut = false) => {
+    const file = join(served, path);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, cut ? script.slice(0, script.indexOf("\n") + 1) : script);
+    if (cut) writeFileSync(`${file}.cut`, "");
   };
   /** get.sh run with `args`, or, given `piped`, that text piped into `bash -s --` with `args`. */
   const run = (env: Record<string, string>, args: string[], piped?: string) => {
@@ -451,9 +456,7 @@ cp "$file" "$out"
       ? readFileSync(join(at, name), "utf8").split("\n").filter(Boolean)
       : [];
   return {
-    served,
-    tag,
-    release,
+    serve,
     run,
     asked: () => lines("asked"),
     options: () => lines("options"),
@@ -468,27 +471,19 @@ cp "$file" "$out"
   };
 }
 
-test("get.sh reads next's version, fetches that release's install.sh and SHA256SUMS, and runs install.sh with the other arguments once its sum is listed", async (t) => {
+test("get.sh fetches the install page's install.sh for next, and runs it with the channel and the other arguments", async (t) => {
   const get = getter(t);
-  get.tag("latest", "0.0.30");
-  get.tag("next", "0.0.31");
-  get.release(
-    "0.0.31",
-    (sum) => `${"0".repeat(64)}  agentorg-core-0.0.31.tgz\n${sum}  install.sh\n`,
-  );
+  get.serve("install.sh");
+  get.serve("next/install.sh");
   const got = await get.run({}, ["--update", "--no-open"]);
   // install.sh's exit code is get.sh's.
   assert.equal(got.code, 3, got.stderr);
-  assert.equal(got.stdout, "Installing AgentOrg 0.0.31, the next channel's release.\n");
+  assert.equal(got.stdout, "");
   assert.equal(get.ran(), "2\n--update\n--no-open\n");
-  // install.sh is told the channel, to record it, in a variable an older one ignores.
+  // install.sh is told the channel, to record it.
   assert.equal(get.given(), "next");
-  assert.deepEqual(get.asked(), [
-    tagsAt,
-    `${download}/v0.0.31/install.sh`,
-    `${download}/v0.0.31/SHA256SUMS`,
-  ]);
-  // Each fetch is https only, redirects too, and has a time limit.
+  assert.deepEqual(get.asked(), [`${page}/next/install.sh`]);
+  // The fetch is https only, redirects too, and has a time limit.
   for (const options of get.options())
     assert.match(options, /--proto =https --proto-redir =https --max-time \d+ /);
   assert.deepEqual(get.left(), [], "its folder is removed after");
@@ -498,12 +493,10 @@ test("get.sh reads next's version, fetches that release's install.sh and SHA256S
   assert.equal(get.ran(), "0\n");
 });
 
-test("get.sh reads latest's version with --channel latest or AGENTORG_CHANNEL=latest, and refuses a channel that isn't one", async (t) => {
+test("get.sh fetches the page's bare install.sh with --channel latest or AGENTORG_CHANNEL=latest, and refuses a channel that isn't one", async (t) => {
   const get = getter(t);
-  get.tag("latest", "0.0.30");
-  get.tag("next", "0.0.31");
-  get.release("0.0.31");
-  get.release("0.0.30", (sum) => `${sum} *install.sh\n`);
+  get.serve("install.sh");
+  get.serve("next/install.sh");
   for (const [env, args] of [
     [{}, ["--channel", "latest", "--no-open"]],
     [{ AGENTORG_CHANNEL: "latest" }, ["--no-open"]],
@@ -511,14 +504,9 @@ test("get.sh reads latest's version with --channel latest or AGENTORG_CHANNEL=la
   ] as const) {
     const got = await get.run(env, [...args]);
     assert.equal(got.code, 3, got.stderr);
-    assert.equal(got.stdout, "Installing AgentOrg 0.0.30, the latest channel's release.\n");
     assert.equal(get.ran(), "1\n--no-open\n");
     assert.equal(get.given(), "latest");
-    assert.deepEqual(get.asked(), [
-      tagsAt,
-      `${download}/v0.0.30/install.sh`,
-      `${download}/v0.0.30/SHA256SUMS`,
-    ]);
+    assert.deepEqual(get.asked(), [`${page}/install.sh`]);
   }
   const wrong = await get.run({}, ["--channel", "beta"]);
   assert.equal(wrong.code, 1);
@@ -528,61 +516,50 @@ test("get.sh reads latest's version with --channel latest or AGENTORG_CHANNEL=la
 
 test("get.sh follows the channel install.sh recorded, unless one is named, and next where none or another is", async (t) => {
   const get = getter(t);
-  get.tag("latest", "0.0.30");
-  get.tag("next", "0.0.31");
-  get.release("0.0.31");
-  get.release("0.0.30");
-  for (const [recorded, env, args, channel, version] of [
-    ["latest", {}, ["--update"], "latest", "0.0.30"],
-    ["next", {}, ["--update"], "next", "0.0.31"],
-    ["latest", {}, ["--channel", "next"], "next", "0.0.31"],
-    ["latest", { AGENTORG_CHANNEL: "next" }, [], "next", "0.0.31"],
-    ["beta", {}, [], "next", "0.0.31"],
+  get.serve("install.sh");
+  get.serve("next/install.sh");
+  for (const [recorded, env, args, channel] of [
+    ["latest", {}, ["--update"], "latest"],
+    ["next", {}, ["--update"], "next"],
+    ["latest", {}, ["--channel", "next"], "next"],
+    ["latest", { AGENTORG_CHANNEL: "next" }, [], "next"],
+    ["beta", {}, [], "next"],
   ] as const) {
     get.record(recorded);
     const got = await get.run(env, [...args]);
     assert.equal(got.code, 3, got.stderr);
-    assert.equal(got.stdout, `Installing AgentOrg ${version}, the ${channel} channel's release.\n`);
+    assert.deepEqual(
+      get.asked(),
+      [channel === "latest" ? `${page}/install.sh` : `${page}/next/install.sh`],
+      recorded,
+    );
     assert.equal(get.given(), channel, recorded);
   }
 });
 
-test("get.sh runs nothing when install.sh's sum differs, SHA256SUMS has no line for it, the version isn't one, or a fetch fails", async (t) => {
+test("get.sh runs nothing when the page's install.sh can't be fetched, or arrives cut off", async (t) => {
   const get = getter(t);
-  get.tag("next", "0.0.31");
-  const refused = async (says: string) => {
+  const refused = async () => {
     const got = await get.run({}, ["--no-open"]);
     assert.equal(got.code, 1);
-    assert.equal(got.stderr, `${says}\n`);
+    assert.equal(
+      got.stderr,
+      `Couldn't download ${page}/next/install.sh, so nothing was installed.\n`,
+    );
     assert.equal(got.stdout, "");
     assert.equal(get.ran(), undefined, "install.sh didn't run");
     assert.deepEqual(get.left(), []);
   };
-  const { sum } = get.release("0.0.31", () => `${"1".repeat(64)}  install.sh\n`);
-  await refused(
-    `install.sh of AgentOrg 0.0.31 isn't the one its SHA256SUMS lists (its SHA-256 is ${sum}), so nothing was installed.`,
-  );
-  get.release("0.0.31", (sum) => `${sum}  agentorg-core-0.0.31.tgz\n${sum}  install.sh.old\n`);
-  await refused(
-    "The SHA256SUMS of AgentOrg 0.0.31 has no line for install.sh, so nothing was installed.",
-  );
-  // npm has a version whose release isn't up: none before this change carries install.sh.
-  get.tag("next", "0.0.29");
-  await refused(
-    "AgentOrg 0.0.29 is on npm, but its release isn't up yet: try again in a few minutes.",
-  );
-  for (const version of ["0.0.31/../x", "../0.0.31", "not a version"]) {
-    get.tag("next", version);
-    await refused("npm names no version for AgentOrg's next channel, so nothing was installed.");
-  }
-  rmSync(join(get.served, "dist-tags"));
-  await refused(`Couldn't download ${tagsAt}, so nothing was installed.`);
+  // The page serves no script for next.
+  get.serve("install.sh");
+  await refused();
+  get.serve("next/install.sh", true);
+  await refused();
 });
 
 test("get.sh cut off anywhere, piped into bash, fetches nothing and runs nothing", async (t) => {
   const get = getter(t);
-  get.tag("latest", "0.0.30");
-  get.release("0.0.30");
+  get.serve("install.sh");
   const args = ["--channel", "latest", "--update"];
   const whole = readFileSync(join(root, "get.sh"), "utf8");
   const ran = await get.run({}, args, whole);

@@ -9,10 +9,11 @@
 # answers, what ran before is kept as one step back: with --back, the script of the release that
 # made that step puts it back, with the home as it was just before the update.
 #
-#   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash -s -- --update
+#   curl -fsSL https://agentorg.app/install.sh | bash
+#   curl -fsSL https://agentorg.app/next/install.sh | AGENTORG_CHANNEL=next bash
 #
-# get.sh fetches this script from the release npm's channel names, and runs it once its sum checks.
+# The install page serves a channel's script once its release has passed the release check, which
+# verifies its sum. get.sh, in this repository, hands on to the page.
 # --app, --core and --node take files instead of downloading them, for a rehearsal of a build that
 # isn't published; Node's is still checked against the sum below.
 #
@@ -32,7 +33,6 @@ APP_SHA256=""
 NODE_VERSION="24.22.3"
 NODE_SHA256="ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd"
 
-LINE="curl -fsSL https://raw.githubusercontent.com/uniac-ai/AgentOrg/main/get.sh | bash"
 RELEASES="https://github.com/uniac-ai/AgentOrg/releases/download"
 ROOT="$HOME/.agentorg"
 BIN="$HOME/.local/bin"
@@ -538,6 +538,16 @@ go_back() {
   say "AgentOrg is back to $to. What changed after the update to $now is gone."
 }
 
+# The channel agentorg update and get.sh follow from now on, and the install page's line for it.
+if [ -z "$channel" ]; then
+  channel="$(cat "$ROOT/channel" 2>/dev/null || true)"
+  case "$channel" in latest | next) ;; *) channel="" ;; esac
+fi
+if [ -z "$channel" ]; then
+  if [ -L "$ROOT/app/current" ]; then channel=next; else channel=latest; fi
+fi
+LINE="curl -fsSL https://agentorg.app/install.sh | bash"
+[ "$channel" = latest ] || LINE="curl -fsSL https://agentorg.app/next/install.sh | AGENTORG_CHANNEL=next bash"
 if [ "$update" = true ] && [ ! -L "$ROOT/app/current" ]; then
   die "AgentOrg isn't installed here by this script yet. Run it without --update: $LINE"
 fi
@@ -546,14 +556,6 @@ if [ "$going_back" = true ] && [ ! -L "$ROOT/app/current" ]; then
 fi
 mkdir -p "$ROOT"
 chmod 700 "$ROOT"
-# The channel agentorg update and get.sh follow from now on.
-if [ -z "$channel" ]; then
-  channel="$(cat "$ROOT/channel" 2>/dev/null || true)"
-  case "$channel" in latest | next) ;; *) channel="" ;; esac
-fi
-if [ -z "$channel" ]; then
-  if [ -L "$ROOT/app/current" ]; then channel=next; else channel=latest; fi
-fi
 printf '%s\n' "$channel" >"$ROOT/channel.tmp" && mv "$ROOT/channel.tmp" "$ROOT/channel"
 if [ "$going_back" = true ]; then
   go_back
