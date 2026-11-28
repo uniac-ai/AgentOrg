@@ -13,7 +13,15 @@ import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Context } from "cordis";
 import { z } from "zod";
-import { AGENT_EVENTS, type AgentPlugin, createPluginHost, type Life } from "../src/plugins.ts";
+import {
+  AGENT_EVENTS,
+  type AgentPlugin,
+  createPluginHost,
+  type Heard,
+  type Life,
+  type Loop,
+  type Page,
+} from "../src/plugins.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
 import { asAsked, followsSend, named, sendOf } from "./as-asked.ts";
@@ -1399,6 +1407,250 @@ test("a plugin hears the agent stopped last, once the turn it was in was cut", a
   await s.host.settled();
   // The conversation's own turn, which was cut.
   assert.deepEqual(heard, ["turnStarted", "turnEnded", "idle", "stopped"]);
+});
+
+/** A log that keeps nothing. */
+const unlogged = { info() {}, warn() {}, error() {} };
+/**
+ * A capability that reads the records of its agent's conversations: through each agent's own
+ * `record`, kept by the agent's id, and what each hears at a turn's end, in order.
+ */
+function recordReader() {
+  const records = new Map<string, Context["record"]>();
+  const ended: Heard[] = [];
+  const capability: AgentPlugin = {
+    name: "reader",
+    inject: ["record", "agent"],
+    apply(ctx: Context) {
+      records.set(ctx.agent.id, ctx.record);
+      ctx.on(AGENT_EVENTS.turnEnded, (heard) => void ended.push(heard));
+    },
+  };
+  const reading = (agent: string) => (loop: Loop, page?: { after?: string; limit?: number }) =>
+    (records.get(agent) as Context["record"]).read(loop, page);
+  return { capability, records, ended, reading };
+}
+/** The engine of the agent `agent`, holding the reader, opened in `host`. */
+async function holdingReader(
+  t: test.TestContext,
+  host: ReturnType<typeof createPluginHost>,
+  agent: string,
+) {
+  const plugins = await host.open(agent, {
+    store: memory().handlers as never,
+    provides: ["hub", "model", "summary"],
+  });
+  await plugins.hold([{ name: "reader" }]);
+  given.plugins = plugins;
+  t.after(() => {
+    delete given.plugins;
+  });
+  return { ...(await setup()), plugins };
+}
+/** The whole of a conversation's record, read `limit` entries at a time: each page as it came. */
+async function pagesOf(
+  read: ReturnType<ReturnType<typeof recordReader>["reading"]>,
+  loop: Loop,
+  limit: number,
+) {
+  const pages: Page[] = [];
+  for (let after: string | undefined; ; ) {
+    const page = await read(loop, { ...(after === undefined ? {} : { after }), limit });
+    pages.push(page);
+    if (!page.more) return pages;
+    after = page.entries.at(-1)?.id;
+  }
+}
+/** The ids of everything the test's chat's record keeps, in order. */
+const recordedIds = (s: { store: { values: Map<string, unknown> }; id(): string }) =>
+  [...s.store.values.keys()]
+    .filter((key) => key.startsWith(`chat/${encodeURIComponent(s.id())}/msg/`))
+    .sort()
+    .map((key) => Entry.parse(s.store.values.get(key)).id);
+
+test("a capability reads its conversation's record from its start, a page at a time, each entry by its id and words, and gets only the page it asks for", async (t) => {
+  const reader = recordReader();
+  const s = await holdingReader(t, createPluginHost(unlogged, [reader.capability]), "a");
+  const read = reader.reading("a");
+  s.actor.expose("files", tools, listing({ read: () => ({ text: "Plant the beans." }) }));
+  s.script.push(
+    say("Hello."),
+    calls(callTool("files__read", { path: "notes" }, "c1")),
+    say("They say to plant the beans."),
+  );
+  await s.turn("Hi.");
+  await s.turn("What do the notes say?");
+  const loop = { id: s.id(), with: PERSON };
+  // Two at a time, oldest first, each page after the last one's id: the words the looper shows,
+  // a call by its line.
+  const pages = await pagesOf(read, loop, 2);
+  assert.deepEqual(
+    pages.map(({ entries, more }) => [entries.map(({ words }) => words), more]),
+    [
+      [["Hi.", "Hello."], true],
+      [["What do the notes say?", "files__read: done"], true],
+      [["They say to plant the beans."], false],
+    ],
+  );
+  // Each by the id its record keeps it under, and the whole of it.
+  const ids = recordedIds(s);
+  assert.deepEqual(
+    pages.flatMap(({ entries }) => entries.map(({ id }) => id)),
+    ids,
+  );
+  assert.deepEqual(
+    pages.flatMap(({ entries }) => entries.map(({ words }) => words)),
+    recorded(s),
+  );
+  // Only the page it asks for: one entry, after the second.
+  assert.deepEqual(await read(loop, { after: ids[1] as string, limit: 1 }), {
+    entries: [{ id: ids[2], words: "What do the notes say?" }],
+    more: true,
+  });
+  // With no limit, a page of 50 at most: here, all five.
+  assert.equal((await read(loop)).entries.length, 5);
+  // After an entry its record doesn't hold, it is refused.
+  await assert.rejects(read(loop, { after: "nowhere" }), /no such entry/);
+});
+
+test("a capability reads only its own agent's conversations, and a caller the agent no longer holds is refused, as the other services refuse", async (t) => {
+  const reader = recordReader();
+  const host = createPluginHost(unlogged, [reader.capability]);
+  const a = await holdingReader(t, host, "a");
+  const b = await holdingReader(t, host, "b");
+  await a.turn("A's words.");
+  await b.turn("B's words.");
+  const mine = { id: a.id(), with: PERSON };
+  const theirs = { id: b.id(), with: PERSON };
+  const words = async (read: ReturnType<typeof reader.reading>, loop: Loop) =>
+    (await read(loop)).entries.map(({ words }) => words);
+  assert.deepEqual(await words(reader.reading("a"), mine), ["A's words.", "ok"]);
+  assert.deepEqual(await words(reader.reading("b"), theirs), ["B's words.", "ok"]);
+  // Another agent's conversation is none of its own, nor is its own named as another party's.
+  await assert.rejects(reader.reading("a")(theirs), /no such conversation/);
+  await assert.rejects(reader.reading("b")(mine), /no such conversation/);
+  await assert.rejects(
+    reader.reading("a")({ id: a.id(), with: "act_other" }),
+    /no such conversation/,
+  );
+  // Taken off, it reaches the record no more, though it kept hold of it.
+  await a.plugins.hold([]);
+  assert.throws(
+    () => reader.records.get("a")?.read(mine),
+    /Only a plugin the agent holds may use its services\./,
+  );
+});
+
+test("at a turn's end a capability hears how it ended and the first and last entries of its own, whose words it reads: answered, stopped and failed", async (t) => {
+  const reader = recordReader();
+  const s = await holdingReader(t, createPluginHost(unlogged, [reader.capability]), "a");
+  s.actor.expose("files", tools, listing({ read: () => ({}) }));
+  // Answered: a call, then its reply.
+  s.script.push(calls(callTool("files__read", { path: "a" }, "c1")), say("Read a."));
+  await s.turn("Read a.");
+  // Stopped: a call, then a request the stop cuts.
+  const late = gate();
+  const cut = () =>
+    late.shut.then(() => {
+      throw new Refused("cancelled", "The response was cancelled.");
+    });
+  s.script.push(calls(callTool("files__read", { path: "b" }, "c2")), cut);
+  await s.chat("send", { text: "Read b." });
+  await until(() => s.requests.length === 4, "the request the stop cuts");
+  await s.cut();
+  // Failed: a call, then a request the model refuses.
+  s.script.push(calls(callTool("files__read", { path: "c" }, "c3")), () => {
+    throw new Refused("unavailable", "No answer.");
+  });
+  await s.turn("Read c.");
+  // Stopped before it kept anything of its own.
+  s.script.push(cut);
+  await s.chat("send", { text: "Think long." });
+  await until(() => s.requests.length === 7, "the request the stop cuts");
+  await s.cut();
+  late.open();
+  await s.host.settled();
+  const loop = { id: s.id(), with: PERSON };
+  const entries = (await reader.reading("a")(loop, { limit: 200 })).entries;
+  const between = ({ first, last }: Heard) =>
+    entries
+      .slice(
+        entries.findIndex(({ id }) => id === first),
+        entries.findIndex(({ id }) => id === last) + 1,
+      )
+      .map(({ words }) => words);
+  assert.deepEqual(
+    reader.ended.map(({ work, how }) => ({ work, how })),
+    ["answered", "stopped", "failed", "stopped"].map((how) => ({ work: s.id(), how })),
+  );
+  assert.deepEqual(reader.ended.slice(0, 3).map(between), [
+    ["files__read: done", "Read a."],
+    ["files__read: done"],
+    ["files__read: done"],
+  ]);
+  // Each its own: the second and third are the calls they made.
+  assert.notEqual(reader.ended[1]?.first, reader.ended[0]?.first);
+  assert.notEqual(reader.ended[2]?.first, reader.ended[1]?.first);
+  // A turn that kept nothing of its own says none.
+  assert.deepEqual(reader.ended[3], { work: s.id(), how: "stopped" });
+});
+
+test("a capability's function is told the conversation whose turn calls it: two conversations, each its own", async (t) => {
+  const told: (Loop | undefined)[] = [];
+  const where: AgentPlugin = {
+    name: "where",
+    inject: ["tools"],
+    apply(ctx: Context) {
+      ctx.tools.register({
+        name: "am_i",
+        parameters: { type: "object", properties: {} },
+        run: async (_input, _group, loop) => {
+          told.push(loop);
+          return { output: "Here.", ok: true };
+        },
+      });
+    },
+  };
+  given.plugins = await createPluginHost(unlogged, [where]).open("assistant", {
+    store: memory().handlers as never,
+    provides: ["hub", "model", "summary"],
+  });
+  await given.plugins.hold([{ name: "where" }]);
+  t.after(() => {
+    delete given.plugins;
+  });
+  const s = await setup();
+  s.script.push(
+    calls(callTool("where__am_i", {}, "w1")),
+    say("With you."),
+    calls(callTool("where__am_i", {}, "w2")),
+    say("With you too."),
+  );
+  await exchange(s, "Where are you?");
+  await exchange(s, "And with me?", "act_other");
+  assert.deepEqual(told, [
+    { id: s.id(), with: PERSON },
+    { id: s.id("act_other"), with: "act_other" },
+  ]);
+  assert.notEqual(s.id(), s.id("act_other"));
+});
+
+test("a call through an exposed tools@1 slot is sent as before: its name, its arguments and the turn's group, and no conversation", async () => {
+  const s = await setup();
+  const sent: unknown[] = [];
+  s.actor.expose("files", tools, {
+    list: () => ({ tools: [{ name: "read", inputSchema: { type: "object" } }] }),
+    call: async (input: unknown) => {
+      sent.push(input);
+      return { output: "Read." };
+    },
+  });
+  s.script.push(calls(callTool("files__read", { path: "a" }, "c1")), say("Done."));
+  await s.turn("Read a.");
+  assert.equal(sent.length, 1);
+  const { group, ...rest } = sent[0] as { group?: unknown };
+  assert.deepEqual(rest, { name: "read", arguments: { path: "a" } });
+  assert.equal(typeof group, "string");
 });
 
 test("a plugin that gives nothing changes no byte of what a request carries: the same instructions and tools as with none", async (t) => {

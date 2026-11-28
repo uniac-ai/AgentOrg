@@ -5,7 +5,14 @@
  * other.
  */
 import { type ToolEntry, tools as toolsInterface } from "@agentorg/interfaces";
-import { type FilesOf, type Outcome, OWN_FUNCTIONS, Refusal, type Tool } from "@agentorg/looper";
+import {
+  type Conversed,
+  type FilesOf,
+  type Outcome,
+  OWN_FUNCTIONS,
+  Refusal,
+  type Tool,
+} from "@agentorg/looper";
 import {
   type DescribedInterface,
   describeInterface,
@@ -21,7 +28,11 @@ export interface Candidate {
   name: string;
   description?: string;
   parameters: Record<string, z.core.util.JSONType>;
-  run(input: unknown, group: string): Promise<Outcome>;
+  /**
+   * `group` is the turn's (see the looper's `Tool.run`); `loop` is the conversation whose turn
+   * calls it, none for a call no conversation makes. A `tools@1` slot is sent neither.
+   */
+  run(input: unknown, group: string, loop?: Conversed): Promise<Outcome>;
 }
 /**
  * Something the model isn't offered, and why: `name` (past 64 characters as a function name),
@@ -150,9 +161,13 @@ export const offeredName = (slot: string, name: string) =>
 /**
  * The tools one request offers, by function name, and what it can't. A character a function name
  * can't have becomes `_`. Candidates are taken in order, so the first ones given are the ones kept
- * when a request is full; what doesn't fit is reported, never sent.
+ * when a request is full; what doesn't fit is reported, never sent. Each is called with `loop`,
+ * the conversation the request is for, if any.
  */
-export function offered(candidates: Candidate[]): { tools: Tool[]; leftOut: LeftOut[] } {
+export function offered(
+  candidates: Candidate[],
+  loop?: Conversed,
+): { tools: Tool[]; leftOut: LeftOut[] } {
   const tools = new Map<string, Tool>();
   const leftOut: LeftOut[] = [];
   let bytes = 0;
@@ -177,7 +192,7 @@ export function offered(candidates: Candidate[]): { tools: Tool[]; leftOut: Left
       continue;
     }
     bytes += size;
-    tools.set(toolName, { ...tool, run: (input, group) => relayed(run(input, group)) });
+    tools.set(toolName, { ...tool, run: (input, group) => relayed(run(input, group, loop)) });
   }
   return { tools: [...tools.values()], leftOut };
 }

@@ -77,6 +77,7 @@ function everyAgent(
     turn: async (loop) => (await ready).turn(loop),
     service: (name) => context?.service?.(name),
     offered: (names) => context?.offered?.(names),
+    reads: (read) => void ready.then((one) => one.reads?.(read)).catch(() => {}),
   };
   return { plugins, ready };
 }

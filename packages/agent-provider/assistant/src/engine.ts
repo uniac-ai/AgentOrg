@@ -151,7 +151,8 @@ export function startEngine(
         ];
     // Its own words: who its main loop speaks as, with nothing of its skills.
     const voice = instructions.find((part) => part.owner === WORDS)?.text ?? "";
-    const fitted = offered(given.functions);
+    // Each function is told the conversation whose turn calls it, if any.
+    const fitted = offered(given.functions, conversation);
     // What each part of it added is said of what was offered, not what was left out.
     plugins.offered?.(fitted.tools.map(({ name }) => name));
     const leftOut = [...given.leftOut, ...fitted.leftOut];
@@ -240,6 +241,8 @@ export function startEngine(
     life: plugins.life,
     log: ctx.log,
   });
+  // Its capabilities read its conversations' records through `record`.
+  plugins.reads?.((loop, after, limit) => chats.read(loop, after, limit));
   ctx.slots.model.on("delta", ({ requestId, text, call }) => chats.delta(requestId, text, call));
   ctx.slots.model.on("retrying", ({ requestId, attempt, of, at }) =>
     chats.retrying(requestId, { attempt, of, at }),

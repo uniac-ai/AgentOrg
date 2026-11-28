@@ -278,7 +278,7 @@ export function createChats(options: {
           emit.status(stateNow());
           if (!on) options.life?.("idle");
         },
-        life: ({ event, work }) => options.life?.(event, work === undefined ? {} : { work }),
+        life: ({ event, ...heard }) => options.life?.(event, heard),
         // A message in the conversation got no answer: it is told why. The looper says this
         // before it says the agent is idle.
         failed(thread, { code, message }) {
@@ -554,6 +554,17 @@ export function createChats(options: {
       const held = (await load()).get(of);
       if (!held) return { messages: [], more: false };
       return looper.page(held.stored.thread, before, limit ?? PAGE);
+    },
+    /**
+     * The record of one of the agent's conversations, by its loop, from its start: its entries
+     * after the entry `after`, oldest first, as many as `limit`, each by its id and its words;
+     * and whether more follow. Refused `unknown` for a conversation the agent doesn't have.
+     */
+    async read(loop: Conversed, after: string | undefined, limit: number) {
+      const held = (await load()).get(loop.with);
+      if (held?.stored.thread !== loop.id)
+        throw new Refused("unknown", "The agent has no such conversation.");
+      return looper.read(loop.id, after, limit);
     },
     /** What the agent is doing now. */
     state: stateNow,
