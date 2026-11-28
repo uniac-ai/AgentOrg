@@ -6,6 +6,7 @@ import { defineInterface, method, NotConnected, OutcomeUnknown, Refused } from "
 import { createTestContext } from "@agentorg/sdk/testing";
 import type { Context } from "cordis";
 import { z } from "zod";
+import type { Summarizer } from "../src/capabilities/summary.ts";
 import { AGENT_EVENTS, type AgentPlugin, createPluginHost, type Life } from "../src/plugins.ts";
 import { MAX_INSTRUCTIONS } from "../src/settings.ts";
 import { filesOf, MAX_TOOLS, TOOLS_BUDGET } from "../src/tools.ts";
@@ -158,15 +159,17 @@ async function setup(
   const script: Step[] = [];
   /**
    * The requests for a summary of a work's earlier steps, which offer nothing to call: answered
-   * at once, apart from `script`, or refused while `summarizing.fails` is set.
+   * at once, apart from `script`, or refused while `summarizing.fails` is set; while a test sets
+   * `summarizing.held`, once it settles.
    */
   const summaries: Request[] = [];
-  const summarizing = { fails: false };
+  const summarizing: { fails: boolean; held?: Promise<void> } = { fails: false };
   const model = actor.bind("model", {
     models: () => ({ models: OFFERED }),
     respond: async (request) => {
       if (!request.tools?.length) {
         summaries.push(request as Request);
+        if (summarizing.held) await summarizing.held;
         if (summarizing.fails) throw new Refused("failed", "No summary.");
         const content = `## Goal\n- Summary ${summaries.length}.`;
         return { output: [{ type: "message", role: "assistant", content }] } as never;
@@ -1861,6 +1864,200 @@ test("with no summary to be had, calls with large arguments never take a request
     last.filter((item) => item.type === "function_call").length,
     last.filter((item) => item.type === "function_call_output").length,
   );
+});
+
+/** Calls of `big__read`, `count` of them in one reply: each output is 25,000 characters. */
+const reads = (count: number) =>
+  calls(
+    ...Array.from({ length: count }, (_, i) =>
+      callTool("big__read", { path: `f${i}.ts` }, `c${i}`),
+    ),
+  );
+/** Forty-five reads in one turn are past the room one request has: a summary is due. */
+const PAST = 45;
+/** The line a work's record keeps for a summary of its earlier steps. */
+const COMPACTED = "Earlier steps summarized to continue.";
+/** The message a summary is sent as, with the words it was written as. */
+const summaryOf = (words: string) =>
+  `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${words}\n</summary>`;
+const said = (request: Request | undefined) =>
+  (request?.input ?? []).flatMap((item) => (item.type === "message" ? [String(item.content)] : []));
+const leftOut = (request: Request | undefined) =>
+  (request?.input ?? []).some(
+    (item) => item.type === "function_call_output" && String(item.output).startsWith("(Left out:"),
+  );
+
+/**
+ * A capability that provides `summary` in place of the agent's own: it writes `words`, or fails
+ * with them when `fails` is set, and keeps what each summary was asked of.
+ */
+function standIn(name: string, words: string, fails = false) {
+  const asked: { upTo: number }[] = [];
+  const capability: AgentPlugin = {
+    name,
+    title: name,
+    inject: [],
+    provide: "summary",
+    apply(ctx: Context) {
+      const service: Summarizer = {
+        async summarize(_ask, compacting) {
+          asked.push({ upTo: compacting.upTo });
+          if (fails) throw new Error(words);
+          return { summary: words, upTo: compacting.upTo };
+        },
+      };
+      ctx.provide("summary", service);
+    },
+  };
+  return { capability, asked };
+}
+
+/**
+ * The engine, with what every agent holds and a capability of the test's own, `hand`, through
+ * which the test takes off and mounts what another capability would: once the agent's own summary
+ * is mounted. Each big read gives 25,000 characters.
+ */
+async function handing(t: test.TestContext) {
+  let reached: Context | undefined;
+  const hand: AgentPlugin = {
+    name: "hand",
+    inject: ["capabilities"],
+    apply(ctx: Context) {
+      reached = ctx;
+    },
+  };
+  const quiet = { info() {}, warn() {}, error() {} };
+  const plugins = await createPluginHost(quiet, [hand]).open("assistant", {
+    store: memory().handlers as never,
+    provides: ["hub", "model", "summary"],
+  });
+  await plugins.hold([{ name: "hand" }]);
+  given.plugins = plugins;
+  t.after(() => {
+    delete given.plugins;
+  });
+  const s = await setup();
+  s.actor.expose("big", tools, listing({ read: () => "x".repeat(25_000) }));
+  await until(
+    () => plugins.list().some(({ name, state }) => name === "summary" && state === "mounted"),
+    "the agent's own summary",
+  );
+  const { capabilities } = reached as Context;
+  const held = (name: string) => plugins.list().find((one) => one.name === name);
+  return { ...s, capabilities, held };
+}
+
+test("a capability that provides summary in place of the agent's own is asked when a summary is due, and the model is sent its words", async (t) => {
+  const s = await handing(t);
+  await s.capabilities.unmount("summary");
+  const brief = standIn("brief", "Read forty-five files; nothing in them yet.");
+  await s.capabilities.mount(brief.capability);
+  s.script.push(reads(PAST), say("Done."));
+  assert.equal(await s.turn("Read them all."), undefined);
+  // Asked once, as the turn went past the budget; the model wrote no summary of its own.
+  assert.equal(brief.asked.length, 1);
+  assert.equal(s.summaries.length, 0);
+  const after = s.requests.at(-1);
+  assert.deepEqual(said(after).slice(0, 2), [
+    "Read them all.",
+    summaryOf("Read forty-five files; nothing in them yet."),
+  ]);
+  assert.equal(leftOut(after), false);
+  assert.ok(s.messages().includes("assistant: Done."));
+});
+
+test("with the summary taken off, a summary due is none: what is over the budget is cut, and the turn answers", async (t) => {
+  const s = await handing(t);
+  await s.capabilities.unmount("summary");
+  assert.equal(s.held("summary"), undefined);
+  s.script.push(reads(PAST), say("Done."));
+  assert.equal(await s.turn("Read them all."), undefined);
+  assert.equal(s.summaries.length, 0);
+  const after = s.requests.at(-1);
+  assert.equal(leftOut(after), true);
+  assert.ok(!said(after).some((text) => text.startsWith("The conversation history")));
+  assert.ok(bytes(JSON.stringify(s.whole.at(-1))) <= REQUEST_BUDGET);
+  assert.ok(s.messages().includes("assistant: Done."));
+});
+
+test("a summary that fails is cut instead: the agent runs on, holding it, and its next turn answers", async (t) => {
+  const s = await handing(t);
+  await s.capabilities.unmount("summary");
+  const broken = standIn("broken", "It can't summarize today.", true);
+  await s.capabilities.mount(broken.capability);
+  s.script.push(reads(PAST), say("Done."));
+  assert.equal(await s.turn("Read them all."), undefined);
+  assert.equal(broken.asked.length, 1);
+  assert.equal(s.summaries.length, 0);
+  assert.equal(leftOut(s.requests.at(-1)), true);
+  assert.ok(
+    s.actor.logs.some(({ message }) => message.startsWith("A work's earlier steps couldn't be")),
+  );
+  assert.equal(s.held("broken")?.state, "mounted");
+  // Its next turn, still past the budget, asks it again, and is cut again.
+  s.script.push(say("Still here."));
+  assert.equal(await s.turn("Go on."), undefined);
+  assert.equal(broken.asked.length, 2);
+  assert.deepEqual(s.messages().slice(-2), ["user: Go on.", "assistant: Still here."]);
+});
+
+test("a second capability that provides summary while one does isn't mounted, says why, and the first goes on summarizing", async (t) => {
+  const s = await handing(t);
+  const digest = standIn("digest", "The second's words.");
+  // Cordis refuses a second provider of a service under the agent's label.
+  const refused = /^service "summary" has been registered at </;
+  // While the agent's own is on.
+  await assert.rejects(s.capabilities.mount(digest.capability), { message: refused });
+  // And while one in its place is.
+  await s.capabilities.unmount("summary");
+  const brief = standIn("brief", "The first's words.");
+  await s.capabilities.mount(brief.capability);
+  await assert.rejects(s.capabilities.mount(digest.capability), { message: refused });
+  const { detail, ...rest } = s.held("digest") ?? { detail: undefined };
+  assert.deepEqual(rest, { name: "digest", title: "digest", state: "failed", parent: "hand" });
+  assert.match(String(detail), refused);
+  assert.equal(s.held("brief")?.state, "mounted");
+  s.script.push(reads(PAST), say("Done."));
+  assert.equal(await s.turn("Read them all."), undefined);
+  assert.equal(brief.asked.length, 1);
+  assert.equal(digest.asked.length, 0);
+  assert.equal(said(s.requests.at(-1))[1], summaryOf("The first's words."));
+});
+
+test("a summary is asked as the turn's own request: a retry of it is the turn's, and a stop cancels it and keeps nothing of it; the next turn goes on", async () => {
+  const s = await setup();
+  s.actor.expose("big", tools, listing({ read: () => "x".repeat(25_000) }));
+  const held = gate();
+  s.summarizing.held = held.shut;
+  s.script.push(reads(PAST));
+  const from = s.actor.emitted.length;
+  await s.chat("send", { text: "Read them all." });
+  await until(() => s.summaries.length === 1, "the summary's request");
+  const asked = (s.summaries[0] as Request).requestId;
+  // Its retry is said as the conversation's, in Work.
+  const retry = { attempt: 1, of: 3, at: new Date().toISOString() };
+  s.model.emit("retrying", { requestId: asked, ...retry });
+  const { works } = JSON.parse(
+    ((await s.actor.call("tools", "call", { name: "work", arguments: {} })) as { output: string })
+      .output,
+  );
+  assert.deepEqual(works[0].retrying, retry);
+  await s.cut();
+  assert.deepEqual(s.cancels, [asked]);
+  assert.deepEqual(s.statuses(from).at(-1), { state: "idle" });
+  held.open();
+  await s.host.settled();
+  // The turn asked nothing more, and kept nothing of the summary.
+  assert.equal(s.summaries.length, 1);
+  assert.equal(s.requests.length, 1);
+  const kept = () => recorded(s).filter((text) => text === COMPACTED).length;
+  assert.equal(kept(), 0);
+  // The next turn goes on, past the budget still: its own summary is kept, and it answers.
+  s.script.push(say("Going on."));
+  assert.equal(await s.turn("Go on."), undefined);
+  assert.ok(s.summaries.length > 1);
+  assert.equal(kept(), 1);
+  assert.deepEqual(s.messages().slice(-2), ["user: Go on.", "assistant: Going on."]);
 });
 
 test("state says whether the agent is working, in any chat, for a view that opens late", async () => {
