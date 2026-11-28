@@ -14,9 +14,9 @@
 // the packages beside them. Node refuses an export that points into a node_modules folder, so each
 // of the manifest's exports is a file of ENTRIES that re-exports one of sdk's or interfaces'
 // modules by its path: the sdk a consumer imports from the package's root is then the one module
-// the contracts are made with. zod, their one dependency from the registry, is the package's own,
-// pinned to the version the workspace is tested with: a contract's hash is computed from zod's
-// JSON Schema output.
+// the contracts are made with. Each dependency they take from the registry, zod today, the pack
+// writes into the package's manifest at exactly the version package-lock.json installs for the
+// workspace that takes it: a contract's hash is computed from zod's JSON Schema output.
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
@@ -109,7 +109,11 @@ function leaveOut(dir, manifest) {
 }
 
 function pack(out) {
-  const manifest = readJson(join(here, "package.json"));
+  const { publishConfig, ...manifest } = readJson(join(here, "package.json"));
+  if (manifest.dependencies)
+    throw new Error(
+      "scripts/sdk/package.json names no dependencies: the pack writes them from package-lock.json.",
+    );
   const { packages } = readJson(join(root, "package-lock.json"));
   for (const dir of CORE) checkBuilt(dir);
   const own = new Set(
@@ -118,29 +122,43 @@ function pack(out) {
   const work = realpathSync(mkdtempSync(join(tmpdir(), "agentorg-sdk-pack-")));
   try {
     const stage = join(work, "package");
+    const dependencies = {};
     for (const dir of CORE) {
       const { name } = readJson(join(root, "packages", dir, "package.json"));
       const into = join(stage, "dist", "node_modules", name);
       const nested = unpack(dir, into, work);
       if (dir === "sdk") leaveOut(into, nested);
-      // What each needs from the registry, the package has, at the version the workspace has.
+      // What each needs from the registry, the package depends on, at exactly the version the
+      // lockfile installs for that workspace.
       for (const [dep, range] of Object.entries({
         ...nested.dependencies,
         ...nested.peerDependencies,
       })) {
         if (own.has(dep)) continue;
         const tested = resolveIn(packages, `packages/${dir}`, dep)?.version;
-        if (manifest.dependencies?.[dep] !== tested)
+        if (!tested)
           throw new Error(
-            `${name} needs ${dep}@${range} and is tested with ${tested}: scripts/sdk/package.json must depend on ${dep} ${tested} exactly.`,
+            `${name} needs ${dep}@${range}, which package-lock.json doesn't install: run npm install.`,
           );
+        if (dependencies[dep] !== undefined && dependencies[dep] !== tested)
+          throw new Error(
+            `${name} is tested with ${dep} ${tested}, another of core's packages with ${dependencies[dep]}: the package can depend on only one.`,
+          );
+        dependencies[dep] = tested;
       }
     }
+    const packed = {
+      ...manifest,
+      dependencies: Object.fromEntries(
+        Object.entries(dependencies).sort(([a], [b]) => a.localeCompare(b, "en")),
+      ),
+      publishConfig,
+    };
     // Each entry's .d.ts passes the module's types on as its .js passes the module's values.
     for (const [entry, module] of Object.entries(ENTRIES))
       for (const ext of [".js", ".d.ts"])
         writeFileSync(join(stage, "dist", `${entry}${ext}`), `export * from "./${module}";\n`);
-    writeFileSync(join(stage, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(join(stage, "package.json"), `${JSON.stringify(packed, null, 2)}\n`);
     copyFileSync(join(here, "README.md"), join(stage, "README.md"));
     copyFileSync(join(root, "LICENSE"), join(stage, "LICENSE"));
     for (const [subpath, targets] of Object.entries(manifest.exports))

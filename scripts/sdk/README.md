@@ -17,8 +17,8 @@ join a coordinator and answer them.
 ## Requirements
 
 - Node 22.15 or later.
-- zod 4.6.7, exactly, which the package installs as its own dependency. A contract's hash is
-  computed from zod's JSON Schema output, so another zod could give the same contract another hash.
+- zod, at the one exact version the package depends on. A contract's hash is computed from zod's
+  JSON Schema output, so another zod could give the same contract another hash.
 
 ## Source
 
